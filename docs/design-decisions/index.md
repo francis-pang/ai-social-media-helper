@@ -22,6 +22,9 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-008](./DDR-008-pure-go-exif-library.md) | 2025-12-31 | Pure Go EXIF Library | Accepted |
 | [DDR-009](./DDR-009-gemini-reverse-geocoding.md) | 2025-12-31 | Gemini Native Reverse Geocoding | Accepted |
 | [DDR-010](./DDR-010-heic-format-support.md) | 2025-12-31 | HEIC/HEIF Image Format Support | Accepted |
+| [DDR-011](./DDR-011-video-metadata-and-upload.md) | 2025-12-31 | Video Metadata Extraction and Large File Upload | Accepted |
+| [DDR-012](./DDR-012-files-api-for-all-uploads.md) | 2025-12-31 | Files API for All Media Uploads | Accepted |
+| [DDR-013](./DDR-013-unified-metadata-architecture.md) | 2025-12-31 | Unified Metadata Extraction Architecture | Accepted |
 
 ---
 
