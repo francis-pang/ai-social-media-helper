@@ -1,9 +1,13 @@
 package filehandler
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,13 +35,39 @@ var SupportedVideoExtensions = map[string]string{
 	".mkv":  "video/x-matroska",
 }
 
+// Note: As of DDR-012, we always use the Files API for all media uploads.
+// This provides consistent behavior, memory efficiency, and is the recommended
+// approach for Gemini 3 Flash.
+
+// MediaMetadata is the common interface for all media metadata types.
+// Both ImageMetadata and VideoMetadata implement this interface.
+type MediaMetadata interface {
+	// FormatMetadataContext returns a formatted string for inclusion in AI prompts.
+	FormatMetadataContext() string
+
+	// GetMediaType returns "image" or "video".
+	GetMediaType() string
+
+	// HasGPSData returns true if GPS coordinates are available.
+	HasGPSData() bool
+
+	// GetGPS returns latitude and longitude (0,0 if not available).
+	GetGPS() (latitude, longitude float64)
+
+	// HasDateData returns true if date/time is available.
+	HasDateData() bool
+
+	// GetDate returns the date taken/created.
+	GetDate() time.Time
+}
+
 // MediaFile represents a file that can be uploaded to Gemini.
+// Note: Data is no longer populated; we always stream upload via Files API (DDR-012).
 type MediaFile struct {
 	Path     string
 	MIMEType string
-	Data     []byte
 	Size     int64
-	Metadata *ImageMetadata
+	Metadata MediaMetadata
 }
 
 // ImageMetadata contains EXIF metadata extracted from an image.
@@ -59,7 +89,95 @@ type ImageMetadata struct {
 	RawFields map[string]string
 }
 
+// VideoMetadata contains metadata extracted from a video file.
+type VideoMetadata struct {
+	// GPS coordinates
+	Latitude  float64
+	Longitude float64
+	HasGPS    bool
+
+	// Timestamp
+	CreateDate time.Time
+	HasDate    bool
+
+	// Video properties
+	Duration    time.Duration
+	Width       int
+	Height      int
+	FrameRate   float64
+	Codec       string
+	BitRate     int64
+	ColorSpace  string
+	AudioCodec  string
+	AudioRate   int
+
+	// Device info
+	DeviceMake  string
+	DeviceModel string
+	Author      string
+
+	// Raw fields for debugging
+	RawFields map[string]string
+}
+
+// Ensure ImageMetadata implements MediaMetadata
+var _ MediaMetadata = (*ImageMetadata)(nil)
+
+// Ensure VideoMetadata implements MediaMetadata
+var _ MediaMetadata = (*VideoMetadata)(nil)
+
+// GetMediaType returns "image" for ImageMetadata.
+func (m *ImageMetadata) GetMediaType() string {
+	return "image"
+}
+
+// HasGPSData returns true if GPS coordinates are available.
+func (m *ImageMetadata) HasGPSData() bool {
+	return m.HasGPS
+}
+
+// GetGPS returns the GPS coordinates.
+func (m *ImageMetadata) GetGPS() (latitude, longitude float64) {
+	return m.Latitude, m.Longitude
+}
+
+// HasDateData returns true if date/time is available.
+func (m *ImageMetadata) HasDateData() bool {
+	return m.HasDate
+}
+
+// GetDate returns the date taken.
+func (m *ImageMetadata) GetDate() time.Time {
+	return m.DateTaken
+}
+
+// GetMediaType returns "video" for VideoMetadata.
+func (m *VideoMetadata) GetMediaType() string {
+	return "video"
+}
+
+// HasGPSData returns true if GPS coordinates are available.
+func (m *VideoMetadata) HasGPSData() bool {
+	return m.HasGPS
+}
+
+// GetGPS returns the GPS coordinates.
+func (m *VideoMetadata) GetGPS() (latitude, longitude float64) {
+	return m.Latitude, m.Longitude
+}
+
+// HasDateData returns true if date/time is available.
+func (m *VideoMetadata) HasDateData() bool {
+	return m.HasDate
+}
+
+// GetDate returns the create date.
+func (m *VideoMetadata) GetDate() time.Time {
+	return m.CreateDate
+}
+
 // LoadMediaFile loads a media file from disk and returns a MediaFile struct.
+// Note: File data is not loaded into memory; Files API streams directly from disk (DDR-012).
 func LoadMediaFile(filePath string) (*MediaFile, error) {
 	log.Debug().Str("path", filePath).Msg("Loading media file")
 
@@ -83,10 +201,10 @@ func LoadMediaFile(filePath string) (*MediaFile, error) {
 		return nil, err
 	}
 
-	// Read file data
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+	mediaFile := &MediaFile{
+		Path:     filePath,
+		MIMEType: mimeType,
+		Size:     info.Size(),
 	}
 
 	log.Info().
@@ -95,23 +213,24 @@ func LoadMediaFile(filePath string) (*MediaFile, error) {
 		Int64("size_bytes", info.Size()).
 		Msg("Media file loaded successfully")
 
-	// Extract EXIF metadata if this is an image
-	var metadata *ImageMetadata
+	// Extract metadata based on file type
 	if IsImage(ext) {
-		var err error
-		metadata, err = ExtractMetadata(filePath)
+		imgMeta, err := ExtractImageMetadata(filePath)
 		if err != nil {
-			log.Warn().Err(err).Msg("Failed to extract EXIF metadata, continuing without it")
+			log.Warn().Err(err).Msg("Failed to extract image metadata, continuing without it")
+		} else {
+			mediaFile.Metadata = imgMeta
+		}
+	} else if IsVideo(ext) {
+		vidMeta, err := ExtractVideoMetadata(filePath)
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to extract video metadata, continuing without it")
+		} else {
+			mediaFile.Metadata = vidMeta
 		}
 	}
 
-	return &MediaFile{
-		Path:     filePath,
-		MIMEType: mimeType,
-		Data:     data,
-		Size:     info.Size(),
-		Metadata: metadata,
-	}, nil
+	return mediaFile, nil
 }
 
 // GetMIMEType returns the MIME type for a given file extension.
@@ -146,9 +265,9 @@ func IsSupported(ext string) bool {
 	return IsImage(ext) || IsVideo(ext)
 }
 
-// ExtractMetadata extracts EXIF metadata from an image file using the imagemeta library.
+// ExtractImageMetadata extracts EXIF metadata from an image file using the imagemeta library.
 // This is a pure Go implementation that supports JPEG, HEIC, HEIF, and other formats.
-func ExtractMetadata(filePath string) (*ImageMetadata, error) {
+func ExtractImageMetadata(filePath string) (*ImageMetadata, error) {
 	log.Debug().Str("path", filePath).Msg("Extracting EXIF metadata using imagemeta library")
 
 	// Open the file
@@ -210,19 +329,206 @@ func ExtractMetadata(filePath string) (*ImageMetadata, error) {
 		Bool("has_date", metadata.HasDate).
 		Time("date_taken", metadata.DateTaken).
 		Str("camera", metadata.CameraMake+" "+metadata.CameraModel).
-		Msg("EXIF metadata extracted")
+		Msg("Image EXIF metadata extracted")
 
 	return metadata, nil
 }
 
-// FormatMetadataContext formats the metadata as a text block for inclusion in prompts.
+// ffprobeOutput represents the JSON structure from ffprobe.
+type ffprobeOutput struct {
+	Format  ffprobeFormat   `json:"format"`
+	Streams []ffprobeStream `json:"streams"`
+}
+
+type ffprobeFormat struct {
+	Filename       string            `json:"filename"`
+	Duration       string            `json:"duration"`
+	Size           string            `json:"size"`
+	BitRate        string            `json:"bit_rate"`
+	FormatName     string            `json:"format_name"`
+	FormatLongName string            `json:"format_long_name"`
+	Tags           map[string]string `json:"tags"`
+}
+
+type ffprobeStream struct {
+	Index         int               `json:"index"`
+	CodecName     string            `json:"codec_name"`
+	CodecLongName string            `json:"codec_long_name"`
+	CodecType     string            `json:"codec_type"`
+	Width         int               `json:"width"`
+	Height        int               `json:"height"`
+	RFrameRate    string            `json:"r_frame_rate"`
+	AvgFrameRate  string            `json:"avg_frame_rate"`
+	Duration      string            `json:"duration"`
+	BitRate       string            `json:"bit_rate"`
+	SampleRate    string            `json:"sample_rate"`
+	Channels      int               `json:"channels"`
+	ColorSpace    string            `json:"color_space"`
+	Tags          map[string]string `json:"tags"`
+}
+
+// ExtractVideoMetadata extracts metadata from a video file using ffprobe.
+// Requires ffprobe (part of FFmpeg) to be installed on the system.
+func ExtractVideoMetadata(filePath string) (*VideoMetadata, error) {
+	log.Debug().Str("path", filePath).Msg("Extracting video metadata using ffprobe")
+
+	// Check if ffprobe is available
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe not found in PATH: %w", err)
+	}
+
+	// Run ffprobe with JSON output
+	cmd := exec.Command(ffprobePath,
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_format",
+		"-show_streams",
+		filePath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe failed: %w", err)
+	}
+
+	// Parse JSON output
+	var probe ffprobeOutput
+	if err := json.Unmarshal(output, &probe); err != nil {
+		return nil, fmt.Errorf("failed to parse ffprobe output: %w", err)
+	}
+
+	metadata := &VideoMetadata{
+		RawFields: make(map[string]string),
+	}
+
+	// Extract format-level metadata
+	if probe.Format.Duration != "" {
+		if dur, err := strconv.ParseFloat(probe.Format.Duration, 64); err == nil {
+			metadata.Duration = time.Duration(dur * float64(time.Second))
+		}
+	}
+	if probe.Format.BitRate != "" {
+		metadata.BitRate, _ = strconv.ParseInt(probe.Format.BitRate, 10, 64)
+	}
+
+	// Parse format tags
+	for key, value := range probe.Format.Tags {
+		metadata.RawFields[key] = value
+
+		switch strings.ToLower(key) {
+		case "creation_time":
+			if t, err := time.Parse(time.RFC3339, value); err == nil {
+				metadata.CreateDate = t
+				metadata.HasDate = true
+			}
+		case "location", "location-eng":
+			// Parse ISO 6709 format: "+38.0048-084.4848/"
+			lat, lon := parseISO6709Location(value)
+			if lat != 0 || lon != 0 {
+				metadata.Latitude = lat
+				metadata.Longitude = lon
+				metadata.HasGPS = true
+			}
+		case "com.android.manufacturer", "make":
+			metadata.DeviceMake = value
+		case "com.android.model", "model":
+			metadata.DeviceModel = value
+		}
+	}
+
+	// Extract stream-level metadata
+	for _, stream := range probe.Streams {
+		switch stream.CodecType {
+		case "video":
+			if metadata.Width == 0 {
+				metadata.Width = stream.Width
+				metadata.Height = stream.Height
+			}
+			if metadata.Codec == "" {
+				metadata.Codec = stream.CodecName
+			}
+			if metadata.ColorSpace == "" && stream.ColorSpace != "" {
+				metadata.ColorSpace = stream.ColorSpace
+			}
+			if metadata.FrameRate == 0 && stream.RFrameRate != "" {
+				metadata.FrameRate = parseFrameRate(stream.RFrameRate)
+			}
+			// Check stream tags for creation time
+			if !metadata.HasDate {
+				if ct, ok := stream.Tags["creation_time"]; ok {
+					if t, err := time.Parse(time.RFC3339, ct); err == nil {
+						metadata.CreateDate = t
+						metadata.HasDate = true
+					}
+				}
+			}
+		case "audio":
+			if metadata.AudioCodec == "" {
+				metadata.AudioCodec = stream.CodecName
+			}
+			if metadata.AudioRate == 0 && stream.SampleRate != "" {
+				metadata.AudioRate, _ = strconv.Atoi(stream.SampleRate)
+			}
+		}
+	}
+
+	log.Info().
+		Bool("has_gps", metadata.HasGPS).
+		Float64("latitude", metadata.Latitude).
+		Float64("longitude", metadata.Longitude).
+		Bool("has_date", metadata.HasDate).
+		Time("create_date", metadata.CreateDate).
+		Dur("duration", metadata.Duration).
+		Int("width", metadata.Width).
+		Int("height", metadata.Height).
+		Float64("frame_rate", metadata.FrameRate).
+		Str("codec", metadata.Codec).
+		Str("device", metadata.DeviceMake+" "+metadata.DeviceModel).
+		Msg("Video metadata extracted via ffprobe")
+
+	return metadata, nil
+}
+
+// parseISO6709Location parses GPS coordinates in ISO 6709 format.
+// Example: "+38.0048-084.4848/" -> (38.0048, -84.4848)
+func parseISO6709Location(value string) (lat, lon float64) {
+	// Remove trailing slash
+	value = strings.TrimSuffix(value, "/")
+
+	// Pattern: +/-DD.DDDD+/-DDD.DDDD
+	pattern := regexp.MustCompile(`^([+-]?\d+\.?\d*?)([+-]\d+\.?\d*)$`)
+	matches := pattern.FindStringSubmatch(value)
+
+	if len(matches) == 3 {
+		lat, _ = strconv.ParseFloat(matches[1], 64)
+		lon, _ = strconv.ParseFloat(matches[2], 64)
+	}
+
+	return lat, lon
+}
+
+// parseFrameRate parses frame rate from ffprobe format (e.g., "60/1" -> 60.0)
+func parseFrameRate(value string) float64 {
+	parts := strings.Split(value, "/")
+	if len(parts) == 2 {
+		num, _ := strconv.ParseFloat(parts[0], 64)
+		den, _ := strconv.ParseFloat(parts[1], 64)
+		if den != 0 {
+			return num / den
+		}
+	}
+	rate, _ := strconv.ParseFloat(value, 64)
+	return rate
+}
+
+// FormatMetadataContext formats the image metadata as a text block for inclusion in prompts.
 func (m *ImageMetadata) FormatMetadataContext() string {
 	var sb strings.Builder
 
-	sb.WriteString("## EXTRACTED EXIF METADATA\n\n")
+	sb.WriteString("## EXTRACTED IMAGE METADATA\n\n")
 
 	if m.HasGPS {
-		sb.WriteString(fmt.Sprintf("**GPS Coordinates:**\n"))
+		sb.WriteString("**GPS Coordinates:**\n")
 		sb.WriteString(fmt.Sprintf("- Latitude: %.6f\n", m.Latitude))
 		sb.WriteString(fmt.Sprintf("- Longitude: %.6f\n", m.Longitude))
 		sb.WriteString(fmt.Sprintf("- Google Maps: https://www.google.com/maps?q=%.6f,%.6f\n\n", m.Latitude, m.Longitude))
@@ -231,7 +537,7 @@ func (m *ImageMetadata) FormatMetadataContext() string {
 	}
 
 	if m.HasDate {
-		sb.WriteString(fmt.Sprintf("**Date/Time Taken:**\n"))
+		sb.WriteString("**Date/Time Taken:**\n")
 		sb.WriteString(fmt.Sprintf("- Date: %s\n", m.DateTaken.Format("Monday, January 2, 2006")))
 		sb.WriteString(fmt.Sprintf("- Time: %s\n", m.DateTaken.Format("3:04 PM")))
 		sb.WriteString(fmt.Sprintf("- Day of Week: %s\n\n", m.DateTaken.Weekday().String()))
@@ -244,6 +550,104 @@ func (m *ImageMetadata) FormatMetadataContext() string {
 	}
 
 	return sb.String()
+}
+
+// FormatMetadataContext formats the video metadata as a text block for inclusion in prompts.
+func (m *VideoMetadata) FormatMetadataContext() string {
+	var sb strings.Builder
+
+	sb.WriteString("## EXTRACTED VIDEO METADATA\n\n")
+
+	// GPS Information
+	if m.HasGPS {
+		sb.WriteString("**GPS Coordinates:**\n")
+		sb.WriteString(fmt.Sprintf("- Latitude: %.6f\n", m.Latitude))
+		sb.WriteString(fmt.Sprintf("- Longitude: %.6f\n", m.Longitude))
+		sb.WriteString(fmt.Sprintf("- Google Maps: https://www.google.com/maps?q=%.6f,%.6f\n\n", m.Latitude, m.Longitude))
+	} else {
+		sb.WriteString("**GPS Coordinates:** Not available in video metadata\n\n")
+	}
+
+	// Date/Time Information
+	if m.HasDate {
+		sb.WriteString("**Date/Time Created:**\n")
+		sb.WriteString(fmt.Sprintf("- Date: %s\n", m.CreateDate.Format("Monday, January 2, 2006")))
+		sb.WriteString(fmt.Sprintf("- Time: %s\n", m.CreateDate.Format("3:04 PM")))
+		sb.WriteString(fmt.Sprintf("- Day of Week: %s\n\n", m.CreateDate.Weekday().String()))
+	} else {
+		sb.WriteString("**Date/Time Created:** Not available in video metadata\n\n")
+	}
+
+	// Video Properties
+	sb.WriteString("**Video Properties:**\n")
+	if m.Duration > 0 {
+		sb.WriteString(fmt.Sprintf("- Duration: %s\n", formatDuration(m.Duration)))
+	}
+	if m.Width > 0 && m.Height > 0 {
+		sb.WriteString(fmt.Sprintf("- Resolution: %dx%d", m.Width, m.Height))
+		if m.Width >= 3840 {
+			sb.WriteString(" (4K UHD)")
+		} else if m.Width >= 1920 {
+			sb.WriteString(" (Full HD)")
+		} else if m.Width >= 1280 {
+			sb.WriteString(" (HD)")
+		}
+		sb.WriteString("\n")
+	}
+	if m.FrameRate > 0 {
+		sb.WriteString(fmt.Sprintf("- Frame Rate: %.2f fps\n", m.FrameRate))
+	}
+	if m.Codec != "" {
+		sb.WriteString(fmt.Sprintf("- Video Codec: %s\n", m.Codec))
+	}
+	if m.BitRate > 0 {
+		sb.WriteString(fmt.Sprintf("- Bit Rate: %.2f Mbps\n", float64(m.BitRate)/(1024*1024)))
+	}
+	if m.ColorSpace != "" {
+		sb.WriteString(fmt.Sprintf("- Color Space: %s\n", m.ColorSpace))
+	}
+	sb.WriteString("\n")
+
+	// Audio Properties
+	if m.AudioCodec != "" || m.AudioRate > 0 {
+		sb.WriteString("**Audio Properties:**\n")
+		if m.AudioCodec != "" {
+			sb.WriteString(fmt.Sprintf("- Codec: %s\n", m.AudioCodec))
+		}
+		if m.AudioRate > 0 {
+			sb.WriteString(fmt.Sprintf("- Sample Rate: %d Hz\n", m.AudioRate))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Device Information
+	if m.DeviceMake != "" || m.DeviceModel != "" || m.Author != "" {
+		sb.WriteString("**Recording Device:**\n")
+		if m.Author != "" {
+			sb.WriteString(fmt.Sprintf("- Device: %s\n", m.Author))
+		}
+		if m.DeviceMake != "" {
+			sb.WriteString(fmt.Sprintf("- Make: %s\n", m.DeviceMake))
+		}
+		if m.DeviceModel != "" {
+			sb.WriteString(fmt.Sprintf("- Model: %s\n", m.DeviceModel))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// formatDuration formats a duration in a human-readable format.
+func formatDuration(d time.Duration) string {
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 // CoordinatesToDMS converts decimal degrees to degrees, minutes, seconds format.
@@ -272,5 +676,3 @@ func CoordinatesToDMS(lat, lon float64) string {
 		latDeg, latMin, latSec, latDir,
 		lonDeg, lonMin, lonSec, lonDir)
 }
-
-
