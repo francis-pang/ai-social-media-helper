@@ -2,9 +2,11 @@ module github.com/fpang/gemini-media-cli
 
 go 1.23
 
-require github.com/google/generative-ai-go v0.19.0
-
-require google.golang.org/api v0.214.0
+require (
+	github.com/google/generative-ai-go v0.19.0
+	github.com/rs/zerolog v1.33.0
+	google.golang.org/api v0.214.0
+)
 
 require (
 	cloud.google.com/go v0.115.0 // indirect
@@ -20,6 +22,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/googleapis/gax-go/v2 v2.14.0 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.19 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.54.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.54.0 // indirect
 	go.opentelemetry.io/otel v1.29.0 // indirect

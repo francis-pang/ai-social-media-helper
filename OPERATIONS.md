@@ -8,6 +8,22 @@ This document covers logging, observability, error handling, and retry strategie
 
 ## Logging
 
+### Design Decision: zerolog
+
+We chose **zerolog** over alternatives (zap, slog) for the following reasons:
+
+| Criterion | zerolog | zap | slog (stdlib) |
+|-----------|---------|-----|---------------|
+| Performance | Zero allocation | Near-zero | Allocates |
+| API simplicity | Fluent chaining | Dual APIs | Verbose |
+| CLI console output | Excellent `ConsoleWriter` | Needs setup | Basic |
+| Context support | Built-in `log.Ctx()` | Manual | Manual |
+
+**Key factors for CLI tooling:**
+- Zero allocation minimizes GC pressure during media processing
+- Fluent API (`log.Info().Str("key", val).Msg("...")`) reduces boilerplate
+- `ConsoleWriter` provides colored, human-readable output ideal for terminal use
+
 ### Log Levels
 
 | Level | Purpose | Examples |
@@ -41,71 +57,44 @@ Structured format for log aggregation:
 {"time":"2025-12-30T10:15:35.789Z","level":"debug","msg":"API request completed","duration_ms":3210,"status":200}
 ```
 
+### Logging Conventions
+
+| Convention | Example |
+|------------|---------|
+| Use `Str()` for string fields | `log.Info().Str("file", name).Msg("...")` |
+| Use `Err()` for errors | `log.Error().Err(err).Msg("failed")` |
+| Keep messages lowercase | `Msg("upload complete")` |
+| Use snake_case for field names | `Str("session_id", id)` |
+| Add context via `With()` | `log.With().Str("session", id).Logger()` |
+| Use `Fatal()` for unrecoverable errors | `log.Fatal().Msg("cannot continue")` |
+
 ### Implementation
+
+Logging is initialized via `GEMINI_LOG_LEVEL` environment variable:
 
 ```go
 package logging
 
 import (
-    "io"
-    "log/slog"
     "os"
-    "strings"
+    "github.com/rs/zerolog"
+    "github.com/rs/zerolog/log"
 )
 
-type Logger struct {
-    *slog.Logger
-    redactSecrets bool
-}
-
-type Config struct {
-    Level         string // debug, info, warn, error
-    Format        string // text, json
-    Output        io.Writer
-    RedactSecrets bool
-}
-
-func NewLogger(cfg Config) *Logger {
-    var level slog.Level
-    switch strings.ToLower(cfg.Level) {
+func Init() {
+    level := os.Getenv("GEMINI_LOG_LEVEL")
+    switch level {
     case "debug":
-        level = slog.LevelDebug
+        zerolog.SetGlobalLevel(zerolog.DebugLevel)
     case "warn":
-        level = slog.LevelWarn
+        zerolog.SetGlobalLevel(zerolog.WarnLevel)
     case "error":
-        level = slog.LevelError
+        zerolog.SetGlobalLevel(zerolog.ErrorLevel)
     default:
-        level = slog.LevelInfo
+        zerolog.SetGlobalLevel(zerolog.InfoLevel)
     }
     
-    opts := &slog.HandlerOptions{
-        Level: level,
-    }
-    
-    var handler slog.Handler
-    output := cfg.Output
-    if output == nil {
-        output = os.Stderr
-    }
-    
-    if cfg.Format == "json" {
-        handler = slog.NewJSONHandler(output, opts)
-    } else {
-        handler = slog.NewTextHandler(output, opts)
-    }
-    
-    return &Logger{
-        Logger:        slog.New(handler),
-        redactSecrets: cfg.RedactSecrets,
-    }
-}
-
-// RedactKey masks API keys and other secrets
-func (l *Logger) RedactKey(key string) string {
-    if !l.redactSecrets || len(key) < 8 {
-        return key
-    }
-    return key[:4] + "****" + key[len(key)-4:]
+    log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 }
 ```
 
@@ -141,14 +130,14 @@ Add context to log entries for traceability:
 
 ```go
 // Create logger with session context
-sessionLog := logger.With(
-    slog.String("session_id", session.ID),
-    slog.String("command", "upload"),
-)
+sessionLog := log.With().
+    Str("session_id", session.ID).
+    Str("command", "upload").
+    Logger()
 
 // All subsequent logs include this context
-sessionLog.Info("Starting upload", slog.String("file", filename))
-sessionLog.Debug("File validated", slog.Int64("size", fileSize))
+sessionLog.Info().Str("file", filename).Msg("starting upload")
+sessionLog.Debug().Int64("size", fileSize).Msg("file validated")
 ```
 
 ---
@@ -726,7 +715,7 @@ Avg Latency: 1.45s
 
 | Concern | Approach |
 |---------|----------|
-| **Logging** | Structured logging with slog, configurable levels, secret redaction |
+| **Logging** | Structured logging with zerolog, configurable levels, secret redaction |
 | **Metrics** | In-memory counters, exportable via debug command |
 | **Errors** | Categorized errors, user-friendly messages, retriable classification |
 | **Retries** | Exponential backoff with jitter, configurable limits |
