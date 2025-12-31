@@ -22,6 +22,9 @@ go.work
 .env
 .env.local
 
+# GPG passphrase (for non-interactive decryption)
+.gpg-passphrase
+
 # IDE
 .idea/
 .vscode/
