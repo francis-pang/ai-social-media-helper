@@ -40,23 +40,27 @@ gemini-media-social-network/
 │   └── setup-gpg-credentials.sh      # GPG credential setup helper
 │
 ├── docs/                              # Documentation
-│   ├── README.md                     # Documentation index
-│   ├── ARCHITECTURE.md               # System architecture
-│   ├── DESIGN_DECISIONS.md           # Key decisions
-│   ├── IMPLEMENTATION.md             # Implementation details
-│   ├── AUTHENTICATION.md             # Auth design
-│   ├── CONFIGURATION.md              # Config options
-│   ├── OPERATIONS.md                 # Logging/observability
+│   ├── index.md                      # Documentation index
+│   ├── architecture.md               # System architecture (current state)
+│   ├── implementation.md             # Implementation details (current state)
+│   ├── media_analysis.md             # Media analysis design
+│   ├── design-decisions/             # Historical decision records
+│   │   ├── index.md                  # Decision index
+│   │   ├── design_template.md        # ADR template
+│   │   └── DDR-*.md                  # Individual decisions
+│   ├── authentication.md             # Auth design
+│   ├── configuration.md              # Config options
+│   ├── operations.md                 # Logging/observability
 │   ├── CLI_UX.md                     # CLI UX design
-│   ├── TESTING.md                    # Testing strategy
-│   └── LANGUAGE_COMPARISON.md        # Go vs alternatives
+│   ├── testing.md                    # Testing strategy
+│   └── language_comparison.md        # Go vs alternatives
 │
 ├── .gpg-passphrase                    # GPG passphrase file (gitignored)
 ├── go.mod                             # Go module definition
 ├── go.sum                             # Dependency checksums
 ├── .gitignore                         # Git ignore rules
 ├── README.md                          # User documentation
-└── PLAN.md                            # This file
+└── plan.md                            # This file
 ```
 
 ---
@@ -74,7 +78,7 @@ gemini-media-social-network/
 
 ### Phase 2: Media Uploads (Iterations 7-10)
 
-- [ ] **Iteration 7**: Single image upload with hardcoded path
+- [x] **Iteration 7**: Single image upload with EXIF extraction and social media generation
 - [ ] **Iteration 8**: Image directory upload
 - [ ] **Iteration 9**: Single video upload
 - [ ] **Iteration 10**: Mixed media directory (images + videos)
@@ -146,14 +150,15 @@ gemini-media-social-network/
 
 | Topic | Document |
 |-------|----------|
-| Architecture & Data Flow | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
-| Design Decisions | [docs/DESIGN_DECISIONS.md](./docs/DESIGN_DECISIONS.md) |
-| Implementation Patterns | [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md) |
-| Authentication | [docs/AUTHENTICATION.md](./docs/AUTHENTICATION.md) |
-| Configuration | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
-| Logging & Operations | [docs/OPERATIONS.md](./docs/OPERATIONS.md) |
+| Architecture & Data Flow | [docs/architecture.md](./docs/architecture.md) |
+| Design Decisions | [docs/design-decisions/](./docs/design-decisions/) |
+| Implementation Patterns | [docs/implementation.md](./docs/implementation.md) |
+| Media Analysis | [docs/media_analysis.md](./docs/media_analysis.md) |
+| Authentication | [docs/authentication.md](./docs/authentication.md) |
+| Configuration | [docs/configuration.md](./docs/configuration.md) |
+| Logging & Operations | [docs/operations.md](./docs/operations.md) |
 | CLI UX Design | [docs/CLI_UX.md](./docs/CLI_UX.md) |
-| Testing Strategy | [docs/TESTING.md](./docs/TESTING.md) |
+| Testing Strategy | [docs/testing.md](./docs/testing.md) |
 
 ---
 
@@ -166,5 +171,5 @@ gemini-media-social-network/
 ---
 
 **Last Updated**: 2025-12-31  
-**Version**: 1.2.0  
-**Status**: Implementation Phase (Iteration 6 Complete)
+**Version**: 1.3.0  
+**Status**: Implementation Phase (Iteration 7 Complete)

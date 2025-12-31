@@ -64,11 +64,15 @@ export GEMINI_API_KEY="your-api-key-here"
 - PNG (.png)
 - GIF (.gif)
 - WebP (.webp)
+- HEIC (.heic) - iPhone photos
+- HEIF (.heif) - High Efficiency Image Format
 
 ### Videos
 - MP4 (.mp4)
 - QuickTime (.mov)
 - AVI (.avi)
+- WebM (.webm)
+- Matroska (.mkv)
 
 ## Configuration
 
@@ -91,32 +95,36 @@ gemini-media-social-network/
 │   └── main.go
 ├── internal/                # Internal packages
 │   ├── auth/               # API key retrieval & validation
-│   ├── chat/               # Text question/answer functionality
+│   ├── chat/               # Text & image question/answer
+│   ├── filehandler/        # Media file loading & EXIF extraction
 │   └── logging/            # Structured logging
 ├── scripts/                 # Setup scripts
 │   └── setup-gpg-credentials.sh
 ├── docs/                    # Design documentation
-│   ├── ARCHITECTURE.md     # System architecture
-│   ├── DESIGN_DECISIONS.md # Key decisions
-│   ├── AUTHENTICATION.md   # Auth design
-│   └── ...                 # See docs/README.md
+│   ├── index.md            # Documentation index
+│   ├── architecture.md     # System architecture (current state)
+│   ├── media_analysis.md   # Media analysis design
+│   ├── design-decisions/   # Historical decision records (DDRs)
+│   ├── authentication.md   # Auth design
+│   └── ...                 # See docs/index.md
 ├── go.mod                   # Go module definition
 ├── README.md                # This file
-└── PLAN.md                 # Implementation roadmap
+└── plan.md                 # Implementation roadmap
 ```
 
 ## Documentation
 
 | Topic | Document |
 |-------|----------|
-| Implementation Roadmap | [PLAN.md](./PLAN.md) |
-| All Design Docs | [docs/README.md](./docs/README.md) |
-| Architecture | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
-| Design Decisions | [docs/DESIGN_DECISIONS.md](./docs/DESIGN_DECISIONS.md) |
+| Implementation Roadmap | [plan.md](./plan.md) |
+| All Design Docs | [docs/index.md](./docs/index.md) |
+| Architecture | [docs/architecture.md](./docs/architecture.md) |
+| Design Decisions | [docs/design-decisions/](./docs/design-decisions/) |
+| Media Analysis | [docs/media_analysis.md](./docs/media_analysis.md) |
 
 ## Development
 
-See [PLAN.md](./PLAN.md) for implementation roadmap and [docs/](./docs/) for detailed design documentation.
+See [plan.md](./plan.md) for implementation roadmap and [docs/](./docs/) for detailed design documentation.
 
 ### Building
 
@@ -141,7 +149,10 @@ go test -cover ./...
 - [x] Project planning and architecture
 - [x] Foundation (connection, logging, auth, validation)
 - [x] Text question/answer with date-embedded prompts
-- [ ] Media uploads (images, videos)
+- [x] Single image upload with EXIF metadata extraction
+- [x] Social media content generation from images
+- [ ] Image directory batch processing
+- [ ] Video uploads
 - [ ] CLI interface with Cobra
 - [ ] Session management
 - [ ] Cloud storage integration (S3, Google Drive)

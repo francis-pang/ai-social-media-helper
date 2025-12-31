@@ -31,7 +31,7 @@ This document describes the implementation patterns for each core component.
 - Error wrapping for debugging
 - Path expansion for user directories
 
-See [CONFIGURATION.md](./CONFIGURATION.md) for full details.
+See [configuration.md](./configuration.md) for full details.
 
 ---
 
@@ -289,7 +289,7 @@ gemini-cli
 - Formatted output
 - Interactive mode support
 
-See [CLI_UX.md](./CLI_UX.md) for UX design details.
+See [cli_ux.md](./cli_ux.md) for UX design details.
 
 ---
 

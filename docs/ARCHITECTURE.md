@@ -17,7 +17,7 @@ The Gemini Media Analysis CLI enables users to:
 - 🔒 **Type safety** - Compile-time error checking
 - 🧵 **Concurrency** - Built-in goroutines for efficient concurrent operations
 
-See [LANGUAGE_COMPARISON.md](./LANGUAGE_COMPARISON.md) for detailed comparison with alternatives.
+See [language_comparison.md](./language_comparison.md) for detailed comparison with alternatives.
 
 ---
 

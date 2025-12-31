@@ -23,7 +23,7 @@ Configuration values are resolved in the following order (highest priority first
 
 | Key | Env Variable | CLI Flag | Default | Description |
 |-----|--------------|----------|---------|-------------|
-| `api.key` | `GEMINI_API_KEY` | `--api-key` | (required) | Gemini API key (see AUTHENTICATION.md) |
+| `api.key` | `GEMINI_API_KEY` | `--api-key` | (required) | Gemini API key (see authentication.md) |
 | `api.model` | `GEMINI_MODEL` | `--model` | `gemini-3-flash-preview` | Model to use for generation (free tier compatible) |
 | `api.base_url` | `GEMINI_BASE_URL` | `--base-url` | (SDK default) | Override API endpoint (for testing/proxy) |
 | `api.timeout` | `GEMINI_TIMEOUT` | `--timeout` | `120s` | Request timeout for API calls |
@@ -97,7 +97,7 @@ The configuration file is located at `~/.gemini-media-cli/config.yaml`.
 
 # API Settings
 api:
-  # API key should be stored securely - see AUTHENTICATION.md
+  # API key should be stored securely - see authentication.md
   # Do NOT put your API key here
   model: "gemini-3-flash-preview"  # Free tier compatible
   timeout: "120s"
@@ -443,7 +443,7 @@ Checks current configuration for errors without running any commands.
 ## Security Considerations
 
 1. **API keys should NEVER be stored in the config file**
-   - Use secure storage (see AUTHENTICATION.md)
+   - Use secure storage (see authentication.md)
    - Environment variables for CI/scripts only
 
 2. **Config file permissions**
