@@ -109,55 +109,70 @@ func AskImageQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 
 // BuildSocialMediaImagePrompt creates a comprehensive prompt for analyzing an image
 // and generating a social media post description.
-func BuildSocialMediaImagePrompt() string {
-	now := time.Now()
-	dateStr := now.Format("Monday, January 2, 2006")
-
-	return fmt.Sprintf(`You are analyzing a personal photo for social media content creation. Today is %s.
+// If metadata is provided, it will be included in the prompt for context.
+//
+// Future expansion: Pre-resolve GPS coordinates using Google Maps Geocoding API
+// before sending to Gemini. This would provide the resolved address, place name,
+// and other location details as part of the prompt context, reducing reliance
+// on Gemini's native Google Maps integration for reverse geocoding.
+func BuildSocialMediaImagePrompt(metadataContext string) string {
+	basePrompt := `You are analyzing a personal photo for social media content creation.
 
 ## About the Person
-The person in this image is Francis, the owner of this photo. When you see someone in the image, assume it is Francis unless there are clearly multiple distinct people.
+The person in this image is Francis, the owner of this photo.
 
-## Your Task
-Please provide a comprehensive analysis of this image and generate social media content. Structure your response as follows:
+`
 
-### 1. Image Analysis
-- Describe what you see in the image in detail
-- Identify the setting, environment, and atmosphere
-- Note any significant objects, landmarks, or features
-- Describe Francis's appearance, expression, and posture if visible
-- Identify any activities or actions taking place
+	if metadataContext != "" {
+		basePrompt += metadataContext + "\n"
+	}
 
-### 2. Metadata Analysis
-- Based on visual cues (lighting, shadows, sun position), estimate the time of day
-- Analyze weather conditions if outdoors
-- Estimate the season based on clothing, vegetation, or other environmental factors
-- Note the image quality and any camera/photography characteristics you can infer
+	basePrompt += `## Your Task
 
-### 3. Location Analysis
-- Identify the location if recognizable (city, landmark, type of venue)
-- If location cannot be determined precisely, describe the type of environment (urban, nature, indoor, beach, mountain, etc.)
-- Note any text, signs, or identifying markers visible in the image
-- Provide any geographic or cultural context clues
+Using the metadata provided above (GPS coordinates and timestamp), analyze this image and generate social media content.
+
+### 1. Reverse Geocoding (REQUIRED - Use Google Maps Integration)
+You have native access to Google Maps. Use it to perform reverse geocoding on the provided GPS coordinates.
+
+**For the GPS coordinates provided, look up and report:**
+- **Exact Place Name**: The specific venue, business, landmark, or point of interest at these coordinates
+- **Street Address**: The full street address
+- **City**: City or town name
+- **State/Region**: State, province, or region
+- **Country**: Country name
+- **Place Type**: Category (e.g., restaurant, park, stadium, historic site, etc.)
+- **Known For**: What this place is famous for, any historical or cultural significance
+- **Nearby Landmarks**: Other notable places nearby
+
+### 2. Temporal Analysis (Use the Date/Time Provided)
+- What time of day was this photo taken?
+- What day of the week was it?
+- What season is this?
+- Is there any significance to this date (holiday, event, weekend)?
+- Does the lighting in the image match the timestamp?
+
+### 3. Visual Analysis
+Describe what you see in the image:
+- Francis's appearance, outfit, expression, and pose
+- The environment and setting visible in the photo
+- Notable features, landmarks, or interesting elements
+- The overall mood and atmosphere
+- Does the visual content match the location from reverse geocoding?
 
 ### 4. Social Media Post Generation
-Based on your analysis, generate an engaging social media post that includes:
+Based on the REAL location from reverse geocoding and the actual date/time, generate:
 
 **Caption Options (provide 3 variations):**
-1. **Casual/Personal**: A friendly, conversational caption for close friends
-2. **Professional/LinkedIn**: A more refined version suitable for professional networking
-3. **Inspirational/Motivational**: A caption with a deeper message or reflection
+1. **Casual/Personal**: Friendly, conversational - mention the actual location by name
+2. **Professional/LinkedIn**: Polished, suitable for networking - reference the real place
+3. **Inspirational/Motivational**: Deeper message tied to the location or moment
 
-**Hashtag Suggestions:**
-- Provide 5-10 relevant hashtags for maximum engagement
-- Include a mix of popular and niche hashtags
+**Hashtag Suggestions (10-15 hashtags):**
+- Location-specific hashtags (city name, venue name, country)
+- Activity or context hashtags
+- Date-relevant hashtags if applicable (e.g., #NewYearsEve if Dec 31)
+- General engagement hashtags`
 
-**Best Posting Time Recommendation:**
-- Suggest optimal posting times based on the content type
-
-**Engagement Tips:**
-- Brief suggestions on how to maximize engagement with this post
-
-Please be specific, creative, and authentic in your analysis and content generation.`, dateStr)
+	return basePrompt
 }
 
