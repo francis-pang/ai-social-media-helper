@@ -5,7 +5,6 @@
 *.so
 *.dylib
 gemini-cli
-gemini-media-cli
 
 # Test binary, built with `go test -c`
 *.test
