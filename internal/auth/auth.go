@@ -48,7 +48,19 @@ func getFromGPG() (string, error) {
 
 	log.Debug().Str("file", credPath).Msg("Decrypting GPG credentials")
 
-	cmd := exec.Command("gpg", "--decrypt", "--quiet", credPath)
+	// Build GPG command with optional passphrase file for non-interactive use
+	args := []string{"--decrypt", "--quiet"}
+
+	passphrasePath, err := getPassphrasePath()
+	if err == nil {
+		if _, statErr := os.Stat(passphrasePath); statErr == nil {
+			log.Debug().Str("passphrase_file", passphrasePath).Msg("Using passphrase file for GPG decryption")
+			args = append(args, "--pinentry-mode", "loopback", "--passphrase-file", passphrasePath)
+		}
+	}
+
+	args = append(args, credPath)
+	cmd := exec.Command("gpg", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -68,5 +80,31 @@ func getCredentialPath() (string, error) {
 	}
 
 	return filepath.Join(home, credentialDir, credentialFile), nil
+}
+
+// getPassphrasePath returns the path to the GPG passphrase file in the project directory.
+// This allows non-interactive GPG decryption when running in automated environments.
+func getPassphrasePath() (string, error) {
+	// Get the executable's directory to find .gpg-passphrase relative to project
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Check in the same directory as the executable
+	exeDir := filepath.Dir(exe)
+	passphrasePath := filepath.Join(exeDir, ".gpg-passphrase")
+	if _, err := os.Stat(passphrasePath); err == nil {
+		return passphrasePath, nil
+	}
+
+	// Also check current working directory (for development)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	passphrasePath = filepath.Join(cwd, ".gpg-passphrase")
+	return passphrasePath, nil
 }
 

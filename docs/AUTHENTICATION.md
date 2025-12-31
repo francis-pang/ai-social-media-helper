@@ -191,6 +191,8 @@ After retrieving the API key, the CLI validates it by making a lightweight API c
 
 **Validation Model**: `gemini-3-flash-preview` (free tier compatible)
 
+See [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) for current model pricing and free tier limits.
+
 The validation makes a minimal request ("hi") to verify:
 - The API key is correctly formatted
 - The key has not been revoked
@@ -259,6 +261,27 @@ The validation logic examines:
 - Requires GPG key setup (one-time)
 - Passphrase entry required (can be cached by gpg-agent)
 - System keychain integration deferred to future iteration
+
+### Non-Interactive GPG Decryption
+
+**Decision**: Support passphrase file (`.gpg-passphrase`) for automated/non-interactive environments.
+
+**Rationale**:
+- **CI/CD compatibility**: Automated pipelines cannot enter passphrases interactively
+- **Development convenience**: Avoids repeated passphrase entry during development
+- **Security via gitignore**: Passphrase file is gitignored, never committed to version control
+- **Fallback behavior**: If passphrase file is missing, falls back to interactive GPG agent
+
+**Implementation**:
+- Passphrase file location: `.gpg-passphrase` in project root or executable directory
+- File permissions: Should be `600` (owner read/write only)
+- GPG flags used: `--pinentry-mode loopback --passphrase-file`
+- Priority: Current working directory checked first, then executable directory
+
+**Security Considerations**:
+- `.gpg-passphrase` is added to `.gitignore` to prevent accidental commits
+- Users accept risk of local file storage for convenience
+- Alternative: Use GPG agent with cached passphrase for better security
 
 ### Validation Before Operations
 

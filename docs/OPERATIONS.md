@@ -766,18 +766,21 @@ This section documents key design decisions made during implementation.
 | Quota | "quota", "resource exhausted", "rate limit" |
 | Network | "connection", "timeout", "dial", "no such host", "unreachable" |
 
-### Model Selection for Validation
+### Model Selection
 
-**Decision**: Use `gemini-3-flash-preview` for API key validation.
+**Decision**: Use `gemini-3-flash-preview` for API key validation and text generation.
 
 **Rationale**:
-- **Free tier compatible**: Works within Google's free tier limits
+- **Free tier compatible**: Explicitly free of charge per [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 - **Minimal resource usage**: Flash models are optimized for speed, not deep reasoning
 - **Low latency**: Validation completes in ~1-2 seconds
-- **Future proof**: Preview model ensures compatibility with latest API features
+- **Consistent model**: Same model used for validation and chat operations
+- **Multimodal**: Supports text, image, video, and audio inputs
 
 **Alternatives Considered**:
+- `gemini-2.0-flash`: Rate limited to 0 requests on free tier (rejected)
 - `gemini-2.0-flash-lite`: Rate limited on free tier (rejected)
+- `gemini-2.5-flash`: Works but `gemini-3-flash-preview` is the latest free-tier model
 - `gemini-pro`: Higher latency, overkill for validation (rejected)
 - List models API: Doesn't verify key has generation permissions (rejected)
 
