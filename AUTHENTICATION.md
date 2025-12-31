@@ -176,113 +176,114 @@ export GEMINI_API_KEY=$(bw get password "Gemini Media CLI")
 
 ## Application Integration
 
-### Keychain Integration in Go
+### API Key Retrieval Priority
 
-The CLI will attempt to retrieve the API key in this order:
+The CLI retrieves the API key in this order:
 
-1. `--api-key` command-line flag
-2. `GEMINI_API_KEY` environment variable
-3. System keychain (macOS Keychain / Linux libsecret / Windows Credential Manager)
-4. GPG-encrypted file at `~/.gemini-media-cli/credentials.gpg`
+1. `GEMINI_API_KEY` environment variable (highest priority)
+2. GPG-encrypted file at `~/.gemini-media-cli/credentials.gpg`
 
-```go
-package auth
+If neither source provides a valid API key, the CLI exits with an error message instructing the user to set up credentials.
 
-import (
-    "fmt"
-    "os"
-    "os/exec"
-    "runtime"
-    "strings"
-)
+### API Key Validation
 
-func GetAPIKey() (string, error) {
-    // 1. Check environment variable first
-    if key := os.Getenv("GEMINI_API_KEY"); key != "" {
-        return key, nil
-    }
-    
-    // 2. Try system keychain
-    key, err := getFromKeychain()
-    if err == nil && key != "" {
-        return key, nil
-    }
-    
-    // 3. Try GPG encrypted file
-    key, err = getFromGPG()
-    if err == nil && key != "" {
-        return key, nil
-    }
-    
-    return "", fmt.Errorf("API key not found. See 'gemini-cli auth --help' for setup instructions")
-}
+After retrieving the API key, the CLI validates it by making a lightweight API call to the Gemini API. This ensures the key is valid before proceeding with any operations.
 
-func getFromKeychain() (string, error) {
-    switch runtime.GOOS {
-    case "darwin":
-        return getFromMacOSKeychain()
-    case "linux":
-        return getFromLinuxKeyring()
-    case "windows":
-        return getFromWindowsCredential()
-    default:
-        return "", fmt.Errorf("unsupported OS for keychain: %s", runtime.GOOS)
-    }
-}
+**Validation Model**: `gemini-3-flash-preview` (free tier compatible)
 
-func getFromMacOSKeychain() (string, error) {
-    cmd := exec.Command("security", "find-generic-password",
-        "-a", os.Getenv("USER"),
-        "-s", "gemini-media-cli",
-        "-w")
-    
-    output, err := cmd.Output()
-    if err != nil {
-        return "", err
-    }
-    
-    return strings.TrimSpace(string(output)), nil
-}
+The validation makes a minimal request ("hi") to verify:
+- The API key is correctly formatted
+- The key has not been revoked
+- Network connectivity to Gemini API is available
+- The account has available quota
 
-func getFromLinuxKeyring() (string, error) {
-    cmd := exec.Command("secret-tool", "lookup",
-        "service", "gemini-media-cli",
-        "username", os.Getenv("USER"))
-    
-    output, err := cmd.Output()
-    if err != nil {
-        return "", err
-    }
-    
-    return strings.TrimSpace(string(output)), nil
-}
+---
 
-func getFromWindowsCredential() (string, error) {
-    // Use go-keyring library for Windows
-    // or call cmdkey via PowerShell
-    return "", fmt.Errorf("Windows credential manager not implemented")
-}
+## API Key Validation Error Handling
 
-func getFromGPG() (string, error) {
-    home, err := os.UserHomeDir()
-    if err != nil {
-        return "", err
-    }
-    
-    credFile := home + "/.gemini-media-cli/credentials.gpg"
-    if _, err := os.Stat(credFile); os.IsNotExist(err) {
-        return "", fmt.Errorf("GPG credentials file not found")
-    }
-    
-    cmd := exec.Command("gpg", "--decrypt", "--quiet", credFile)
-    output, err := cmd.Output()
-    if err != nil {
-        return "", err
-    }
-    
-    return strings.TrimSpace(string(output)), nil
-}
-```
+The CLI categorizes API key validation errors into five distinct types, each with specific user guidance:
+
+### Error Types
+
+| Error Type | HTTP Codes | Description | User Message |
+|------------|------------|-------------|--------------|
+| **No Key** | N/A | No API key found in any source | "Set GEMINI_API_KEY or run scripts/setup-gpg-credentials.sh" |
+| **Invalid Key** | 400, 401, 403 | Key is malformed, expired, or lacks permissions | "Invalid API key. Please check your API key and try again" |
+| **Network Error** | 500, 502, 503, 504, connection errors | Connectivity or server issues | "Network error. Please check your internet connection" |
+| **Quota Exceeded** | 429 | Rate limit or quota exhausted | "API quota exceeded. Please try again later or check your usage limits" |
+| **Unknown** | Other | Unclassified errors | "API key validation failed" |
+
+### Error Detection
+
+The validation logic examines:
+
+1. **Google API HTTP status codes** - Direct classification based on HTTP response codes
+2. **Error message patterns** - Keyword matching for phrases like "API key not valid", "quota", "connection", etc.
+3. **Network-level errors** - Detection of timeout, dial, and unreachable errors
+
+### Logging Behavior
+
+- **Debug level**: Logs the credential source being used and validation attempt
+- **Error level**: Logs detailed error information with HTTP codes when available
+- **Fatal level**: Logs user-friendly message and exits on validation failure
+
+---
+
+## Design Decisions
+
+### Credential Source Priority
+
+**Decision**: Environment variable takes priority over GPG-encrypted file.
+
+**Rationale**:
+- **CI/CD compatibility**: Environment variables are the standard way to inject secrets in CI pipelines
+- **Override capability**: Users can temporarily override stored credentials for testing
+- **Simplicity**: Most common use case (env var) is checked first, minimizing latency
+- **Security**: GPG file requires passphrase entry, which may fail in non-interactive contexts
+
+**Priority Order**:
+1. `GEMINI_API_KEY` environment variable
+2. GPG-encrypted file at `~/.gemini-media-cli/credentials.gpg`
+
+### GPG Over System Keychain
+
+**Decision**: Current implementation uses GPG encryption rather than system keychain for portable credential storage.
+
+**Rationale**:
+- **Cross-platform**: GPG works identically on macOS, Linux, and Windows
+- **Portable**: Encrypted file can be synced via cloud storage
+- **No dependencies**: Uses system `gpg` binary, no additional libraries needed
+- **Developer-friendly**: GPG is commonly installed on developer machines
+
+**Trade-offs**:
+- Requires GPG key setup (one-time)
+- Passphrase entry required (can be cached by gpg-agent)
+- System keychain integration deferred to future iteration
+
+### Validation Before Operations
+
+**Decision**: Validate API key on startup, before any other operations.
+
+**Rationale**:
+- **Fail fast principle**: Users discover auth issues immediately, not after waiting for file uploads
+- **Clear feedback**: Specific error messages guide users to resolution
+- **Resource efficiency**: No wasted API calls with invalid credentials
+- **Better UX**: Single validation request vs. cryptic errors during operations
+
+**Validation Approach**:
+- Minimal request ("hi") to `gemini-3-flash-preview`
+- Validates: key format, key validity, network connectivity, quota availability
+- Completes in ~1-2 seconds on fast connections
+
+### Typed Error Handling
+
+**Decision**: Use explicit `ValidationErrorType` enum instead of string-based errors.
+
+**Rationale**:
+- **Compile-time safety**: Switch statements ensure all error types are handled
+- **Consistent messaging**: Each type maps to a specific, tested user message
+- **Actionable guidance**: Error types inform specific resolution steps
+- **Extensibility**: New error types integrate without breaking existing handlers
 
 ---
 
@@ -516,5 +517,5 @@ fi
 
 ---
 
-**Last Updated**: 2025-12-30  
-**Version**: 1.0.0
+**Last Updated**: 2025-12-31  
+**Version**: 1.1.0

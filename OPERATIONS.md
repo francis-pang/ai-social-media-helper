@@ -711,6 +711,78 @@ Avg Latency: 1.45s
 
 ---
 
+## Design Decisions
+
+This section documents key design decisions made during implementation.
+
+### API Key Validation Strategy
+
+**Decision**: Validate API keys on startup with a lightweight API call before proceeding with any operations.
+
+**Rationale**:
+- **Fail fast**: Users receive immediate feedback if credentials are misconfigured
+- **Clear error messages**: Typed errors distinguish between no key, invalid key, network issues, and quota problems
+- **Reduced debugging time**: Users don't need to wait until a media upload fails to discover auth issues
+
+**Implementation**:
+- Makes a minimal request ("hi") to `gemini-3-flash-preview` model
+- Classifies errors into 5 distinct types for targeted user guidance
+- Logs validation progress at debug level for troubleshooting
+
+### Typed Error Classification
+
+**Decision**: Use typed `ValidationError` with explicit `ValidationErrorType` enum rather than string-based error matching.
+
+**Rationale**:
+- **Type safety**: Compiler catches missing error type handling
+- **Consistent user messaging**: Each error type maps to a specific user-friendly message
+- **Extensible**: New error types can be added without changing handling code
+- **Testable**: Error types can be asserted in unit tests
+
+**Error Type Hierarchy**:
+
+| Type | Trigger | Retriable |
+|------|---------|-----------|
+| `ErrTypeNoKey` | No API key in env or GPG file | No |
+| `ErrTypeInvalidKey` | HTTP 400/401/403, malformed key | No |
+| `ErrTypeNetworkError` | HTTP 5xx, connection failures | Yes |
+| `ErrTypeQuotaExceeded` | HTTP 429, rate limits | Yes (with delay) |
+| `ErrTypeUnknown` | Unclassified errors | No |
+
+### Google API Error Detection
+
+**Decision**: Use both HTTP status code classification and error message pattern matching.
+
+**Rationale**:
+- **HTTP codes**: Reliable for Google API errors wrapped in `googleapi.Error`
+- **Pattern matching**: Catches errors before they reach HTTP layer (connection failures, DNS issues)
+- **Dual approach**: Maximizes error classification accuracy
+
+**Pattern Keywords**:
+
+| Error Type | Keywords Detected |
+|------------|-------------------|
+| Invalid Key | "api key not valid", "api_key_invalid", "permission denied" |
+| Quota | "quota", "resource exhausted", "rate limit" |
+| Network | "connection", "timeout", "dial", "no such host", "unreachable" |
+
+### Model Selection for Validation
+
+**Decision**: Use `gemini-3-flash-preview` for API key validation.
+
+**Rationale**:
+- **Free tier compatible**: Works within Google's free tier limits
+- **Minimal resource usage**: Flash models are optimized for speed, not deep reasoning
+- **Low latency**: Validation completes in ~1-2 seconds
+- **Future proof**: Preview model ensures compatibility with latest API features
+
+**Alternatives Considered**:
+- `gemini-2.0-flash-lite`: Rate limited on free tier (rejected)
+- `gemini-pro`: Higher latency, overkill for validation (rejected)
+- List models API: Doesn't verify key has generation permissions (rejected)
+
+---
+
 ## Summary
 
 | Concern | Approach |
@@ -721,8 +793,9 @@ Avg Latency: 1.45s
 | **Retries** | Exponential backoff with jitter, configurable limits |
 | **Timeouts** | Hierarchical, dynamic based on operation |
 | **Diagnostics** | Verbose mode, debug dump command |
+| **Validation** | Startup API key validation with typed errors |
 
 ---
 
-**Last Updated**: 2025-12-30  
-**Version**: 1.0.0
+**Last Updated**: 2025-12-31  
+**Version**: 1.1.0

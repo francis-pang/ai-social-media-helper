@@ -81,14 +81,26 @@ The application uses environment variables for configuration:
 ## Project Structure
 
 ```
-gemini-media-cli/
+gemini-media-social-network/
 ├── cmd/gemini-cli/          # CLI entry point
+│   └── main.go
 ├── internal/                # Internal packages
-│   ├── gemini/             # Gemini API client
-│   ├── filehandler/        # File validation & handling
-│   └── session/            # Session management
-├── config/                  # Configuration
-└── pkg/                     # Public packages
+│   ├── auth/               # API key retrieval & validation
+│   │   ├── auth.go
+│   │   ├── auth_test.go
+│   │   └── validate.go
+│   └── logging/            # Structured logging
+│       └── logger.go
+├── scripts/                 # Setup scripts
+│   └── setup-gpg-credentials.sh
+├── go.mod                   # Go module definition
+├── go.sum                   # Dependency checksums
+├── README.md                # This file
+├── AUTHENTICATION.md        # Authentication design doc
+├── CLI_UX.md               # CLI UX design doc
+├── CONFIGURATION.md        # Configuration design doc
+├── OPERATIONS.md           # Logging/observability design doc
+└── PLAN.md                 # Implementation plan
 ```
 
 ## Development

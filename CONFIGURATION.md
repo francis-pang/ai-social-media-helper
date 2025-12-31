@@ -24,7 +24,7 @@ Configuration values are resolved in the following order (highest priority first
 | Key | Env Variable | CLI Flag | Default | Description |
 |-----|--------------|----------|---------|-------------|
 | `api.key` | `GEMINI_API_KEY` | `--api-key` | (required) | Gemini API key (see AUTHENTICATION.md) |
-| `api.model` | `GEMINI_MODEL` | `--model` | `gemini-2.0-flash-exp` | Model to use for generation |
+| `api.model` | `GEMINI_MODEL` | `--model` | `gemini-3-flash-preview` | Model to use for generation (free tier compatible) |
 | `api.base_url` | `GEMINI_BASE_URL` | `--base-url` | (SDK default) | Override API endpoint (for testing/proxy) |
 | `api.timeout` | `GEMINI_TIMEOUT` | `--timeout` | `120s` | Request timeout for API calls |
 
@@ -99,7 +99,7 @@ The configuration file is located at `~/.gemini-media-cli/config.yaml`.
 api:
   # API key should be stored securely - see AUTHENTICATION.md
   # Do NOT put your API key here
-  model: "gemini-2.0-flash-exp"
+  model: "gemini-3-flash-preview"  # Free tier compatible
   timeout: "120s"
 
 # Resource Limits
@@ -250,7 +250,7 @@ func LoadConfig(flags *Flags) (*Config, error) {
 func DefaultConfig() *Config {
     return &Config{
         API: APIConfig{
-            Model:   "gemini-2.0-flash-exp",
+            Model:   "gemini-3-flash-preview",  // Free tier compatible
             Timeout: 120 * time.Second,
         },
         Limits: LimitsConfig{
@@ -405,7 +405,7 @@ gemini-cli config show
 Output:
 ```
 API:
-  Model:    gemini-2.0-flash-exp
+  Model:    gemini-3-flash-preview
   Timeout:  2m0s
   Key:      ****...**** (redacted)
 
@@ -456,13 +456,120 @@ Checks current configuration for errors without running any commands.
 
 ---
 
+## Design Decisions
+
+This section documents key configuration design decisions made during implementation.
+
+### Default Model Selection
+
+**Decision**: Use `gemini-3-flash-preview` as the default model instead of `gemini-2.0-flash-exp`.
+
+**Rationale**:
+- **Free tier compatibility**: `gemini-3-flash-preview` works within Google's free tier limits
+- **Rate limit issues**: `gemini-2.0-flash-lite` was rate limited to 0 requests on free tier
+- **Low latency**: Flash preview models are optimized for speed
+- **Multimodal support**: Handles images and videos for media analysis use case
+
+**Configuration Override**:
+```bash
+# Override via environment variable
+export GEMINI_MODEL="gemini-pro"
+
+# Override via CLI flag
+gemini-cli --model gemini-pro upload photo.jpg
+```
+
+### Environment Variables Over Config File for Secrets
+
+**Decision**: API keys are ONLY loaded from environment variables or secure storage (GPG), never from config file.
+
+**Rationale**:
+- **Security**: Config files are often committed to version control accidentally
+- **Best practice**: Twelve-factor app methodology recommends env vars for secrets
+- **Auditability**: Environment variable access can be logged by the OS
+- **CI/CD compatibility**: Standard way to inject secrets in pipelines
+
+**Implementation**:
+- `api.key` field in config struct uses `yaml:"-"` to prevent serialization
+- Config file template includes comment: "Do NOT put your API key here"
+- Validation fails if key is found in config file (future enhancement)
+
+### Log Level via Environment Variable
+
+**Decision**: `GEMINI_LOG_LEVEL` environment variable controls logging verbosity at startup.
+
+**Rationale**:
+- **Quick debugging**: Users can enable debug logging without editing config files
+- **Session isolation**: Log level can vary per terminal session
+- **CI/CD flexibility**: Different log levels for different pipeline stages
+- **No restart required**: Environment change takes effect on next run
+
+**Supported Levels**:
+
+| Level | Use Case |
+|-------|----------|
+| `debug` | Development, troubleshooting API issues |
+| `info` | Normal operation, user-visible milestones |
+| `warn` | Potential issues, degraded operation |
+| `error` | Failures that stop the operation |
+
+### Validation Model Matches Default Model
+
+**Decision**: API key validation uses the same model as default operations (`gemini-3-flash-preview`).
+
+**Rationale**:
+- **Realistic validation**: Confirms the key works with the actual model being used
+- **Permission check**: Some keys may have model-specific restrictions
+- **Quota check**: Validates quota for the specific model, not just any model
+- **Consistency**: No surprises when switching from validation to real operations
+
+### Structured Logging with zerolog
+
+**Decision**: Use zerolog for structured logging rather than Go's standard log package or slog.
+
+**Rationale**:
+- **Zero allocation**: Minimizes GC pressure during media processing
+- **Fluent API**: `log.Info().Str("key", val).Msg("...")` reduces boilerplate
+- **Console output**: Excellent `ConsoleWriter` for terminal use
+- **CLI optimized**: Human-readable format by default, JSON optional
+
+**Configuration Integration**:
+```yaml
+log:
+  level: "info"      # Overridden by GEMINI_LOG_LEVEL env var
+  format: "text"     # "text" for terminal, "json" for aggregation
+  redact_secrets: true
+```
+
+### Typed Error Handling for Configuration
+
+**Decision**: Use typed `ValidationError` with explicit error categories rather than string matching.
+
+**Rationale**:
+- **Compile-time safety**: Missing error handlers caught at build time
+- **User-friendly messages**: Each error type maps to specific guidance
+- **Actionable feedback**: Error categories inform resolution steps
+- **Extensibility**: New error types integrate without breaking existing code
+
+**Error Types for Configuration**:
+
+| Error Type | Trigger | User Action |
+|------------|---------|-------------|
+| Missing Key | No API key in any source | Run setup script or set env var |
+| Invalid Key | Key rejected by API | Regenerate at Google AI Studio |
+| Network Error | Connection failures | Check internet connection |
+| Quota Exceeded | Rate limited | Wait or check usage limits |
+
+---
+
 ## Future Considerations
 
 - **Profile support**: Named configuration profiles for different use cases
 - **Remote configuration**: Fetch config from a URL (for team sharing)
 - **Schema versioning**: Handle config file format changes gracefully
+- **Model auto-selection**: Automatically choose model based on free tier availability
 
 ---
 
-**Last Updated**: 2025-12-30  
-**Version**: 1.0.0
+**Last Updated**: 2025-12-31  
+**Version**: 1.1.0
