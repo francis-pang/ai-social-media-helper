@@ -393,18 +393,60 @@ done
 
 ---
 
-## Design Decisions To Make
+## Design Decisions Made
 
-1. **Command structure**: Flat, nested, or hybrid?
-2. **Interactive prompt style**: REPL or chat?
-3. **Spinner style**: Dots, circle, or bar?
-4. **Color scheme**: Default terminal or custom theme?
-5. **Confirmation behavior**: Always prompt or --yes flag?
-6. **Default output format**: Text, JSON, or markdown?
-7. **Progress display**: Spinner only or progress bar for uploads?
+### Iteration 8: Directory Scanning CLI
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| CLI Framework | Cobra | Industry standard, used by kubectl, docker, gh |
+| Directory flag | `--directory` / `-d` | `-d` is widely recognized for directory |
+| No argument behavior | Interactive prompt, then cwd | Better UX than error messages |
+| Recursive scanning | Enabled by default | Photo directories typically have subdirectories |
+| Symlinks | Follow file symlinks, skip directory symlinks | Prevents infinite loops |
+| Hidden files | Include all | Simple behavior, no surprises |
+
+### CLI Flags Implemented
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--directory` | `-d` | string | "" | Directory containing images |
+| `--context` | `-c` | string | "" | Trip/event description for photo selection |
+| `--max-depth` | | int | 0 | Max recursion depth (0=unlimited) |
+| `--limit` | | int | 0 | Max images to process (0=unlimited) |
+| `--help` | `-h` | | | Show help message |
+
+### Iteration 10: Context Flag
+
+The `--context` flag was added to support quality-agnostic photo selection:
+
+```bash
+# With context
+gemini-cli -d ./vacation-photos -c "Weekend trip to Kyoto - temples, food tour, night market"
+
+# Interactive mode prompts for context
+gemini-cli
+```
+
+The context helps Gemini:
+- Identify sub-events to look for
+- Prioritize important subjects
+- Understand the narrative structure
+
+See [DDR-016: Quality-Agnostic Photo Selection](./design-decisions/DDR-016-quality-agnostic-photo-selection.md)
+
+### Design Decisions Still To Make
+
+1. **Spinner style**: Dots, circle, or bar?
+2. **Color scheme**: Default terminal or custom theme?
+3. **Confirmation behavior**: Always prompt or --yes flag?
+4. **Default output format**: Text, JSON, or markdown?
+5. **Progress display**: Spinner only or progress bar for uploads?
+
+See [DDR-015: CLI Directory Arguments](./design-decisions/DDR-015-cli-directory-arguments.md) for detailed rationale.
 
 ---
 
-**Last Updated**: 2025-12-30  
-**Version**: 1.0.0
+**Last Updated**: 2025-12-31  
+**Version**: 1.2.0
 

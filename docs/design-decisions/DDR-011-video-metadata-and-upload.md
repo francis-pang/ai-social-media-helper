@@ -9,7 +9,7 @@ Iteration 9 required adding video support to the Gemini Media CLI. This introduc
 
 1. **Metadata extraction**: Videos don't use EXIF; they use container-specific formats (MP4 atoms, MKV metadata)
 2. **Large file handling**: The test video was 600MB, exceeding Gemini's 20MB inline data limit
-3. **Unified architecture**: Need to support both images and videos in a single directory (Iteration 10)
+3. **Unified architecture**: Need to support both images and videos in a single directory (Iteration 11)
 
 ## Decision
 

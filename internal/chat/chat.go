@@ -4,20 +4,42 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
 )
 
-const modelName = "gemini-2.0-flash"
+// DefaultModelName is the default Gemini model to use.
+// Can be overridden via GEMINI_MODEL environment variable.
+const DefaultModelName = "gemini-3-flash"
+
+// GetModelName returns the Gemini model to use, resolved from:
+// 1. GEMINI_MODEL environment variable (if set)
+// 2. Default: gemini-3-flash
+//
+// Common values:
+//   - "gemini-3-flash" - Fast, cost-effective (default)
+//   - "gemini-3-pro" - Higher quality, production use for media analysis
+func GetModelName() string {
+	if env := os.Getenv("GEMINI_MODEL"); env != "" {
+		return env
+	}
+	return DefaultModelName
+}
 
 // SystemInstruction provides context for media analysis with extracted metadata.
+// See DDR-017: Francis Reference Photo for Person Identification.
 const SystemInstruction = `You are an expert media analyst. Use the provided EXIF/FFmpeg metadata 
 as the absolute ground truth for time, location, and camera settings while describing the visual 
-content of the media. The metadata has been extracted locally and is authoritative.`
+content of the media. The metadata has been extracted locally and is authoritative.
+
+REFERENCE PHOTO: The first image provided is a reference photo of Francis, the owner of this media. 
+Use this to identify Francis in the target media. The target media to analyze is the second file.`
 
 // UploadPollingInterval is the interval between checking upload state.
 const UploadPollingInterval = 5 * time.Second
@@ -29,7 +51,7 @@ const UploadTimeout = 10 * time.Minute
 func AskTextQuestion(ctx context.Context, client *genai.Client, question string) (string, error) {
 	log.Debug().Str("question", question).Msg("Sending text question to Gemini")
 
-	model := client.GenerativeModel(modelName)
+	model := client.GenerativeModel(GetModelName())
 
 	resp, err := model.GenerateContent(ctx, genai.Text(question))
 	if err != nil {
@@ -75,6 +97,7 @@ func BuildDailyNewsQuestion() string {
 
 // AskMediaQuestion sends a media file (image or video) along with a question to the Gemini API.
 // Always uses the Files API for consistent behavior and memory efficiency (DDR-012).
+// For videos, always compresses before upload using AV1+Opus for optimal efficiency (DDR-018).
 func AskMediaQuestion(ctx context.Context, client *genai.Client, mediaFile *filehandler.MediaFile, question string) (string, error) {
 	mediaType := "media"
 	if mediaFile.Metadata != nil {
@@ -88,8 +111,57 @@ func AskMediaQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 		Str("media_type", mediaType).
 		Msg("Sending media question to Gemini via Files API")
 
+	// For videos, compress before upload (DDR-018: always-on compression)
+	uploadPath := mediaFile.Path
+	uploadMIME := mediaFile.MIMEType
+	var cleanupCompressed func()
+
+	ext := strings.ToLower(filepath.Ext(mediaFile.Path))
+	if filehandler.IsVideo(ext) {
+		log.Info().Msg("Compressing video for Gemini optimization (AV1+Opus)...")
+
+		// Get video metadata for smart compression (no-upscaling logic)
+		var videoMeta *filehandler.VideoMetadata
+		if mediaFile.Metadata != nil {
+			videoMeta, _ = mediaFile.Metadata.(*filehandler.VideoMetadata)
+		}
+
+		compressedPath, compressedSize, cleanup, err := filehandler.CompressVideoForGemini(ctx, mediaFile.Path, videoMeta)
+		if err != nil {
+			return "", fmt.Errorf("failed to compress video: %w", err)
+		}
+		cleanupCompressed = cleanup
+		uploadPath = compressedPath
+		uploadMIME = "video/webm" // Compressed output is WebM
+
+		log.Info().
+			Int64("original_mb", mediaFile.Size/(1024*1024)).
+			Int64("compressed_mb", compressedSize/(1024*1024)).
+			Msg("Video compression complete")
+	}
+
+	// Ensure compressed file cleanup happens
+	if cleanupCompressed != nil {
+		defer cleanupCompressed()
+	}
+
+	// Create a temporary MediaFile for upload with the compressed path
+	uploadFile := &filehandler.MediaFile{
+		Path:     uploadPath,
+		MIMEType: uploadMIME,
+		Size:     mediaFile.Size, // Original size for logging (actual upload size is different)
+		Metadata: mediaFile.Metadata, // Keep original metadata for prompt building!
+	}
+
+	// Update size if we compressed
+	if uploadPath != mediaFile.Path {
+		if info, err := os.Stat(uploadPath); err == nil {
+			uploadFile.Size = info.Size()
+		}
+	}
+
 	// Always use Files API for all media uploads (DDR-012)
-	file, err := uploadAndWaitForProcessing(ctx, client, mediaFile)
+	file, err := uploadAndWaitForProcessing(ctx, client, uploadFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)
 	}
@@ -103,15 +175,24 @@ func AskMediaQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 	}()
 
 	// Configure model with system instruction for metadata context
-	model := client.GenerativeModel(modelName)
+	model := client.GenerativeModel(GetModelName())
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{
 			genai.Text(SystemInstruction),
 		},
 	}
 
-	// Build parts: file reference + question
+	// Build parts: reference photo + file reference + question (DDR-017)
+	log.Debug().
+		Int("reference_bytes", len(assets.FrancisReferencePhoto)).
+		Msg("Including Francis reference photo for identification")
 	parts := []genai.Part{
+		// Francis reference photo first for identification
+		genai.Blob{
+			MIMEType: assets.FrancisReferenceMIMEType,
+			Data:     assets.FrancisReferencePhoto,
+		},
+		// Target media to analyze
 		genai.FileData{
 			MIMEType: file.MIMEType,
 			URI:      file.URI,

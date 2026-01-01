@@ -27,12 +27,18 @@ gemini-media-social-network/
 │   │   └── validate.go               # API key validation with error types
 │   │
 │   ├── chat/
-│   │   └── chat.go                   # Text Q&A with date-embedded prompts
+│   │   ├── chat.go                   # Text Q&A with date-embedded prompts
+│   │   └── selection.go              # Multi-image photo selection (Iteration 8)
 │   │
 │   ├── logging/
 │   │   └── logger.go                 # Structured logging with zerolog
 │   │
-│   ├── filehandler/                  # (Future)
+│   ├── filehandler/
+│   │   ├── media.go                  # MediaFile struct and loading
+│   │   ├── image.go                  # Image metadata extraction (EXIF)
+│   │   ├── video.go                  # Video metadata extraction (ffprobe)
+│   │   └── directory.go              # Directory scanning and thumbnails (Iteration 8)
+│   │
 │   ├── session/                      # (Future)
 │   └── storage/                      # (Future)
 │
@@ -47,7 +53,7 @@ gemini-media-social-network/
 │   ├── design-decisions/             # Historical decision records
 │   │   ├── index.md                  # Decision index
 │   │   ├── design_template.md        # ADR template
-│   │   └── DDR-*.md                  # Individual decisions
+│   │   └── DDR-*.md                  # Individual decisions (DDR-001 through DDR-015)
 │   ├── authentication.md             # Auth design
 │   ├── configuration.md              # Config options
 │   ├── operations.md                 # Logging/observability
@@ -76,30 +82,41 @@ gemini-media-social-network/
 - [x] **Iteration 5**: API key validation with typed error handling
 - [x] **Iteration 6**: Hardcoded text question/answer with date-embedded prompts
 
-### Phase 2: Media Uploads (Iterations 7-10)
+### Phase 2: Media Uploads (Iterations 7-11)
 
 - [x] **Iteration 7**: Single image upload with EXIF extraction and social media generation
-- [ ] **Iteration 8**: Image directory upload
-- [ ] **Iteration 9**: Single video upload
-- [ ] **Iteration 10**: Mixed media directory (images + videos)
+- [x] **Iteration 8**: Image directory upload with thumbnail-based photo selection
+  - Scans directory for images, generates thumbnails (1024px max)
+  - Sends thumbnails + metadata to Gemini for selection
+  - Returns ranked list of up to 20 representative photos with justification
+  - See [DDR-014](./docs/design-decisions/DDR-014-thumbnail-selection-strategy.md)
+- [x] **Iteration 9**: Single video upload
+- [x] **Iteration 10**: Quality-agnostic metadata-driven photo selection
+  - Quality is NOT a criterion (user has Google enhancement tools)
+  - Subject diversity as highest priority (food, architecture, landscape, people, activities)
+  - Hybrid scene detection (visual + time 2hr+ + GPS 1km+)
+  - User trip context for informed selection
+  - Three-part output: ranked list, scene grouping, exclusion report
+  - See [DDR-016](./docs/design-decisions/DDR-016-quality-agnostic-photo-selection.md)
+- [ ] **Iteration 11**: Mixed media directory (images + videos)
 
-### Phase 3: Session Management (Iterations 11-13)
+### Phase 3: Session Management (Iterations 12-14)
 
-- [ ] **Iteration 11**: Multi-question single session with REPL
-- [ ] **Iteration 12**: Session persistence to disk (JSON)
-- [ ] **Iteration 13**: Session management commands
+- [ ] **Iteration 12**: Multi-question single session with REPL
+- [ ] **Iteration 13**: Session persistence to disk (JSON)
+- [ ] **Iteration 14**: Session management commands
 
-### Phase 4: CLI Polish (Iterations 14-16)
+### Phase 4: CLI Polish (Iterations 15-17)
 
-- [ ] **Iteration 14**: Dynamic CLI arguments
-- [ ] **Iteration 15**: Interactive mode
-- [ ] **Iteration 16**: Progress indicators and UX polish
+- [ ] **Iteration 15**: Dynamic CLI arguments with Cobra
+- [ ] **Iteration 16**: Interactive mode (REPL for multi-turn conversations)
+- [ ] **Iteration 17**: Progress indicators and UX polish
 
-### Phase 5: Advanced Features (Iterations 17-19)
+### Phase 5: Advanced Features (Iterations 18-20)
 
-- [ ] **Iteration 17**: Configuration file support with Viper
-- [ ] **Iteration 18**: Batch operations with concurrency
-- [ ] **Iteration 19**: Cloud storage integration (S3/GDrive)
+- [ ] **Iteration 18**: Configuration file support with Viper
+- [ ] **Iteration 19**: Batch operations with concurrency
+- [ ] **Iteration 20**: Cloud storage integration (S3/GDrive)
 
 ---
 
@@ -110,6 +127,8 @@ gemini-media-social-network/
 - Go 1.23 or later
 - Gemini API key from [Google AI Studio](https://aistudio.google.com/)
 - GPG (for secure credential storage)
+- ffprobe (for video metadata extraction)
+- macOS `sips` (for HEIC thumbnail generation)
 
 ### Quick Setup
 
@@ -171,5 +190,5 @@ gemini-media-social-network/
 ---
 
 **Last Updated**: 2025-12-31  
-**Version**: 1.3.0  
-**Status**: Implementation Phase (Iteration 7 Complete)
+**Version**: 1.6.0  
+**Status**: Implementation Phase (Iteration 10 Complete)

@@ -25,6 +25,11 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-011](./DDR-011-video-metadata-and-upload.md) | 2025-12-31 | Video Metadata Extraction and Large File Upload | Accepted |
 | [DDR-012](./DDR-012-files-api-for-all-uploads.md) | 2025-12-31 | Files API for All Media Uploads | Accepted |
 | [DDR-013](./DDR-013-unified-metadata-architecture.md) | 2025-12-31 | Unified Metadata Extraction Architecture | Accepted |
+| [DDR-014](./DDR-014-thumbnail-selection-strategy.md) | 2025-12-31 | Thumbnail-Based Multi-Image Selection Strategy | Accepted |
+| [DDR-015](./DDR-015-cli-directory-arguments.md) | 2025-12-31 | CLI Directory Arguments with Cobra | Accepted |
+| [DDR-016](./DDR-016-quality-agnostic-photo-selection.md) | 2025-12-31 | Quality-Agnostic Metadata-Driven Photo Selection | Accepted |
+| [DDR-017](./DDR-017-francis-reference-photo.md) | 2026-01-01 | Francis Reference Photo for Person Identification | Accepted |
+| [DDR-018](./DDR-018-video-compression-gemini3.md) | 2026-01-01 | Video Compression for Gemini 3 Pro Optimization | Accepted |
 
 ---
 
@@ -38,5 +43,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2025-12-31
-
+**Last Updated**: 2026-01-01

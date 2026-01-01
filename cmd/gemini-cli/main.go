@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -14,21 +15,79 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/logging"
 	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 	"google.golang.org/api/option"
 )
 
-// Hardcoded media paths for development iterations
-const (
-	// Iteration 7: Single image upload
-	hardcodedImagePath = "/Users/fpang/OneDrive - Adobe/Francis-Document/20251230_092113.heic"
-
-	// Iteration 9: Single video upload
-	hardcodedVideoPath = "/Users/fpang/OneDrive - Adobe/Francis-Document/20251230_171931.mp4"
+// CLI flags
+var (
+	directoryFlag string
+	maxDepthFlag  int
+	limitFlag     int
+	contextFlag   string
 )
 
+// rootCmd is the main Cobra command for the CLI.
+var rootCmd = &cobra.Command{
+	Use:   "gemini-cli",
+	Short: "AI-powered photo selection for social media",
+	Long: `Gemini Media CLI analyzes photos in a directory and uses AI to select
+the most representative images for an Instagram post.
+
+The tool scans the specified directory (recursively by default), extracts
+metadata from images, generates thumbnails, and asks Gemini to rank and
+select the best photos for social media.
+
+Examples:
+  gemini-cli --directory /path/to/photos --context "Weekend trip to Kyoto"
+  gemini-cli -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
+  gemini-cli -d ./photos --max-depth 2 --limit 50
+  gemini-cli  # Interactive mode - prompts for directory and context`,
+	Run: runMain,
+}
+
+func init() {
+	rootCmd.Flags().StringVarP(&directoryFlag, "directory", "d", "", "Directory containing images to analyze")
+	rootCmd.Flags().IntVar(&maxDepthFlag, "max-depth", 0, "Maximum recursion depth (0 = unlimited)")
+	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum images to process (0 = unlimited)")
+	rootCmd.Flags().StringVarP(&contextFlag, "context", "c", "", "Trip/event description for photo selection (e.g., 'Birthday party at restaurant then karaoke')")
+}
+
 func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+// runMain is the main execution logic called by Cobra.
+func runMain(cmd *cobra.Command, args []string) {
 	logging.Init()
 
+	// Determine directory path
+	dirPath := directoryFlag
+	if dirPath == "" {
+		dirPath = promptForDirectory()
+	}
+
+	// Validate directory exists
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Fatal().Str("path", dirPath).Msg("Directory not found")
+		}
+		log.Fatal().Err(err).Str("path", dirPath).Msg("Failed to access directory")
+	}
+	if !info.IsDir() {
+		log.Fatal().Str("path", dirPath).Msg("Path is not a directory")
+	}
+
+	// Convert to absolute path for cleaner display
+	absPath, err := filepath.Abs(dirPath)
+	if err == nil {
+		dirPath = absPath
+	}
+
+	// Initialize Gemini client
 	apiKey, err := auth.GetAPIKey()
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to retrieve API key")
@@ -50,9 +109,140 @@ func main() {
 
 	log.Info().Msg("API key validation complete - ready for operations")
 
-	// Iteration 9: Single video upload with hardcoded path
-	// (Iteration 8 - Image directory - skipped for now)
-	runMediaAnalysis(ctx, client, hardcodedVideoPath)
+	// Get trip context
+	tripContext := contextFlag
+	if tripContext == "" {
+		tripContext = promptForContext()
+	}
+
+	// Run directory selection with options and context
+	runDirectorySelection(ctx, client, dirPath, tripContext)
+}
+
+// promptForDirectory prompts the user interactively for a directory path.
+// Returns the current directory if the user enters nothing.
+func promptForDirectory() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+
+	fmt.Printf("Directory [%s]: ", cwd)
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to read input, using current directory")
+		return cwd
+	}
+
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return cwd
+	}
+
+	return input
+}
+
+// promptForContext prompts the user interactively for trip/event description.
+// Returns empty string if the user enters nothing (context is optional but recommended).
+func promptForContext() string {
+	fmt.Println()
+	fmt.Println("Describe your trip/event (helps Gemini select the best photos):")
+	fmt.Println("Examples: 'Weekend trip to Kyoto - temples, food tour, night market'")
+	fmt.Println("          'Birthday party at restaurant then karaoke'")
+	fmt.Print("Context (optional): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to read context input")
+		return ""
+	}
+
+	return strings.TrimSpace(input)
+}
+
+// runDirectorySelection scans a directory, generates thumbnails, and asks Gemini to select
+// the most representative photos for an Instagram post using quality-agnostic criteria.
+func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath string, tripContext string) {
+	log.Info().
+		Str("path", dirPath).
+		Int("max_depth", maxDepthFlag).
+		Int("limit", limitFlag).
+		Bool("has_context", tripContext != "").
+		Msg("Starting quality-agnostic photo selection")
+
+	// Configure scan options
+	opts := filehandler.ScanOptions{
+		MaxDepth: maxDepthFlag,
+		Limit:    limitFlag,
+	}
+
+	// Scan directory for images
+	files, err := filehandler.ScanDirectoryWithOptions(dirPath, opts)
+	if err != nil {
+		log.Fatal().Err(err).Str("path", dirPath).Msg("failed to scan directory")
+	}
+
+	if len(files) == 0 {
+		log.Fatal().Str("path", dirPath).Msg("no supported images found in directory")
+	}
+
+	// Display header
+	fmt.Println()
+	fmt.Println("============================================")
+	fmt.Println("📁 Quality-Agnostic Photo Selection")
+	fmt.Println("============================================")
+	fmt.Printf("Directory: %s\n", dirPath)
+	fmt.Printf("Images found: %d\n", len(files))
+	if limitFlag > 0 && len(files) == limitFlag {
+		fmt.Printf("(limited to %d)\n", limitFlag)
+	}
+	fmt.Printf("Max selection: %d\n", chat.DefaultMaxPhotos)
+	if tripContext != "" {
+		fmt.Printf("Context: %s\n", tripContext)
+	}
+	fmt.Println("--------------------------------------------")
+
+	// Display summary of found images
+	fmt.Println("📸 Images to analyze:")
+	for i, file := range files {
+		// Show relative path from base directory if recursive
+		displayPath := filepath.Base(file.Path)
+		if relPath, err := filepath.Rel(dirPath, file.Path); err == nil && relPath != displayPath {
+			displayPath = relPath
+		}
+
+		sizeMB := float64(file.Size) / (1024 * 1024)
+
+		metaInfo := ""
+		if file.Metadata != nil {
+			if file.Metadata.HasGPSData() {
+				metaInfo += " 📍GPS"
+			}
+			if file.Metadata.HasDateData() {
+				metaInfo += " 📅Date"
+			}
+		}
+
+		fmt.Printf("   %2d. %s (%.1f MB)%s\n", i+1, displayPath, sizeMB, metaInfo)
+	}
+
+	fmt.Println("--------------------------------------------")
+	fmt.Println("⏳ Generating thumbnails and sending to Gemini...")
+	fmt.Println()
+
+	// Ask Gemini to select photos using quality-agnostic criteria
+	response, err := chat.AskPhotoSelection(ctx, client, files, chat.DefaultMaxPhotos, tripContext)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to get photo selection from Gemini")
+	}
+
+	fmt.Println("✅ Photo Selection Complete!")
+	fmt.Println("============================================")
+	fmt.Println()
+	fmt.Println(response)
 }
 
 // runMediaAnalysis loads a media file (image or video) and generates a social media post description.

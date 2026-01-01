@@ -304,19 +304,45 @@ func ResolveCoordinates(lat, lon float64) (*ResolvedLocation, error) {
 }
 ```
 
-### 2. Video Support (Iteration 9)
+### 2. Video Support (Iteration 9) ✅
 
 Extend `MediaFile` to handle video uploads:
 - Support MP4, MOV, AVI, WebM, MKV formats
 - Extract video metadata (duration, resolution, codec)
-- Handle larger file uploads with streaming
+- Handle larger file uploads with Files API
 
-### 3. Batch Processing (Iteration 8)
+### 3. Batch Processing (Iteration 8) ✅
 
 Process multiple images from a directory:
-- Concurrent metadata extraction
-- Progress indicators
-- Aggregated output/export
+- Recursive directory scanning
+- Thumbnail generation for selection
+- Metadata extraction for all images
+
+### 4. Quality-Agnostic Photo Selection (Iteration 10) ✅
+
+**Decision**: Photo quality is NOT a selection criterion since user has Google's enhancement tools (Magic Editor, Unblur, Portrait Light, etc.).
+
+See [DDR-016: Quality-Agnostic Photo Selection](./design-decisions/DDR-016-quality-agnostic-photo-selection.md)
+
+**Selection Priorities**:
+1. Subject/Scene Diversity (Highest): food, architecture, landscape, people, activities
+2. Scene Representation: ensure each sub-event/location is represented
+3. Enhancement Potential (Duplicates Only): pick photo requiring least enhancement
+4. People Variety (Lower): different groups/individuals
+5. Time of Day (Tiebreaker): only to break ties
+
+**Scene Detection (Hybrid)**:
+- Visual similarity + time gaps (2+ hours) + GPS gaps (1km+)
+- Gemini uses GPS for reverse geocoding to identify venues
+
+**User Context**:
+- Trip description provided via `--context` / `-c` flag
+- Helps Gemini understand sub-events and priorities
+
+**Output Format** (Three-part):
+1. Ranked list with justification
+2. Scene grouping explanation
+3. Detailed exclusion report for every non-selected photo
 
 ---
 

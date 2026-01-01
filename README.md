@@ -17,6 +17,10 @@ A command-line tool for uploading images and videos to Google's Gemini API and c
 
 - Go 1.21 or later
 - Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
+- **FFmpeg** (required for video compression)
+  - macOS: `brew install ffmpeg`
+  - Linux: `apt install ffmpeg`
+  - Ensure FFmpeg includes `libsvtav1` (AV1 encoder) and `libopus` (Opus audio)
 
 ### Installation
 
@@ -38,24 +42,30 @@ export GEMINI_API_KEY="your-api-key-here"
 ### Usage
 
 ```bash
-# Upload a media file
-./gemini-cli upload image.jpg
+# Analyze photos in a directory (with context for better selection)
+./gemini-cli --directory /path/to/photos --context "Weekend trip to Kyoto"
+./gemini-cli -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
 
-# Ask a question about uploaded media
-./gemini-cli ask "What objects are in this image?"
+# Interactive mode - prompts for directory and context
+./gemini-cli
 
-# Create a new session
-./gemini-cli session new
+# With options
+./gemini-cli -d ./photos --max-depth 2 --limit 50
 
-# List all sessions
-./gemini-cli session list
-
-# Switch to a different session
-./gemini-cli session switch <session-id>
-
-# Enter interactive mode
-./gemini-cli interactive
+# Show help
+./gemini-cli --help
 ```
+
+### Photo Selection
+
+The CLI uses **quality-agnostic photo selection** - photo quality is NOT a selection criterion since you can enhance photos with Google's tools (Magic Editor, Unblur, Portrait Light, etc.).
+
+Instead, selection prioritizes:
+1. **Subject diversity**: food, architecture, landscape, people, activities
+2. **Scene representation**: ensure each sub-event/location is covered
+3. **Enhancement potential**: for duplicates, pick easiest to enhance
+
+Provide trip context with `--context` / `-c` to help Gemini understand your event.
 
 ## Supported File Types
 
@@ -74,12 +84,16 @@ export GEMINI_API_KEY="your-api-key-here"
 - WebM (.webm)
 - Matroska (.mkv)
 
+**Note:** All videos are automatically compressed before upload using AV1+Opus codecs for optimal Gemini efficiency. A 1GB video typically compresses to ~2MB while preserving AI-analyzable quality. See [DDR-018](./docs/design-decisions/DDR-018-video-compression-gemini3.md) for details.
+
 ## Configuration
 
 The application uses environment variables for configuration:
 
 - `GEMINI_API_KEY` (required): Your Gemini API key
-- `GEMINI_MODEL` (optional): Model to use (default: `gemini-3-flash-preview`). See [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) for available models.
+- `GEMINI_MODEL` (optional): Model to use (default: `gemini-3-flash`). See [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) for available models.
+  - `gemini-3-flash` - Fast, cost-effective (default)
+  - `gemini-3-pro` - Higher quality, recommended for media analysis
 - `GEMINI_LOG_LEVEL` (optional): Log level - debug, info, warn, error (default: `info`)
 - `GEMINI_SESSION_DIR` (optional): Directory for session storage (default: `~/.gemini-media-cli/sessions`)
 
@@ -151,9 +165,12 @@ go test -cover ./...
 - [x] Text question/answer with date-embedded prompts
 - [x] Single image upload with EXIF metadata extraction
 - [x] Social media content generation from images
-- [ ] Image directory batch processing
-- [ ] Video uploads
-- [ ] CLI interface with Cobra
+- [x] Image directory batch processing with photo selection
+- [x] CLI interface with Cobra (--directory, --max-depth, --limit flags)
+- [x] Video uploads with Files API
+- [x] Quality-agnostic photo selection with user context (--context flag)
+- [x] Video compression for Gemini optimization (AV1+Opus, DDR-018)
+- [ ] Mixed media directories (images + videos)
 - [ ] Session management
 - [ ] Cloud storage integration (S3, Google Drive)
 

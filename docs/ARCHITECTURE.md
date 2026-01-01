@@ -23,11 +23,12 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
 
 ## Core Components
 
-1. **CLI Interface** - Command parsing and user interaction
-2. **File Handler** - File validation, reading, and preparation
+1. **CLI Interface** - Command parsing and user interaction (`--directory`, `--context` flags)
+2. **File Handler** - File validation, EXIF extraction, thumbnail generation
 3. **Gemini Client** - API communication and file uploads
-4. **Session Manager** - Stateful conversation management
-5. **Configuration** - API key and settings management
+4. **Photo Selection** - Quality-agnostic selection with scene detection
+5. **Session Manager** - Stateful conversation management (future)
+6. **Configuration** - API key and settings management
 
 ---
 
@@ -39,7 +40,7 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
 | **Gemini Model** | `gemini-3-flash-preview` | AI model (free tier compatible) |
 | **SDK** | `github.com/google/generative-ai-go/genai` | Official Gemini API SDK |
 | **Logging** | `github.com/rs/zerolog` | Structured logging |
-| **CLI Framework** | `github.com/spf13/cobra` (planned) | Command-line interface |
+| **CLI Framework** | `github.com/spf13/cobra` | Command-line interface |
 | **Configuration** | Environment variables + GPG | Config and secret management |
 | **JSON** | `encoding/json` | Session persistence |
 | **File I/O** | `os`, `io`, `mime` | File handling |
@@ -103,6 +104,58 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
 - ✅ Thread-safe operations with mutexes
 - ✅ Streaming file I/O for large files
 - ✅ No shared mutable state
+
+---
+
+## Photo Selection Flow (Iteration 10)
+
+```
+┌─────────────────┐
+│ Directory Scan  │  Recursive, sorted by path
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ EXIF Extraction │  GPS, Date, Camera info
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Thumbnail Gen   │  1024px max, JPEG output
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Gemini API      │  Thumbnails + Metadata + Context
+│ Selection       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ Structured Output                        │
+│ 1. Ranked list with justification       │
+│ 2. Scene grouping (hybrid detection)    │
+│ 3. Exclusion report (per-photo reasons) │
+└─────────────────────────────────────────┘
+```
+
+### Quality-Agnostic Selection
+
+**Key Principle**: Photo quality is NOT a selection criterion. User has Google enhancement tools (Magic Editor, Unblur, Portrait Light, etc.).
+
+**Selection Priorities**:
+1. Subject/Scene Diversity (Highest)
+2. Scene Representation
+3. Enhancement Potential (duplicates only)
+4. People Variety (Lower)
+5. Time of Day (Tiebreaker)
+
+**Scene Detection (Hybrid)**:
+- Visual similarity
+- Time gaps (2+ hours = new scene)
+- GPS gaps (1km+ = new location)
+
+See [DDR-016](./design-decisions/DDR-016-quality-agnostic-photo-selection.md) for details.
 
 ---
 

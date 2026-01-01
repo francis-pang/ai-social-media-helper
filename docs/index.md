@@ -12,7 +12,7 @@ These documents reflect the **current state** of the project and are updated as 
 |----------|-------------|
 | [architecture.md](./architecture.md) | System architecture, components, data flow, and technical stack |
 | [implementation.md](./implementation.md) | Implementation patterns for each component |
-| [media_analysis.md](./media_analysis.md) | Media analysis design: EXIF extraction, reverse geocoding, prompts |
+| [media_analysis.md](./media_analysis.md) | Media analysis design: EXIF extraction, reverse geocoding, photo selection |
 
 ### Historical Decision Records
 
