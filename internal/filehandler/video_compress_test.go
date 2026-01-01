@@ -50,8 +50,8 @@ func TestBuildFFmpegArgs_WithHighFPSSource(t *testing.T) {
 	// Verify frame rate is capped at MaxFrameRate (5), not 60
 	assertContains(t, args, "-r", "5.00")
 
-	// Verify audio sample rate is capped at 44100
-	assertContains(t, args, "-ar", "44100")
+	// Verify audio sample rate rounds up to 48000 (already at max Opus rate)
+	assertContains(t, args, "-ar", "48000")
 }
 
 func TestBuildFFmpegArgs_WithLowFPSSource(t *testing.T) {
@@ -68,9 +68,8 @@ func TestBuildFFmpegArgs_WithLowFPSSource(t *testing.T) {
 	// Verify frame rate preserves source (3 FPS), not upscaled to 5
 	assertContains(t, args, "-r", "3.00")
 
-	// Verify audio sample rate is NOT set (let FFmpeg preserve 22050)
-	// Since source (22050) is less than max (44100), we don't force it
-	assertNotContains(t, args, "-ar")
+	// Verify audio sample rate rounds up to 24000 (nearest Opus rate >= 22050)
+	assertContains(t, args, "-ar", "24000")
 }
 
 func TestBuildFFmpegArgs_VideoFilterPresent(t *testing.T) {
@@ -135,6 +134,40 @@ func TestMinInt(t *testing.T) {
 		result := minInt(tc.a, tc.b)
 		if result != tc.expected {
 			t.Errorf("minInt(%v, %v) = %v, expected %v", tc.a, tc.b, result, tc.expected)
+		}
+	}
+}
+
+func TestRoundUpToOpusSampleRate(t *testing.T) {
+	// Opus supported rates: 48000, 24000, 16000, 12000, 8000
+	tests := []struct {
+		source   int
+		expected int
+	}{
+		// Exact matches
+		{48000, 48000},
+		{24000, 24000},
+		{16000, 16000},
+		{12000, 12000},
+		{8000, 8000},
+		// Round up cases
+		{44100, 48000}, // Common CD quality -> 48kHz
+		{22050, 24000}, // Half CD rate -> 24kHz
+		{11025, 12000}, // Quarter CD rate -> 12kHz
+		{10000, 12000}, // Between 8k and 12k -> 12kHz
+		{9000, 12000},  // Between 8k and 12k -> 12kHz
+		{7000, 8000},   // Below 8k -> 8kHz
+		{4000, 8000},   // Very low -> 8kHz
+		// Edge cases
+		{1, 8000},      // Minimum -> 8kHz
+		{50000, 48000}, // Above max -> cap at 48kHz
+		{96000, 48000}, // Way above max -> cap at 48kHz
+	}
+
+	for _, tc := range tests {
+		result := roundUpToOpusSampleRate(tc.source)
+		if result != tc.expected {
+			t.Errorf("roundUpToOpusSampleRate(%d) = %d, expected %d", tc.source, result, tc.expected)
 		}
 	}
 }

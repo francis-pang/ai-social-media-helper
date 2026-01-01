@@ -14,24 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// DefaultModelName is the default Gemini model to use.
-// Can be overridden via GEMINI_MODEL environment variable.
-const DefaultModelName = "gemini-3-flash"
-
-// GetModelName returns the Gemini model to use, resolved from:
-// 1. GEMINI_MODEL environment variable (if set)
-// 2. Default: gemini-3-flash
-//
-// Common values:
-//   - "gemini-3-flash" - Fast, cost-effective (default)
-//   - "gemini-3-pro" - Higher quality, production use for media analysis
-func GetModelName() string {
-	if env := os.Getenv("GEMINI_MODEL"); env != "" {
-		return env
-	}
-	return DefaultModelName
-}
-
 // SystemInstruction provides context for media analysis with extracted metadata.
 // See DDR-017: Francis Reference Photo for Person Identification.
 const SystemInstruction = `You are an expert media analyst. Use the provided EXIF/FFmpeg metadata 

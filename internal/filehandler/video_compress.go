@@ -183,17 +183,22 @@ func buildFFmpegArgs(inputPath, outputPath string, metadata *VideoMetadata) []st
 	args = append(args, "-vbr", "on")
 	args = append(args, "-ac", "1") // Mono
 
-	// Audio sample rate: min(44100, source) - never upscale
-	// Note: We don't explicitly set -ar if source is lower, FFmpeg preserves it
-	// Only cap if source is higher than needed
-	if metadata != nil && metadata.AudioRate > 0 && metadata.AudioRate > 44100 {
-		args = append(args, "-ar", "44100")
+	// Audio sample rate: Round up to nearest Opus-supported rate.
+	// libopus only supports: 48000, 24000, 16000, 12000, 8000 Hz.
+	if metadata != nil && metadata.AudioRate > 0 {
+		targetRate := roundUpToOpusSampleRate(metadata.AudioRate)
+		args = append(args, "-ar", strconv.Itoa(targetRate))
 		log.Debug().
 			Int("source_rate", metadata.AudioRate).
-			Int("target_rate", 44100).
-			Msg("Audio sample rate: capping at 44.1kHz")
+			Int("target_rate", targetRate).
+			Msg("Audio sample rate: rounded to nearest Opus rate")
+	} else {
+		// Default to 48kHz if no metadata
+		args = append(args, "-ar", "48000")
+		log.Debug().
+			Int("target_rate", 48000).
+			Msg("Audio sample rate: defaulting to 48kHz (no metadata)")
 	}
-	// If source is ≤44100, FFmpeg will preserve it automatically
 
 	// Overwrite output file
 	args = append(args, "-y", outputPath)
@@ -215,5 +220,21 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// opusSampleRates are the sample rates supported by libopus, in descending order.
+var opusSampleRates = []int{48000, 24000, 16000, 12000, 8000}
+
+// roundUpToOpusSampleRate returns the smallest Opus-supported sample rate
+// that is >= the source rate. If source exceeds all rates, returns 48000.
+func roundUpToOpusSampleRate(sourceRate int) int {
+	// Find the smallest rate that is >= sourceRate
+	for i := len(opusSampleRates) - 1; i >= 0; i-- {
+		if opusSampleRates[i] >= sourceRate {
+			return opusSampleRates[i]
+		}
+	}
+	// Source exceeds max, use highest (48000)
+	return opusSampleRates[0]
 }
 
