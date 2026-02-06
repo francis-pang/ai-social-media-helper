@@ -439,7 +439,7 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, job *triageJob)
 
 	var (
 		deleted       int
-		errMsgs       []string
+		errMsgs       = make([]string, 0)
 		reclaimedSize int64
 	)
 
