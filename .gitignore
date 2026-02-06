@@ -8,6 +8,8 @@
 *.so
 *.dylib
 /gemini-cli
+/media-select
+/media-triage
 
 # Test binary, built with `go test -c`
 *.test
