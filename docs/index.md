@@ -43,5 +43,5 @@ Design decisions are **immutable historical records** that document why decision
 
 ---
 
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-02-06
 

@@ -32,6 +32,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-018](./DDR-018-video-compression-gemini3.md) | 2026-01-01 | Video Compression for Gemini 3 Pro Optimization | Accepted |
 | [DDR-019](./DDR-019-externalized-prompt-templates.md) | 2026-02-06 | Externalized Prompt Templates | Accepted |
 | [DDR-020](./DDR-020-mixed-media-selection.md) | 2026-01-01 | Mixed Media Selection Strategy | Accepted |
+| [DDR-021](./DDR-021-media-triage-command.md) | 2026-02-06 | Media Triage Command with Batch AI Evaluation | Accepted |
 
 ---
 
@@ -45,4 +46,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-01-01
+**Last Updated**: 2026-02-06

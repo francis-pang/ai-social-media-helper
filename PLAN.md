@@ -15,12 +15,14 @@ For detailed documentation, see the [docs/](./docs/) folder.
 ## Project Structure
 
 ```
-gemini-media-social-network/
+ai-social-media-helper/
 ├── cmd/
-│   └── gemini-cli/
-│       └── main.go                    # Entry point with validation
+│   ├── media-select/
+│   │   └── main.go                    # Media selection CLI entry point
+│   └── media-triage/
+│       └── main.go                    # Media triage CLI entry point
 │
-├── internal/                          # Private packages
+├── internal/                          # Shared private packages
 │   ├── auth/
 │   │   ├── auth.go                   # API key retrieval (env + GPG + passphrase file)
 │   │   ├── auth_test.go              # Auth tests
@@ -28,7 +30,9 @@ gemini-media-social-network/
 │   │
 │   ├── chat/
 │   │   ├── chat.go                   # Text Q&A with date-embedded prompts
-│   │   └── selection.go              # Multi-image photo selection (Iteration 8)
+│   │   ├── model.go                  # Model configuration
+│   │   ├── selection.go              # Multi-image photo/media selection
+│   │   └── triage.go                 # Batch media triage evaluation
 │   │
 │   ├── logging/
 │   │   └── logger.go                 # Structured logging with zerolog
@@ -37,7 +41,21 @@ gemini-media-social-network/
 │   │   ├── media.go                  # MediaFile struct and loading
 │   │   ├── image.go                  # Image metadata extraction (EXIF)
 │   │   ├── video.go                  # Video metadata extraction (ffprobe)
-│   │   └── directory.go              # Directory scanning and thumbnails (Iteration 8)
+│   │   ├── video_compress.go         # AV1+Opus video compression
+│   │   └── directory.go              # Directory scanning and thumbnails
+│   │
+│   ├── assets/
+│   │   ├── assets.go                 # Asset embedding (reference photos)
+│   │   ├── prompts.go                # Prompt template embedding and rendering
+│   │   ├── prompts/                  # Prompt text files
+│   │   │   ├── system-instruction.txt
+│   │   │   ├── selection-system.txt
+│   │   │   ├── triage-system.txt
+│   │   │   ├── social-media-image.txt
+│   │   │   ├── social-media-video.txt
+│   │   │   └── social-media-generic.txt
+│   │   └── reference-photos/
+│   │       └── francis-reference.jpg
 │   │
 │   ├── session/                      # (Future)
 │   └── storage/                      # (Future)
@@ -47,13 +65,13 @@ gemini-media-social-network/
 │
 ├── docs/                              # Documentation
 │   ├── index.md                      # Documentation index
-│   ├── architecture.md               # System architecture (current state)
+│   ├── ARCHITECTURE.md               # System architecture (current state)
 │   ├── implementation.md             # Implementation details (current state)
 │   ├── media_analysis.md             # Media analysis design
 │   ├── design-decisions/             # Historical decision records
 │   │   ├── index.md                  # Decision index
 │   │   ├── design_template.md        # ADR template
-│   │   └── DDR-*.md                  # Individual decisions (DDR-001 through DDR-015)
+│   │   └── DDR-*.md                  # Individual decisions (DDR-001 through DDR-021)
 │   ├── authentication.md             # Auth design
 │   ├── configuration.md              # Config options
 │   ├── operations.md                 # Logging/observability
@@ -66,7 +84,7 @@ gemini-media-social-network/
 ├── go.sum                             # Dependency checksums
 ├── .gitignore                         # Git ignore rules
 ├── README.md                          # User documentation
-└── plan.md                            # This file
+└── PLAN.md                            # This file
 ```
 
 ---
@@ -98,25 +116,26 @@ gemini-media-social-network/
   - User trip context for informed selection
   - Three-part output: ranked list, scene grouping, exclusion report
   - See [DDR-016](./docs/design-decisions/DDR-016-quality-agnostic-photo-selection.md)
-- [ ] **Iteration 11**: Mixed media directory (images + videos)
+- [x] **Iteration 11**: Mixed media directory (images + videos)
+- [x] **Iteration 12**: Multi-binary layout + media triage command (DDR-021)
 
-### Phase 3: Session Management (Iterations 12-14)
+### Phase 3: Session Management (Iterations 13-15)
 
-- [ ] **Iteration 12**: Multi-question single session with REPL
-- [ ] **Iteration 13**: Session persistence to disk (JSON)
-- [ ] **Iteration 14**: Session management commands
+- [ ] **Iteration 13**: Multi-question single session with REPL
+- [ ] **Iteration 14**: Session persistence to disk (JSON)
+- [ ] **Iteration 15**: Session management commands
 
-### Phase 4: CLI Polish (Iterations 15-17)
+### Phase 4: CLI Polish (Iterations 16-18)
 
-- [ ] **Iteration 15**: Dynamic CLI arguments with Cobra
-- [ ] **Iteration 16**: Interactive mode (REPL for multi-turn conversations)
-- [ ] **Iteration 17**: Progress indicators and UX polish
+- [ ] **Iteration 16**: Dynamic CLI arguments with Cobra
+- [ ] **Iteration 17**: Interactive mode (REPL for multi-turn conversations)
+- [ ] **Iteration 18**: Progress indicators and UX polish
 
-### Phase 5: Advanced Features (Iterations 18-20)
+### Phase 5: Advanced Features (Iterations 19-21)
 
-- [ ] **Iteration 18**: Configuration file support with Viper
-- [ ] **Iteration 19**: Batch operations with concurrency
-- [ ] **Iteration 20**: Cloud storage integration (S3/GDrive)
+- [ ] **Iteration 19**: Configuration file support with Viper
+- [ ] **Iteration 20**: Batch operations with concurrency
+- [ ] **Iteration 21**: Cloud storage integration (S3/GDrive)
 
 ---
 
@@ -145,13 +164,16 @@ gemini-media-social-network/
 
 3. **Build and run**:
    ```bash
-   go build -o gemini-cli ./cmd/gemini-cli
-   ./gemini-cli
+   go build -o media-select ./cmd/media-select
+   go build -o media-triage ./cmd/media-triage
+   ./media-select
+   ./media-triage
    ```
 
 4. **Enable debug logging**:
    ```bash
-   GEMINI_LOG_LEVEL=debug ./gemini-cli
+   GEMINI_LOG_LEVEL=debug ./media-select
+   GEMINI_LOG_LEVEL=debug ./media-triage
    ```
 
 ### Common Issues
@@ -189,6 +211,6 @@ gemini-media-social-network/
 
 ---
 
-**Last Updated**: 2025-12-31  
-**Version**: 1.6.0  
-**Status**: Implementation Phase (Iteration 10 Complete)
+**Last Updated**: 2026-02-06  
+**Version**: 1.7.0  
+**Status**: Implementation Phase (Iteration 12 Complete)

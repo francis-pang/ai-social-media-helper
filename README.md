@@ -1,15 +1,22 @@
-# Gemini Media Analysis CLI
+# Gemini Media CLI Tools
 
-A command-line tool for uploading images and videos to Google's Gemini API and conducting in-depth analysis through stateful conversation sessions.
+A collection of command-line tools for analyzing photos and videos using Google's Gemini API.
+
+## Tools
+
+| Command | Description |
+|---------|-------------|
+| `media-select` | AI-powered media selection for Instagram carousels |
+| `media-triage` | AI-powered media triage to identify and delete unsaveable files |
 
 ## Features
 
-- 📤 **Direct File Upload**: Upload images and videos directly to Gemini API, bypassing typical UI file size limits
-- 💬 **Stateful Conversations**: Maintain context across multiple questions about uploaded media
-- 🎯 **In-Depth Analysis**: Ask detailed questions about visual content using Gemini's multimodal capabilities
-- 💾 **Session Management**: Create, switch, and manage multiple analysis sessions
+- 📤 **Direct File Upload**: Upload images and videos directly to Gemini API
+- 🎯 **Media Selection**: AI selects the best photos/videos for social media posts
+- 🗑️ **Media Triage**: AI identifies unsaveable media (blurry, dark, accidental) for cleanup
+- 🎬 **Mixed Media**: Photos and videos are analyzed equally
 - 🚀 **Fast & Efficient**: Built with Go for fast startup and efficient file handling
-- 📦 **Single Binary**: Easy deployment with a single executable file
+- 📦 **Multi-Binary**: Each tool is an independent executable
 
 ## Quick Start
 
@@ -27,36 +34,61 @@ A command-line tool for uploading images and videos to Google's Gemini API and c
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd gemini-media-social-network
+cd ai-social-media-helper
 
 # Install dependencies
 go mod download
 
-# Build
-go build -o gemini-cli ./cmd/gemini-cli
+# Build both tools
+go build -o media-select ./cmd/media-select
+go build -o media-triage ./cmd/media-triage
 
 # Set your API key
 export GEMINI_API_KEY="your-api-key-here"
 ```
 
-### Usage
+### Usage: media-select
+
+Select the best media for an Instagram carousel post.
 
 ```bash
 # Analyze photos and videos in a directory (with context for better selection)
-./gemini-cli --directory /path/to/photos --context "Weekend trip to Kyoto"
-./gemini-cli -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
+./media-select --directory /path/to/photos --context "Weekend trip to Kyoto"
+./media-select -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
 
 # Interactive mode - prompts for directory and context
-./gemini-cli
+./media-select
 
 # With options
-./gemini-cli -d ./photos --max-depth 2 --limit 50
+./media-select -d ./photos --max-depth 2 --limit 50
 
 # Specify a different model
-./gemini-cli -d ./media --model gemini-3-pro-preview
+./media-select -d ./media --model gemini-3-pro-preview
 
 # Show help
-./gemini-cli --help
+./media-select --help
+```
+
+### Usage: media-triage
+
+Identify and delete unsaveable photos and videos from a directory.
+
+```bash
+# Triage media in a directory (interactive - prompts before deletion)
+./media-triage --directory /path/to/photos
+./media-triage -d ./vacation-photos
+
+# Dry run - show report without prompting for deletion
+./media-triage -d ./photos --dry-run
+
+# With options
+./media-triage -d ./photos --max-depth 2 --limit 100
+
+# Specify a different model
+./media-triage -d ./media --model gemini-3-pro-preview
+
+# Show help
+./media-triage --help
 ```
 
 ### Media Selection
@@ -95,6 +127,8 @@ Provide trip context with `--context` / `-c` to help Gemini understand your even
 
 ## CLI Options
 
+### media-select
+
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--directory` | `-d` | (prompt) | Directory containing media to analyze |
@@ -102,6 +136,16 @@ Provide trip context with `--context` / `-c` to help Gemini understand your even
 | `--model` | `-m` | `gemini-3-flash-preview` | Gemini model to use |
 | `--max-depth` | | 0 (unlimited) | Maximum recursion depth |
 | `--limit` | | 0 (unlimited) | Maximum media items to process |
+
+### media-triage
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--directory` | `-d` | (prompt) | Directory containing media to triage |
+| `--model` | `-m` | `gemini-3-flash-preview` | Gemini model to use |
+| `--max-depth` | | 0 (unlimited) | Maximum recursion depth |
+| `--limit` | | 0 (unlimited) | Maximum media items to process |
+| `--dry-run` | | false | Show report without prompting for deletion |
 
 ## Configuration
 
@@ -121,26 +165,29 @@ For non-interactive environments (CI/CD, automated testing), create a `.gpg-pass
 ## Project Structure
 
 ```
-gemini-media-social-network/
-├── cmd/gemini-cli/          # CLI entry point
-│   └── main.go
-├── internal/                # Internal packages
+ai-social-media-helper/
+├── cmd/
+│   ├── media-select/        # Media selection CLI (Instagram carousel)
+│   │   └── main.go
+│   └── media-triage/        # Media triage CLI (identify unsaveable files)
+│       └── main.go
+├── internal/                # Shared internal packages
 │   ├── auth/               # API key retrieval & validation
-│   ├── chat/               # Text & image question/answer
-│   ├── filehandler/        # Media file loading & EXIF extraction
-│   └── logging/            # Structured logging
+│   ├── chat/               # Gemini API interaction (selection, triage)
+│   ├── filehandler/        # Media file loading, EXIF, thumbnails, compression
+│   ├── logging/            # Structured logging
+│   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
 │   └── setup-gpg-credentials.sh
 ├── docs/                    # Design documentation
 │   ├── index.md            # Documentation index
-│   ├── architecture.md     # System architecture (current state)
+│   ├── ARCHITECTURE.md     # System architecture (current state)
 │   ├── media_analysis.md   # Media analysis design
-│   ├── design-decisions/   # Historical decision records (DDRs)
-│   ├── authentication.md   # Auth design
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-021)
 │   └── ...                 # See docs/index.md
 ├── go.mod                   # Go module definition
 ├── README.md                # This file
-└── plan.md                 # Implementation roadmap
+└── PLAN.md                 # Implementation roadmap
 ```
 
 ## Documentation
@@ -160,7 +207,8 @@ See [plan.md](./plan.md) for implementation roadmap and [docs/](./docs/) for det
 ### Building
 
 ```bash
-go build -o gemini-cli ./cmd/gemini-cli
+go build -o media-select ./cmd/media-select
+go build -o media-triage ./cmd/media-triage
 ```
 
 ### Testing
@@ -190,6 +238,8 @@ go test -cover ./...
 - [x] Externalized prompt templates for faster iteration (DDR-019)
 - [x] Mixed media directories - images + videos with unified selection (DDR-020)
 - [x] Model selection flag (--model / -m)
+- [x] Multi-binary CLI layout (media-select + media-triage)
+- [x] Media triage - AI identifies unsaveable photos/videos for deletion (DDR-021)
 - [ ] Session management
 - [ ] Cloud storage integration (S3, Google Drive)
 

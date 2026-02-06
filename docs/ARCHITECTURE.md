@@ -23,12 +23,15 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
 
 ## Core Components
 
-1. **CLI Interface** - Command parsing and user interaction (`--directory`, `--context` flags)
+1. **CLI Binaries** - Two independent commands under `cmd/`:
+   - `media-select` - AI-powered media selection for Instagram carousels
+   - `media-triage` - AI-powered media triage to identify and delete unsaveable files
 2. **File Handler** - File validation, EXIF extraction, thumbnail generation
 3. **Gemini Client** - API communication and file uploads
 4. **Photo Selection** - Quality-agnostic selection with scene detection
-5. **Session Manager** - Stateful conversation management (future)
-6. **Configuration** - API key and settings management
+5. **Media Triage** - Batch quality/meaning evaluation with interactive deletion
+6. **Session Manager** - Stateful conversation management (future)
+7. **Configuration** - API key and settings management
 
 ---
 
@@ -62,7 +65,7 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
          │
          ▼
 ┌─────────────────┐
-│ Cobra Parser    │  (cmd/gemini-cli/main.go)
+│ Cobra Parser    │  (cmd/media-select/ or cmd/media-triage/)
 │ - Parse args    │
 │ - Route commands│
 └────────┬────────┘
@@ -159,6 +162,52 @@ See [DDR-016](./design-decisions/DDR-016-quality-agnostic-photo-selection.md) fo
 
 ---
 
+## Media Triage Flow (Iteration 12)
+
+```
+┌─────────────────┐
+│ Directory Scan  │  Recursive, images + videos
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Pre-filter      │  Videos < 2s flagged locally
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Media Processing│  Thumbnails (images) + Compress (videos)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Gemini API      │  Single batch call with all media
+│ Triage          │  Returns JSON array of verdicts
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ Interactive Report                       │
+│ 1. KEEP list with reasons               │
+│ 2. DISCARD list with reasons             │
+│ 3. Confirm deletion prompt               │
+└─────────────────────────────────────────┘
+```
+
+### Triage Criteria
+
+**Key Principle**: Be generous — if a normal person can understand the subject and light editing could make it decent, keep it.
+
+**Discard if:**
+- Too dark/blurry to recover any meaningful content
+- Accidental shot (pocket photo, floor, finger over lens)
+- No discernible subject or meaning
+- Video too short (< 2 seconds, pre-filtered locally)
+
+See [DDR-021](./design-decisions/DDR-021-media-triage-command.md) for details.
+
+---
+
 ## Future Extensibility
 
 ### Storage Provider Interface
@@ -196,5 +245,5 @@ type StorageProvider interface {
 
 ---
 
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-02-06
 
