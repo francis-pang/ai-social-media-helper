@@ -22,6 +22,7 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
 	"github.com/google/generative-ai-go/genai"
+	"github.com/ncruces/zenity"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"google.golang.org/api/option"
@@ -135,6 +136,7 @@ func runMain(cmd *cobra.Command, args []string) {
 
 	// API routes
 	mux.HandleFunc("/api/browse", handleBrowse)
+	mux.HandleFunc("/api/pick", handlePick)
 	mux.HandleFunc("/api/triage/start", handleTriageStart)
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
@@ -330,6 +332,84 @@ func handleBrowse(w http.ResponseWriter, r *http.Request) {
 		"path":    absPath,
 		"parent":  parent,
 		"entries": entries,
+	})
+}
+
+// POST /api/pick
+// Opens a native OS file/directory picker dialog and returns selected paths.
+func handlePick(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		Mode string `json:"mode"` // "files" or "directory"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var paths []string
+
+	switch req.Mode {
+	case "files":
+		selected, err := zenity.SelectFileMultiple(
+			zenity.Title("Select media files"),
+			zenity.FileFilters{
+				{
+					Name: "Media files",
+					Patterns: []string{
+						"*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp",
+						"*.heic", "*.heif",
+						"*.mp4", "*.mov", "*.avi", "*.webm", "*.mkv",
+					},
+				},
+			},
+		)
+		if err != nil {
+			if errors.Is(err, zenity.ErrCanceled) {
+				respondJSON(w, http.StatusOK, map[string]interface{}{
+					"paths":    []string{},
+					"canceled": true,
+				})
+				return
+			}
+			log.Error().Err(err).Msg("File picker failed")
+			httpError(w, http.StatusInternalServerError, "file picker failed")
+			return
+		}
+		paths = selected
+
+	case "directory":
+		selected, err := zenity.SelectFile(
+			zenity.Directory(),
+			zenity.Title("Select folder"),
+		)
+		if err != nil {
+			if errors.Is(err, zenity.ErrCanceled) {
+				respondJSON(w, http.StatusOK, map[string]interface{}{
+					"paths":    []string{},
+					"canceled": true,
+				})
+				return
+			}
+			log.Error().Err(err).Msg("Directory picker failed")
+			httpError(w, http.StatusInternalServerError, "directory picker failed")
+			return
+		}
+		paths = []string{selected}
+
+	default:
+		httpError(w, http.StatusBadRequest, "mode must be 'files' or 'directory'")
+		return
+	}
+
+	log.Info().Str("mode", req.Mode).Int("count", len(paths)).Msg("Files picked via native dialog")
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"paths":    paths,
+		"canceled": false,
 	})
 }
 

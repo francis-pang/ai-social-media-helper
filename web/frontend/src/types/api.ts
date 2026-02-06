@@ -35,6 +35,17 @@ export interface TriageResults {
   error?: string;
 }
 
+/** Request body for POST /api/pick. */
+export interface PickRequest {
+  mode: "files" | "directory";
+}
+
+/** Response from POST /api/pick. */
+export interface PickResponse {
+  paths: string[];
+  canceled: boolean;
+}
+
 /** Request body for POST /api/triage/start. */
 export interface TriageStartRequest {
   paths: string[];

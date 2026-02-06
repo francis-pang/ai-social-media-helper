@@ -1,5 +1,7 @@
 import type {
   BrowseResponse,
+  PickRequest,
+  PickResponse,
   TriageStartRequest,
   TriageStartResponse,
   TriageResults,
@@ -33,6 +35,14 @@ export function browse(path: string): Promise<BrowseResponse> {
   return fetchJSON<BrowseResponse>(
     `/api/browse?path=${encodeURIComponent(path)}`,
   );
+}
+
+/** Open a native OS file/directory picker dialog. */
+export function pick(req: PickRequest): Promise<PickResponse> {
+  return fetchJSON<PickResponse>("/api/pick", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }
 
 /** Start a triage job for the given file paths. */
