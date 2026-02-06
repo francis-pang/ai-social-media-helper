@@ -1,0 +1,116 @@
+:root {
+  --color-bg: #0f1117;
+  --color-surface: #1a1d27;
+  --color-surface-hover: #242836;
+  --color-border: #2e3348;
+  --color-text: #e4e6f0;
+  --color-text-secondary: #8b8fa8;
+  --color-primary: #6c8cff;
+  --color-primary-hover: #5a7aee;
+  --color-danger: #ff6b6b;
+  --color-danger-hover: #ee5a5a;
+  --color-success: #51cf66;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font-mono: "SF Mono", "Fira Code", "Fira Mono", monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+    Cantarell, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition:
+    background-color 0.15s,
+    opacity 0.15s;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--color-primary);
+  color: white;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+button.danger {
+  background: var(--color-danger);
+  color: white;
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--color-danger-hover);
+}
+
+button.outline {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+button.outline:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  background: var(--color-surface);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+}

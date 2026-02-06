@@ -48,7 +48,7 @@ Thumbs.db
 
 # Session data (user-specific)
 sessions/
-*.json
+sessions/*.json
 
 # Frontend (Node.js / Vite)
 web/frontend/node_modules/
