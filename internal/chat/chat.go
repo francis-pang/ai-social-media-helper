@@ -15,13 +15,9 @@ import (
 )
 
 // SystemInstruction provides context for media analysis with extracted metadata.
+// Loaded from embedded prompt file. See DDR-019: Externalized Prompt Templates.
 // See DDR-017: Francis Reference Photo for Person Identification.
-const SystemInstruction = `You are an expert media analyst. Use the provided EXIF/FFmpeg metadata 
-as the absolute ground truth for time, location, and camera settings while describing the visual 
-content of the media. The metadata has been extracted locally and is authoritative.
-
-REFERENCE PHOTO: The first image provided is a reference photo of Francis, the owner of this media. 
-Use this to identify Francis in the target media. The target media to analyze is the second file.`
+var SystemInstruction = assets.SystemInstructionPrompt
 
 // UploadPollingInterval is the interval between checking upload state.
 const UploadPollingInterval = 5 * time.Second
@@ -282,191 +278,40 @@ func AskImageQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 
 // BuildSocialMediaPrompt creates a comprehensive prompt for analyzing media (image or video)
 // and generating a social media post description. It automatically detects the media type
-// and uses the appropriate prompt.
+// and uses the appropriate embedded prompt template.
+// See DDR-019: Externalized Prompt Templates.
 func BuildSocialMediaPrompt(metadata filehandler.MediaMetadata) string {
 	if metadata == nil {
-		return buildGenericSocialMediaPrompt("")
+		return assets.RenderSocialMediaGenericPrompt("")
 	}
 
 	metadataContext := metadata.FormatMetadataContext()
 
 	switch metadata.GetMediaType() {
 	case "video":
-		return buildSocialMediaVideoPrompt(metadataContext)
+		return assets.RenderSocialMediaVideoPrompt(metadataContext)
 	case "image":
-		return buildSocialMediaImagePrompt(metadataContext)
+		return assets.RenderSocialMediaImagePrompt(metadataContext)
 	default:
-		return buildGenericSocialMediaPrompt(metadataContext)
+		return assets.RenderSocialMediaGenericPrompt(metadataContext)
 	}
 }
 
 // BuildSocialMediaImagePrompt creates a comprehensive prompt for analyzing an image
 // and generating a social media post description.
-// If metadata is provided, it will be included in the prompt for context.
+// Prompt content loaded from embedded template. See DDR-019: Externalized Prompt Templates.
 //
 // Future expansion: Pre-resolve GPS coordinates using Google Maps Geocoding API
 // before sending to Gemini. This would provide the resolved address, place name,
 // and other location details as part of the prompt context, reducing reliance
 // on Gemini's native Google Maps integration for reverse geocoding.
 func BuildSocialMediaImagePrompt(metadataContext string) string {
-	return buildSocialMediaImagePrompt(metadataContext)
-}
-
-func buildSocialMediaImagePrompt(metadataContext string) string {
-	basePrompt := `You are analyzing a personal photo for social media content creation.
-
-## About the Person
-The person in this image is Francis, the owner of this photo.
-
-`
-
-	if metadataContext != "" {
-		basePrompt += metadataContext + "\n"
-	}
-
-	basePrompt += `## Your Task
-
-Using the metadata provided above (GPS coordinates and timestamp), analyze this image and generate social media content.
-
-### 1. Reverse Geocoding (REQUIRED - Use Google Maps Integration)
-You have native access to Google Maps. Use it to perform reverse geocoding on the provided GPS coordinates.
-
-**For the GPS coordinates provided, look up and report:**
-- **Exact Place Name**: The specific venue, business, landmark, or point of interest at these coordinates
-- **Street Address**: The full street address
-- **City**: City or town name
-- **State/Region**: State, province, or region
-- **Country**: Country name
-- **Place Type**: Category (e.g., restaurant, park, stadium, historic site, etc.)
-- **Known For**: What this place is famous for, any historical or cultural significance
-- **Nearby Landmarks**: Other notable places nearby
-
-### 2. Temporal Analysis (Use the Date/Time Provided)
-- What time of day was this photo taken?
-- What day of the week was it?
-- What season is this?
-- Is there any significance to this date (holiday, event, weekend)?
-- Does the lighting in the image match the timestamp?
-
-### 3. Visual Analysis
-Describe what you see in the image:
-- Francis's appearance, outfit, expression, and pose
-- The environment and setting visible in the photo
-- Notable features, landmarks, or interesting elements
-- The overall mood and atmosphere
-- Does the visual content match the location from reverse geocoding?
-
-### 4. Social Media Post Generation
-Based on the REAL location from reverse geocoding and the actual date/time, generate:
-
-**Caption Options (provide 3 variations):**
-1. **Casual/Personal**: Friendly, conversational - mention the actual location by name
-2. **Professional/LinkedIn**: Polished, suitable for networking - reference the real place
-3. **Inspirational/Motivational**: Deeper message tied to the location or moment
-
-**Hashtag Suggestions (10-15 hashtags):**
-- Location-specific hashtags (city name, venue name, country)
-- Activity or context hashtags
-- Date-relevant hashtags if applicable (e.g., #NewYearsEve if Dec 31)
-- General engagement hashtags`
-
-	return basePrompt
+	return assets.RenderSocialMediaImagePrompt(metadataContext)
 }
 
 // BuildSocialMediaVideoPrompt creates a comprehensive prompt for analyzing a video
 // and generating a social media post description.
+// Prompt content loaded from embedded template. See DDR-019: Externalized Prompt Templates.
 func BuildSocialMediaVideoPrompt(metadataContext string) string {
-	return buildSocialMediaVideoPrompt(metadataContext)
-}
-
-func buildSocialMediaVideoPrompt(metadataContext string) string {
-	basePrompt := `You are analyzing a personal video for social media content creation.
-
-## About the Person
-The person in this video is Francis, the owner of this video.
-
-`
-
-	if metadataContext != "" {
-		basePrompt += metadataContext + "\n"
-	}
-
-	basePrompt += `## Your Task
-
-Using the metadata provided above (GPS coordinates, timestamp, and video properties), analyze this video and generate social media content.
-
-### 1. Reverse Geocoding (REQUIRED - Use Google Maps Integration)
-You have native access to Google Maps. Use it to perform reverse geocoding on the provided GPS coordinates.
-
-**For the GPS coordinates provided, look up and report:**
-- **Exact Place Name**: The specific venue, business, landmark, or point of interest at these coordinates
-- **Street Address**: The full street address
-- **City**: City or town name
-- **State/Region**: State, province, or region
-- **Country**: Country name
-- **Place Type**: Category (e.g., restaurant, park, stadium, event venue, etc.)
-- **Known For**: What this place is famous for, any historical or cultural significance
-- **Nearby Landmarks**: Other notable places nearby
-
-### 2. Temporal Analysis (Use the Date/Time Provided)
-- What time of day was this video recorded?
-- What day of the week was it?
-- What season is this?
-- Is there any significance to this date (holiday, event, weekend)?
-- Does the lighting in the video match the timestamp?
-
-### 3. Video Content Analysis
-Analyze the video content thoroughly:
-- **Opening Scene**: What happens at the beginning?
-- **Key Moments**: Identify 3-5 highlight moments or key frames
-- **People & Activities**: Who appears and what are they doing?
-- **Setting & Environment**: Describe the location visible in the video
-- **Audio Content**: Describe any speech, music, or ambient sounds
-- **Movement & Action**: Describe the primary action or movement
-- **Mood & Atmosphere**: What is the overall vibe?
-- **Video Quality**: Note if it's 4K, HDR, slow-motion, etc.
-
-### 4. Social Media Post Generation
-Based on the REAL location from reverse geocoding and the actual date/time, generate:
-
-**Caption Options (provide 3 variations):**
-1. **Casual/Personal**: Friendly, conversational - mention the actual location by name, reference what happens in the video
-2. **Professional/LinkedIn**: Polished, suitable for networking - focus on the experience or achievement
-3. **Inspirational/Motivational**: Deeper message tied to the location, moment, or activity
-
-**Platform-Specific Recommendations:**
-- **Instagram Reels/TikTok**: Best segments to use, suggested cuts, trending audio ideas
-- **YouTube Shorts**: Title suggestions, thumbnail moment recommendation
-- **Twitter/X**: Brief caption version (under 280 characters)
-
-**Hashtag Suggestions (10-15 hashtags):**
-- Location-specific hashtags (city name, venue name, country)
-- Activity or event hashtags
-- Video content hashtags (#travel, #adventure, #vlog, etc.)
-- Date-relevant hashtags if applicable (e.g., #NewYearsEve if Dec 31)
-- Platform-specific hashtags (#reels, #shorts, etc.)`
-
-	return basePrompt
-}
-
-func buildGenericSocialMediaPrompt(metadataContext string) string {
-	basePrompt := `You are analyzing media content for social media content creation.
-
-## About the Person
-The person in this media is Francis, the owner of this content.
-
-`
-
-	if metadataContext != "" {
-		basePrompt += metadataContext + "\n"
-	}
-
-	basePrompt += `## Your Task
-
-Analyze this media and generate social media content including:
-1. Description of what you see
-2. Three caption variations (casual, professional, inspirational)
-3. 10-15 relevant hashtags`
-
-	return basePrompt
+	return assets.RenderSocialMediaVideoPrompt(metadataContext)
 }

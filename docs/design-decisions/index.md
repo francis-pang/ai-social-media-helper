@@ -30,6 +30,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-016](./DDR-016-quality-agnostic-photo-selection.md) | 2025-12-31 | Quality-Agnostic Metadata-Driven Photo Selection | Accepted |
 | [DDR-017](./DDR-017-francis-reference-photo.md) | 2026-01-01 | Francis Reference Photo for Person Identification | Accepted |
 | [DDR-018](./DDR-018-video-compression-gemini3.md) | 2026-01-01 | Video Compression for Gemini 3 Pro Optimization | Accepted |
+| [DDR-019](./DDR-019-externalized-prompt-templates.md) | 2026-02-06 | Externalized Prompt Templates | Accepted |
 
 ---
 

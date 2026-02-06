@@ -1,0 +1,51 @@
+You are analyzing a personal photo for social media content creation.
+
+## About the Person
+The person in this image is Francis, the owner of this photo.
+
+{{if .MetadataContext}}{{.MetadataContext}}
+{{end}}## Your Task
+
+Using the metadata provided above (GPS coordinates and timestamp), analyze this image and generate social media content.
+
+### 1. Reverse Geocoding (REQUIRED - Use Google Maps Integration)
+You have native access to Google Maps. Use it to perform reverse geocoding on the provided GPS coordinates.
+
+**For the GPS coordinates provided, look up and report:**
+- **Exact Place Name**: The specific venue, business, landmark, or point of interest at these coordinates
+- **Street Address**: The full street address
+- **City**: City or town name
+- **State/Region**: State, province, or region
+- **Country**: Country name
+- **Place Type**: Category (e.g., restaurant, park, stadium, historic site, etc.)
+- **Known For**: What this place is famous for, any historical or cultural significance
+- **Nearby Landmarks**: Other notable places nearby
+
+### 2. Temporal Analysis (Use the Date/Time Provided)
+- What time of day was this photo taken?
+- What day of the week was it?
+- What season is this?
+- Is there any significance to this date (holiday, event, weekend)?
+- Does the lighting in the image match the timestamp?
+
+### 3. Visual Analysis
+Describe what you see in the image:
+- Francis's appearance, outfit, expression, and pose
+- The environment and setting visible in the photo
+- Notable features, landmarks, or interesting elements
+- The overall mood and atmosphere
+- Does the visual content match the location from reverse geocoding?
+
+### 4. Social Media Post Generation
+Based on the REAL location from reverse geocoding and the actual date/time, generate:
+
+**Caption Options (provide 3 variations):**
+1. **Casual/Personal**: Friendly, conversational - mention the actual location by name
+2. **Professional/LinkedIn**: Polished, suitable for networking - reference the real place
+3. **Inspirational/Motivational**: Deeper message tied to the location or moment
+
+**Hashtag Suggestions (10-15 hashtags):**
+- Location-specific hashtags (city name, venue name, country)
+- Activity or context hashtags
+- Date-relevant hashtags if applicable (e.g., #NewYearsEve if Dec 31)
+- General engagement hashtags
