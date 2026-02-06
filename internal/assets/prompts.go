@@ -26,6 +26,12 @@ var SystemInstructionPrompt string
 //go:embed prompts/selection-system.txt
 var SelectionSystemPrompt string
 
+// TriageSystemPrompt provides context for batch media triage evaluation.
+// See DDR-021: Media Triage Command with Batch AI Evaluation.
+//
+//go:embed prompts/triage-system.txt
+var TriageSystemPrompt string
+
 // --- Dynamic prompt templates (require metadata context) ---
 
 //go:embed prompts/social-media-image.txt
