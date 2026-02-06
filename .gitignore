@@ -10,6 +10,7 @@
 /gemini-cli
 /media-select
 /media-triage
+/media-web
 
 # Test binary, built with `go test -c`
 *.test
@@ -48,6 +49,10 @@ Thumbs.db
 # Session data (user-specific)
 sessions/
 *.json
+
+# Frontend (Node.js / Vite)
+web/frontend/node_modules/
+web/frontend/dist/
 
 # Build artifacts
 dist/
