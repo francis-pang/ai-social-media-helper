@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fpang/gemini-media-cli/internal/auth"
 	"github.com/fpang/gemini-media-cli/internal/chat"
@@ -25,32 +26,35 @@ var (
 	maxDepthFlag  int
 	limitFlag     int
 	contextFlag   string
+	modelFlag     string
 )
 
 // rootCmd is the main Cobra command for the CLI.
 var rootCmd = &cobra.Command{
 	Use:   "gemini-cli",
 	Short: "AI-powered photo selection for social media",
-	Long: `Gemini Media CLI analyzes photos in a directory and uses AI to select
-the most representative images for an Instagram post.
+	Long: `Gemini Media CLI analyzes photos and videos in a directory and uses AI to select
+the most representative media items for an Instagram post.
 
 The tool scans the specified directory (recursively by default), extracts
-metadata from images, generates thumbnails, and asks Gemini to rank and
-select the best photos for social media.
+metadata from images and videos, compresses videos for efficient upload,
+and asks Gemini to rank and select the best media for social media.
 
 Examples:
   gemini-cli --directory /path/to/photos --context "Weekend trip to Kyoto"
   gemini-cli -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
   gemini-cli -d ./photos --max-depth 2 --limit 50
+  gemini-cli -d ./media --model gemini-3-pro-preview
   gemini-cli  # Interactive mode - prompts for directory and context`,
 	Run: runMain,
 }
 
 func init() {
-	rootCmd.Flags().StringVarP(&directoryFlag, "directory", "d", "", "Directory containing images to analyze")
+	rootCmd.Flags().StringVarP(&directoryFlag, "directory", "d", "", "Directory containing media to analyze")
 	rootCmd.Flags().IntVar(&maxDepthFlag, "max-depth", 0, "Maximum recursion depth (0 = unlimited)")
-	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum images to process (0 = unlimited)")
-	rootCmd.Flags().StringVarP(&contextFlag, "context", "c", "", "Trip/event description for photo selection (e.g., 'Birthday party at restaurant then karaoke')")
+	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum media items to process (0 = unlimited)")
+	rootCmd.Flags().StringVarP(&contextFlag, "context", "c", "", "Trip/event description for media selection (e.g., 'Birthday party at restaurant then karaoke')")
+	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3-pro-preview)")
 }
 
 func main() {
@@ -163,15 +167,17 @@ func promptForContext() string {
 	return strings.TrimSpace(input)
 }
 
-// runDirectorySelection scans a directory, generates thumbnails, and asks Gemini to select
-// the most representative photos for an Instagram post using quality-agnostic criteria.
+// runDirectorySelection scans a directory, processes media, and asks Gemini to select
+// the most representative media items for an Instagram post using quality-agnostic criteria.
+// Supports both images and videos (DDR-020: Mixed Media Selection).
 func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath string, tripContext string) {
 	log.Info().
 		Str("path", dirPath).
 		Int("max_depth", maxDepthFlag).
 		Int("limit", limitFlag).
 		Bool("has_context", tripContext != "").
-		Msg("Starting quality-agnostic photo selection")
+		Str("model", modelFlag).
+		Msg("Starting quality-agnostic media selection")
 
 	// Configure scan options
 	opts := filehandler.ScanOptions{
@@ -179,34 +185,48 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 		Limit:    limitFlag,
 	}
 
-	// Scan directory for images
-	files, err := filehandler.ScanDirectoryWithOptions(dirPath, opts)
+	// Scan directory for images AND videos (mixed media)
+	files, err := filehandler.ScanDirectoryMediaWithOptions(dirPath, opts)
 	if err != nil {
 		log.Fatal().Err(err).Str("path", dirPath).Msg("failed to scan directory")
 	}
 
 	if len(files) == 0 {
-		log.Fatal().Str("path", dirPath).Msg("no supported images found in directory")
+		log.Fatal().Str("path", dirPath).Msg("no supported media found in directory")
+	}
+
+	// Count media types
+	var imageCount, videoCount int
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		if filehandler.IsImage(ext) {
+			imageCount++
+		} else if filehandler.IsVideo(ext) {
+			videoCount++
+		}
 	}
 
 	// Display header
 	fmt.Println()
 	fmt.Println("============================================")
-	fmt.Println("📁 Quality-Agnostic Photo Selection")
+	fmt.Println("📁 Media Selection")
 	fmt.Println("============================================")
 	fmt.Printf("Directory: %s\n", dirPath)
-	fmt.Printf("Images found: %d\n", len(files))
+	fmt.Printf("Images found: %d\n", imageCount)
+	fmt.Printf("Videos found: %d\n", videoCount)
+	fmt.Printf("Total media: %d\n", len(files))
 	if limitFlag > 0 && len(files) == limitFlag {
 		fmt.Printf("(limited to %d)\n", limitFlag)
 	}
-	fmt.Printf("Max selection: %d\n", chat.DefaultMaxPhotos)
+	fmt.Printf("Max selection: %d\n", chat.DefaultMaxMedia)
+	fmt.Printf("Model: %s\n", modelFlag)
 	if tripContext != "" {
 		fmt.Printf("Context: %s\n", tripContext)
 	}
 	fmt.Println("--------------------------------------------")
 
-	// Display summary of found images
-	fmt.Println("📸 Images to analyze:")
+	// Display summary of found media
+	fmt.Println("📸 Media to analyze:")
 	for i, file := range files {
 		// Show relative path from base directory if recursive
 		displayPath := filepath.Base(file.Path)
@@ -215,6 +235,19 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 		}
 
 		sizeMB := float64(file.Size) / (1024 * 1024)
+		ext := strings.ToLower(filepath.Ext(file.Path))
+
+		// Determine media type indicator
+		typeIndicator := "📷"
+		durationStr := ""
+		if filehandler.IsVideo(ext) {
+			typeIndicator = "🎬"
+			if file.Metadata != nil {
+				if vm, ok := file.Metadata.(*filehandler.VideoMetadata); ok && vm.Duration > 0 {
+					durationStr = fmt.Sprintf(" %s", formatDurationShort(vm.Duration))
+				}
+			}
+		}
 
 		metaInfo := ""
 		if file.Metadata != nil {
@@ -226,23 +259,41 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 			}
 		}
 
-		fmt.Printf("   %2d. %s (%.1f MB)%s\n", i+1, displayPath, sizeMB, metaInfo)
+		fmt.Printf("   %2d. %s (%.1f MB) %s%s%s\n", i+1, displayPath, sizeMB, typeIndicator, durationStr, metaInfo)
 	}
 
 	fmt.Println("--------------------------------------------")
-	fmt.Println("⏳ Generating thumbnails and sending to Gemini...")
+
+	// Show processing steps based on content
+	if videoCount > 0 {
+		fmt.Println("⏳ Compressing videos...")
+	}
+	fmt.Println("⏳ Processing media and sending to Gemini...")
 	fmt.Println()
 
-	// Ask Gemini to select photos using quality-agnostic criteria
-	response, err := chat.AskPhotoSelection(ctx, client, files, chat.DefaultMaxPhotos, tripContext)
+	// Ask Gemini to select media using quality-agnostic criteria
+	response, err := chat.AskMediaSelection(ctx, client, files, chat.DefaultMaxMedia, tripContext, modelFlag)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to get photo selection from Gemini")
+		log.Fatal().Err(err).Msg("failed to get media selection from Gemini")
 	}
 
-	fmt.Println("✅ Photo Selection Complete!")
+	fmt.Println("✅ Media Selection Complete!")
 	fmt.Println("============================================")
 	fmt.Println()
 	fmt.Println(response)
+}
+
+// formatDurationShort formats a duration in a short format (M:SS or H:MM:SS).
+func formatDurationShort(d time.Duration) string {
+	totalSeconds := int(d.Seconds())
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 // runMediaAnalysis loads a media file (image or video) and generates a social media post description.

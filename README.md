@@ -42,7 +42,7 @@ export GEMINI_API_KEY="your-api-key-here"
 ### Usage
 
 ```bash
-# Analyze photos in a directory (with context for better selection)
+# Analyze photos and videos in a directory (with context for better selection)
 ./gemini-cli --directory /path/to/photos --context "Weekend trip to Kyoto"
 ./gemini-cli -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
 
@@ -52,18 +52,25 @@ export GEMINI_API_KEY="your-api-key-here"
 # With options
 ./gemini-cli -d ./photos --max-depth 2 --limit 50
 
+# Specify a different model
+./gemini-cli -d ./media --model gemini-3-pro-preview
+
 # Show help
 ./gemini-cli --help
 ```
 
-### Photo Selection
+### Media Selection
 
-The CLI uses **quality-agnostic photo selection** - photo quality is NOT a selection criterion since you can enhance photos with Google's tools (Magic Editor, Unblur, Portrait Light, etc.).
+The CLI uses **quality-agnostic media selection** - quality is NOT a selection criterion since you can enhance photos with Google's tools (Magic Editor, Unblur, Portrait Light, etc.).
 
-Instead, selection prioritizes:
+**Mixed Media Support**: The tool scans for both images AND videos. Photos and videos compete equally in selection - a compelling 15-second video may be better than multiple similar photos. See [DDR-020](./docs/design-decisions/DDR-020-mixed-media-selection.md) for details.
+
+Selection prioritizes:
 1. **Subject diversity**: food, architecture, landscape, people, activities
 2. **Scene representation**: ensure each sub-event/location is covered
-3. **Enhancement potential**: for duplicates, pick easiest to enhance
+3. **Media type synergy**: choose whether a moment is better as photo or video
+4. **Audio content**: consider music, speech, ambient sounds in videos
+5. **Enhancement potential**: for duplicates, pick easiest to enhance
 
 Provide trip context with `--context` / `-c` to help Gemini understand your event.
 
@@ -85,6 +92,16 @@ Provide trip context with `--context` / `-c` to help Gemini understand your even
 - Matroska (.mkv)
 
 **Note:** All videos are automatically compressed before upload using AV1+Opus codecs for optimal Gemini efficiency. A 1GB video typically compresses to ~2MB while preserving AI-analyzable quality. See [DDR-018](./docs/design-decisions/DDR-018-video-compression-gemini3.md) for details.
+
+## CLI Options
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--directory` | `-d` | (prompt) | Directory containing media to analyze |
+| `--context` | `-c` | (prompt) | Trip/event description for better selection |
+| `--model` | `-m` | `gemini-3-flash-preview` | Gemini model to use |
+| `--max-depth` | | 0 (unlimited) | Maximum recursion depth |
+| `--limit` | | 0 (unlimited) | Maximum media items to process |
 
 ## Configuration
 
@@ -170,7 +187,9 @@ go test -cover ./...
 - [x] Video uploads with Files API
 - [x] Quality-agnostic photo selection with user context (--context flag)
 - [x] Video compression for Gemini optimization (AV1+Opus, DDR-018)
-- [ ] Mixed media directories (images + videos)
+- [x] Externalized prompt templates for faster iteration (DDR-019)
+- [x] Mixed media directories - images + videos with unified selection (DDR-020)
+- [x] Model selection flag (--model / -m)
 - [ ] Session management
 - [ ] Cloud storage integration (S3, Google Drive)
 
