@@ -112,6 +112,7 @@ func main() {
 | `GET` | `/api/triage/{id}/status` | Poll triage job status |
 | `GET` | `/api/triage/{id}/results` | Get triage results (keep/discard with reasons) |
 | `GET` | `/api/media/thumbnail?path=...` | Get thumbnail for a media file |
+| `GET` | `/api/media/full?path=...` | Serve full-resolution media file (DDR-024) |
 | `POST` | `/api/triage/{id}/confirm` | Confirm deletion of selected files |
 
 ### 6. Build Workflow

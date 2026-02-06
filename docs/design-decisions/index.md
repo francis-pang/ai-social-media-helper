@@ -35,6 +35,8 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-021](./DDR-021-media-triage-command.md) | 2026-02-06 | Media Triage Command with Batch AI Evaluation | Accepted |
 | [DDR-022](./DDR-022-web-ui-preact-spa.md) | 2026-02-06 | Web UI with Preact SPA and Go JSON API | Accepted |
 | [DDR-023](./DDR-023-aws-iam-deployment-user.md) | 2026-02-06 | AWS IAM User and Scoped Policies for CDK Deployment | Accepted |
+| [DDR-024](./DDR-024-full-image-preview-tooltip.md) | 2026-02-06 | Full-Image Preview and Filename Tooltip in Triage Web UI | Accepted |
+| [DDR-025](./DDR-025-ssm-parameter-store-secrets.md) | 2026-02-06 | SSM Parameter Store for Runtime Secrets | Accepted |
 
 ---
 
@@ -48,4 +50,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-06 (DDR-023)
+**Last Updated**: 2026-02-06 (DDR-025)

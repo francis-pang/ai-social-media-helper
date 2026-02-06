@@ -236,6 +236,7 @@ See [DDR-021](./design-decisions/DDR-021-media-triage-command.md) for details.
 │  │  /api/triage/{id}/results │  │ JS/CSS        │ │
 │  │  /api/triage/{id}/confirm │  └───────────────┘ │
 │  │  /api/media/thumbnail     │                     │
+│  │  /api/media/full          │                     │
 │  └──────────┬───────────────┘                     │
 │             │                                      │
 │  ┌──────────▼───────────────┐                     │
@@ -297,5 +298,5 @@ type StorageProvider interface {
 ---
 
 **Last Updated**: 2026-02-06
-**Updated for**: DDR-022 (Web UI with Preact SPA)
+**Updated for**: DDR-024 (Full-Image Preview and Filename Tooltip)
 
