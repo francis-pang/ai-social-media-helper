@@ -8,6 +8,7 @@ A collection of command-line tools for analyzing photos and videos using Google'
 |---------|-------------|
 | `media-select` | AI-powered media selection for Instagram carousels |
 | `media-triage` | AI-powered media triage to identify and delete unsaveable files |
+| `media-web` | Web UI for visual triage and selection (local web server) |
 
 ## Features
 
@@ -16,6 +17,7 @@ A collection of command-line tools for analyzing photos and videos using Google'
 - 🗑️ **Media Triage**: AI identifies unsaveable media (blurry, dark, accidental) for cleanup
 - 🎬 **Mixed Media**: Photos and videos are analyzed equally
 - 🚀 **Fast & Efficient**: Built with Go for fast startup and efficient file handling
+- 🌐 **Web UI**: Visual triage with thumbnail previews and multi-select confirmation
 - 📦 **Multi-Binary**: Each tool is an independent executable
 
 ## Quick Start
@@ -28,6 +30,8 @@ A collection of command-line tools for analyzing photos and videos using Google'
   - macOS: `brew install ffmpeg`
   - Linux: `apt install ffmpeg`
   - Ensure FFmpeg includes `libsvtav1` (AV1 encoder) and `libopus` (Opus audio)
+- **Node.js 18+** (required only for building the web UI)
+  - macOS: `brew install node`
 
 ### Installation
 
@@ -39,9 +43,12 @@ cd ai-social-media-helper
 # Install dependencies
 go mod download
 
-# Build both tools
+# Build CLI tools
 go build -o media-select ./cmd/media-select
 go build -o media-triage ./cmd/media-triage
+
+# Build web UI (requires Node.js)
+make build-web
 
 # Set your API key
 export GEMINI_API_KEY="your-api-key-here"
@@ -90,6 +97,27 @@ Identify and delete unsaveable photos and videos from a directory.
 # Show help
 ./media-triage --help
 ```
+
+### Usage: media-web
+
+Visual web UI for triaging media with thumbnail previews.
+
+```bash
+# Start the web server (opens browser to http://localhost:8080)
+./media-web
+
+# Use a different port
+./media-web --port 9090
+
+# Specify a different model
+./media-web --model gemini-3-pro-preview
+```
+
+The web UI provides:
+1. **File browser** — navigate directories and select media files
+2. **Triage processing** — AI evaluates media and categorizes as keep/discard
+3. **Visual confirmation** — view thumbnails of flagged media before deleting
+4. **Multi-select deletion** — choose exactly which files to remove
 
 ### Media Selection
 
@@ -168,23 +196,21 @@ For non-interactive environments (CI/CD, automated testing), create a `.gpg-pass
 ai-social-media-helper/
 ├── cmd/
 │   ├── media-select/        # Media selection CLI (Instagram carousel)
-│   │   └── main.go
-│   └── media-triage/        # Media triage CLI (identify unsaveable files)
-│       └── main.go
-├── internal/                # Shared internal packages
+│   ├── media-triage/        # Media triage CLI (identify unsaveable files)
+│   └── media-web/           # Web server (JSON API + embedded SPA)
+├── web/
+│   └── frontend/            # Preact SPA (TypeScript + Vite)
+├── internal/                # Shared Go packages
 │   ├── auth/               # API key retrieval & validation
 │   ├── chat/               # Gemini API interaction (selection, triage)
 │   ├── filehandler/        # Media file loading, EXIF, thumbnails, compression
 │   ├── logging/            # Structured logging
 │   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
-│   └── setup-gpg-credentials.sh
 ├── docs/                    # Design documentation
-│   ├── index.md            # Documentation index
-│   ├── ARCHITECTURE.md     # System architecture (current state)
-│   ├── media_analysis.md   # Media analysis design
-│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-021)
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-022)
 │   └── ...                 # See docs/index.md
+├── Makefile                 # Build orchestration
 ├── go.mod                   # Go module definition
 ├── README.md                # This file
 └── PLAN.md                 # Implementation roadmap
@@ -207,8 +233,15 @@ See [plan.md](./plan.md) for implementation roadmap and [docs/](./docs/) for det
 ### Building
 
 ```bash
+# CLI tools only
 go build -o media-select ./cmd/media-select
 go build -o media-triage ./cmd/media-triage
+
+# Web UI (builds frontend then embeds into Go binary)
+make build-web
+
+# Everything
+make all
 ```
 
 ### Testing
@@ -240,8 +273,11 @@ go test -cover ./...
 - [x] Model selection flag (--model / -m)
 - [x] Multi-binary CLI layout (media-select + media-triage)
 - [x] Media triage - AI identifies unsaveable photos/videos for deletion (DDR-021)
+- [x] Web UI architecture - Preact SPA with Go JSON API (DDR-022)
+- [ ] Web UI implementation - visual triage with thumbnails and multi-select
 - [ ] Session management
 - [ ] Cloud storage integration (S3, Google Drive)
+- [ ] AWS Lambda migration (see docs/PHASE2-REMOTE-HOSTING.md)
 
 ## License
 

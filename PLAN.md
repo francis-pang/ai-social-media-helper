@@ -119,23 +119,36 @@ ai-social-media-helper/
 - [x] **Iteration 11**: Mixed media directory (images + videos)
 - [x] **Iteration 12**: Multi-binary layout + media triage command (DDR-021)
 
-### Phase 3: Session Management (Iterations 13-15)
+### Phase 3: Web UI (Iterations 13-15) 🔨
 
-- [ ] **Iteration 13**: Multi-question single session with REPL
-- [ ] **Iteration 14**: Session persistence to disk (JSON)
-- [ ] **Iteration 15**: Session management commands
+- [x] **Iteration 13**: Web UI architecture decision (DDR-022: Preact SPA + Go JSON API)
+- [ ] **Iteration 14**: Go web server with JSON API (browse, thumbnail, triage endpoints)
+- [ ] **Iteration 15**: Preact frontend (file browser, thumbnail grid, multi-select confirm)
 
-### Phase 4: CLI Polish (Iterations 16-18)
+### Phase 4: Session Management (Iterations 16-18)
 
-- [ ] **Iteration 16**: Dynamic CLI arguments with Cobra
-- [ ] **Iteration 17**: Interactive mode (REPL for multi-turn conversations)
-- [ ] **Iteration 18**: Progress indicators and UX polish
+- [ ] **Iteration 16**: Multi-question single session with REPL
+- [ ] **Iteration 17**: Session persistence to disk (JSON)
+- [ ] **Iteration 18**: Session management commands
 
-### Phase 5: Advanced Features (Iterations 19-21)
+### Phase 5: CLI Polish (Iterations 19-21)
 
-- [ ] **Iteration 19**: Configuration file support with Viper
-- [ ] **Iteration 20**: Batch operations with concurrency
-- [ ] **Iteration 21**: Cloud storage integration (S3/GDrive)
+- [ ] **Iteration 19**: Dynamic CLI arguments with Cobra
+- [ ] **Iteration 20**: Interactive mode (REPL for multi-turn conversations)
+- [ ] **Iteration 21**: Progress indicators and UX polish
+
+### Phase 6: Advanced Features (Iterations 22-24)
+
+- [ ] **Iteration 22**: Configuration file support with Viper
+- [ ] **Iteration 23**: Batch operations with concurrency
+- [ ] **Iteration 24**: Cloud storage integration (S3/GDrive)
+
+### Phase 7: Remote Deployment (Future)
+
+- [ ] AWS Lambda migration (Go backend)
+- [ ] S3 + CloudFront hosting (Preact frontend)
+- [ ] API Gateway + Cognito authentication
+- See [docs/PHASE2-REMOTE-HOSTING.md](./docs/PHASE2-REMOTE-HOSTING.md) for options
 
 ---
 
@@ -164,10 +177,15 @@ ai-social-media-helper/
 
 3. **Build and run**:
    ```bash
+   # CLI tools
    go build -o media-select ./cmd/media-select
    go build -o media-triage ./cmd/media-triage
    ./media-select
    ./media-triage
+
+   # Web UI (requires Node.js for frontend build)
+   make build-web
+   ./media-web
    ```
 
 4. **Enable debug logging**:
@@ -212,5 +230,5 @@ ai-social-media-helper/
 ---
 
 **Last Updated**: 2026-02-06  
-**Version**: 1.7.0  
-**Status**: Implementation Phase (Iteration 12 Complete)
+**Version**: 1.8.0  
+**Status**: Implementation Phase (Iteration 13 — Web UI Architecture)

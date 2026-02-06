@@ -23,6 +23,12 @@ Design decisions are **immutable historical records** that document why decision
 | [design-decisions/](./design-decisions/) | Directory of all design decision records (DDRs) |
 | [design-decisions/index.md](./design-decisions/index.md) | Index of all decisions with status |
 
+### Planning Documents
+
+| Document | Description |
+|----------|-------------|
+| [PHASE2-REMOTE-HOSTING.md](./PHASE2-REMOTE-HOSTING.md) | Phase 2 hosting platform evaluation and Lambda migration plan |
+
 ### Reference Documents
 
 | Document | Description |

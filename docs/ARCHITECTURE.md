@@ -23,15 +23,17 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
 
 ## Core Components
 
-1. **CLI Binaries** - Two independent commands under `cmd/`:
+1. **CLI Binaries** - Independent commands under `cmd/`:
    - `media-select` - AI-powered media selection for Instagram carousels
    - `media-triage` - AI-powered media triage to identify and delete unsaveable files
-2. **File Handler** - File validation, EXIF extraction, thumbnail generation
-3. **Gemini Client** - API communication and file uploads
-4. **Photo Selection** - Quality-agnostic selection with scene detection
-5. **Media Triage** - Batch quality/meaning evaluation with interactive deletion
-6. **Session Manager** - Stateful conversation management (future)
-7. **Configuration** - API key and settings management
+   - `media-web` - Local web server providing a visual UI for triage and selection
+2. **Web Frontend** - Preact SPA under `web/frontend/` consumed by the web server
+3. **File Handler** - File validation, EXIF extraction, thumbnail generation
+4. **Gemini Client** - API communication and file uploads
+5. **Photo Selection** - Quality-agnostic selection with scene detection
+6. **Media Triage** - Batch quality/meaning evaluation with interactive deletion
+7. **Session Manager** - Stateful conversation management (future)
+8. **Configuration** - API key and settings management
 
 ---
 
@@ -44,6 +46,8 @@ See [language_comparison.md](./language_comparison.md) for detailed comparison w
 | **SDK** | `github.com/google/generative-ai-go/genai` | Official Gemini API SDK |
 | **Logging** | `github.com/rs/zerolog` | Structured logging |
 | **CLI Framework** | `github.com/spf13/cobra` | Command-line interface |
+| **Web Frontend** | Preact + Vite + TypeScript | Browser-based UI (SPA) |
+| **Web Server** | Go `net/http` + `embed.FS` | Local JSON API + embedded SPA |
 | **Configuration** | Environment variables + GPG | Config and secret management |
 | **JSON** | `encoding/json` | Session persistence |
 | **File I/O** | `os`, `io`, `mime` | File handling |
@@ -208,6 +212,53 @@ See [DDR-021](./design-decisions/DDR-021-media-triage-command.md) for details.
 
 ---
 
+## Web UI Architecture (Phase 1)
+
+```
+┌──────────────────────────────────────────────────┐
+│  Browser                                          │
+│  ┌────────────────────────────────────────────┐  │
+│  │ Preact SPA                                  │  │
+│  │  - File browser (directory listing)         │  │
+│  │  - Thumbnail grid (media preview)           │  │
+│  │  - Multi-select & confirm (triage actions)  │  │
+│  └──────────────┬─────────────────────────────┘  │
+│                  │ fetch("/api/...")               │
+└──────────────────┼───────────────────────────────┘
+                   │
+┌──────────────────┼───────────────────────────────┐
+│  Go HTTP Server  │  (cmd/media-web)               │
+│                  ▼                                 │
+│  ┌──────────────────────────┐  ┌───────────────┐ │
+│  │ JSON REST API             │  │ Static Files  │ │
+│  │  /api/browse              │  │ (embed.FS)    │ │
+│  │  /api/triage/start        │  │ index.html    │ │
+│  │  /api/triage/{id}/results │  │ JS/CSS        │ │
+│  │  /api/triage/{id}/confirm │  └───────────────┘ │
+│  │  /api/media/thumbnail     │                     │
+│  └──────────┬───────────────┘                     │
+│             │                                      │
+│  ┌──────────▼───────────────┐                     │
+│  │ internal/ packages        │                     │
+│  │  filehandler, chat, auth  │                     │
+│  └──────────┬───────────────┘                     │
+│             │                                      │
+└─────────────┼──────────────────────────────────────┘
+              │
+              ▼
+┌──────────────────────┐  ┌─────────────────┐
+│ Local Filesystem     │  │ Gemini API      │
+│ (media files)        │  │ (AI evaluation) │
+└──────────────────────┘  └─────────────────┘
+```
+
+**Key design principle:** The Go server only serves JSON. The Preact SPA handles all rendering. This clean separation enables migration to AWS Lambda (Phase 2) by changing only the API base URL.
+
+See [DDR-022](./design-decisions/DDR-022-web-ui-preact-spa.md) for the full decision record.
+See [PHASE2-REMOTE-HOSTING.md](./PHASE2-REMOTE-HOSTING.md) for Phase 2 hosting options.
+
+---
+
 ## Future Extensibility
 
 ### Storage Provider Interface
@@ -246,4 +297,5 @@ type StorageProvider interface {
 ---
 
 **Last Updated**: 2026-02-06
+**Updated for**: DDR-022 (Web UI with Preact SPA)
 
