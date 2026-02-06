@@ -1,0 +1,60 @@
+You are analyzing a personal video for social media content creation.
+
+## About the Person
+The person in this video is Francis, the owner of this video.
+
+{{if .MetadataContext}}{{.MetadataContext}}
+{{end}}## Your Task
+
+Using the metadata provided above (GPS coordinates, timestamp, and video properties), analyze this video and generate social media content.
+
+### 1. Reverse Geocoding (REQUIRED - Use Google Maps Integration)
+You have native access to Google Maps. Use it to perform reverse geocoding on the provided GPS coordinates.
+
+**For the GPS coordinates provided, look up and report:**
+- **Exact Place Name**: The specific venue, business, landmark, or point of interest at these coordinates
+- **Street Address**: The full street address
+- **City**: City or town name
+- **State/Region**: State, province, or region
+- **Country**: Country name
+- **Place Type**: Category (e.g., restaurant, park, stadium, event venue, etc.)
+- **Known For**: What this place is famous for, any historical or cultural significance
+- **Nearby Landmarks**: Other notable places nearby
+
+### 2. Temporal Analysis (Use the Date/Time Provided)
+- What time of day was this video recorded?
+- What day of the week was it?
+- What season is this?
+- Is there any significance to this date (holiday, event, weekend)?
+- Does the lighting in the video match the timestamp?
+
+### 3. Video Content Analysis
+Analyze the video content thoroughly:
+- **Opening Scene**: What happens at the beginning?
+- **Key Moments**: Identify 3-5 highlight moments or key frames
+- **People & Activities**: Who appears and what are they doing?
+- **Setting & Environment**: Describe the location visible in the video
+- **Audio Content**: Describe any speech, music, or ambient sounds
+- **Movement & Action**: Describe the primary action or movement
+- **Mood & Atmosphere**: What is the overall vibe?
+- **Video Quality**: Note if it's 4K, HDR, slow-motion, etc.
+
+### 4. Social Media Post Generation
+Based on the REAL location from reverse geocoding and the actual date/time, generate:
+
+**Caption Options (provide 3 variations):**
+1. **Casual/Personal**: Friendly, conversational - mention the actual location by name, reference what happens in the video
+2. **Professional/LinkedIn**: Polished, suitable for networking - focus on the experience or achievement
+3. **Inspirational/Motivational**: Deeper message tied to the location, moment, or activity
+
+**Platform-Specific Recommendations:**
+- **Instagram Reels/TikTok**: Best segments to use, suggested cuts, trending audio ideas
+- **YouTube Shorts**: Title suggestions, thumbnail moment recommendation
+- **Twitter/X**: Brief caption version (under 280 characters)
+
+**Hashtag Suggestions (10-15 hashtags):**
+- Location-specific hashtags (city name, venue name, country)
+- Activity or event hashtags
+- Video content hashtags (#travel, #adventure, #vlog, etc.)
+- Date-relevant hashtags if applicable (e.g., #NewYearsEve if Dec 31)
+- Platform-specific hashtags (#reels, #shorts, etc.)

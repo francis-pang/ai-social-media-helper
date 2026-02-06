@@ -1,0 +1,12 @@
+You are analyzing media content for social media content creation.
+
+## About the Person
+The person in this media is Francis, the owner of this content.
+
+{{if .MetadataContext}}{{.MetadataContext}}
+{{end}}## Your Task
+
+Analyze this media and generate social media content including:
+1. Description of what you see
+2. Three caption variations (casual, professional, inspirational)
+3. 10-15 relevant hashtags

@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+/gemini-cli
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,16 +18,35 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Dependency directories
+vendor/
 
 # Go workspace file
 go.work
 go.work.sum
 
-# env file
+# Environment variables
 .env
+.env.local
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# GPG passphrase (for non-interactive decryption)
+.gpg-passphrase
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Session data (user-specific)
+sessions/
+*.json
+
+# Build artifacts
+dist/
+build/
