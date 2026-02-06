@@ -34,6 +34,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-020](./DDR-020-mixed-media-selection.md) | 2026-01-01 | Mixed Media Selection Strategy | Accepted |
 | [DDR-021](./DDR-021-media-triage-command.md) | 2026-02-06 | Media Triage Command with Batch AI Evaluation | Accepted |
 | [DDR-022](./DDR-022-web-ui-preact-spa.md) | 2026-02-06 | Web UI with Preact SPA and Go JSON API | Accepted |
+| [DDR-023](./DDR-023-aws-iam-deployment-user.md) | 2026-02-06 | AWS IAM User and Scoped Policies for CDK Deployment | Accepted |
 
 ---
 
@@ -47,4 +48,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-06
+**Last Updated**: 2026-02-06 (DDR-023)
