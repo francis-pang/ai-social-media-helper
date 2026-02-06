@@ -31,9 +31,9 @@ var (
 
 // rootCmd is the main Cobra command for the CLI.
 var rootCmd = &cobra.Command{
-	Use:   "gemini-cli",
+	Use:   "media-select",
 	Short: "AI-powered photo selection for social media",
-	Long: `Gemini Media CLI analyzes photos and videos in a directory and uses AI to select
+	Long: `Media Select analyzes photos and videos in a directory and uses AI to select
 the most representative media items for an Instagram post.
 
 The tool scans the specified directory (recursively by default), extracts
@@ -41,11 +41,11 @@ metadata from images and videos, compresses videos for efficient upload,
 and asks Gemini to rank and select the best media for social media.
 
 Examples:
-  gemini-cli --directory /path/to/photos --context "Weekend trip to Kyoto"
-  gemini-cli -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
-  gemini-cli -d ./photos --max-depth 2 --limit 50
-  gemini-cli -d ./media --model gemini-3-pro-preview
-  gemini-cli  # Interactive mode - prompts for directory and context`,
+  media-select --directory /path/to/photos --context "Weekend trip to Kyoto"
+  media-select -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
+  media-select -d ./photos --max-depth 2 --limit 50
+  media-select -d ./media --model gemini-3-pro-preview
+  media-select  # Interactive mode - prompts for directory and context`,
 	Run: runMain,
 }
 
