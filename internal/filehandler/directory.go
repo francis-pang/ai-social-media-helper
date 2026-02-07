@@ -300,7 +300,7 @@ func ScanDirectoryMediaWithOptions(dirPath string, opts ScanOptions) ([]*MediaFi
 //
 // Strategy:
 //   - JPEG/PNG: Resize using pure Go (golang.org/x/image/draw)
-//   - HEIC/HEIF: Use macOS sips tool to convert to JPEG thumbnail
+//   - HEIC/HEIF: Use ffmpeg to convert to JPEG thumbnail (cross-platform, DDR-027)
 //   - GIF/WebP: Return original file (typically small)
 func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, error) {
 	ext := strings.ToLower(filepath.Ext(mediaFile.Path))
@@ -316,7 +316,7 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 		return generateThumbnailPureGo(mediaFile.Path, ext, maxDimension)
 
 	case ".heic", ".heif":
-		return generateThumbnailSips(mediaFile.Path, maxDimension)
+		return generateThumbnailHEIC(mediaFile.Path, maxDimension)
 
 	case ".gif", ".webp":
 		// Return original file for small formats
@@ -397,8 +397,25 @@ func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, st
 	return buf.Bytes(), "image/jpeg", nil
 }
 
-// generateThumbnailSips uses macOS sips tool to convert HEIC to JPEG thumbnail.
-func generateThumbnailSips(filePath string, maxDimension int) ([]byte, string, error) {
+// generateThumbnailHEIC uses ffmpeg to convert HEIC/HEIF to a JPEG thumbnail.
+// This replaces the macOS-only sips tool (DDR-027) and works cross-platform:
+// locally (if ffmpeg is installed) and in Lambda (ffmpeg bundled in container image).
+// Falls back to returning the original HEIC file if ffmpeg is unavailable.
+func generateThumbnailHEIC(filePath string, maxDimension int) ([]byte, string, error) {
+	// Check if ffmpeg is available
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		log.Warn().
+			Str("file", filePath).
+			Msg("ffmpeg not found, falling back to original HEIC file for thumbnail")
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read original file: %w", err)
+		}
+		return data, "image/heic", nil
+	}
+
 	// Create temp file for output
 	tmpFile, err := os.CreateTemp("", "thumb-*.jpg")
 	if err != nil {
@@ -408,13 +425,16 @@ func generateThumbnailSips(filePath string, maxDimension int) ([]byte, string, e
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	// Run sips to convert and resize
-	// sips -s format jpeg -Z 1024 input.heic --out output.jpg
-	cmd := exec.Command("sips",
-		"-s", "format", "jpeg",
-		"-Z", fmt.Sprintf("%d", maxDimension),
-		filePath,
-		"--out", tmpPath,
+	// ffmpeg -i input.heic -vf "scale='min(1024,iw)':-2" -frames:v 1 -y output.jpg
+	// - scale filter: downscale only if larger than maxDimension, preserve aspect ratio
+	// - -2 ensures even height (required by some encoders)
+	// - -frames:v 1: extract single frame (HEIC is a single image)
+	vf := fmt.Sprintf("scale='min(%d,iw)':-2", maxDimension)
+	cmd := exec.Command(ffmpegPath,
+		"-i", filePath,
+		"-vf", vf,
+		"-frames:v", "1",
+		"-y", tmpPath,
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -423,7 +443,7 @@ func generateThumbnailSips(filePath string, maxDimension int) ([]byte, string, e
 			Err(err).
 			Str("output", string(output)).
 			Str("file", filePath).
-			Msg("sips conversion failed, falling back to full file")
+			Msg("ffmpeg HEIC conversion failed, falling back to original file")
 
 		// Fallback: return original HEIC file
 		data, err := os.ReadFile(filePath)
@@ -442,7 +462,7 @@ func generateThumbnailSips(filePath string, maxDimension int) ([]byte, string, e
 	log.Debug().
 		Str("file", filepath.Base(filePath)).
 		Int("thumb_size", len(data)).
-		Msg("Thumbnail generated (sips)")
+		Msg("Thumbnail generated (ffmpeg HEIC)")
 
 	return data, "image/jpeg", nil
 }
