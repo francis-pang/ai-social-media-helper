@@ -1,5 +1,7 @@
 import { signal, computed } from "@preact/signals";
+import { isCloudMode } from "./api/client";
 import { FileBrowser } from "./components/FileBrowser";
+import { FileUploader } from "./components/FileUploader";
 import { SelectedFiles } from "./components/SelectedFiles";
 import { TriageView } from "./components/TriageView";
 
@@ -10,10 +12,13 @@ export const currentStep = signal<Step>("browse");
 export const selectedPaths = signal<string[]>([]);
 export const triageJobId = signal<string | null>(null);
 
+/** Upload session ID (Phase 2 cloud mode — groups uploaded files in S3). */
+export const uploadSessionId = signal<string | null>(null);
+
 const stepTitle = computed(() => {
   switch (currentStep.value) {
     case "browse":
-      return "Select Media";
+      return isCloudMode ? "Upload Media" : "Select Media";
     case "confirm-files":
       return "Confirm Selection";
     case "processing":
@@ -33,7 +38,8 @@ export function App() {
         </p>
       </header>
 
-      {currentStep.value === "browse" && <FileBrowser />}
+      {currentStep.value === "browse" &&
+        (isCloudMode ? <FileUploader /> : <FileBrowser />)}
       {currentStep.value === "confirm-files" && <SelectedFiles />}
       {(currentStep.value === "processing" ||
         currentStep.value === "results") && <TriageView />}

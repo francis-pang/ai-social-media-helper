@@ -19,10 +19,13 @@ export interface BrowseResponse {
 export interface TriageItem {
   media: number;
   filename: string;
+  /** Local filesystem path (Phase 1 local mode). */
   path: string;
+  /** S3 object key (Phase 2 cloud mode). */
+  key?: string;
   saveable: boolean;
   reason: string;
-  /** Thumbnail URL: /api/media/thumbnail?path=... */
+  /** Thumbnail URL: /api/media/thumbnail?path=... or ?key=... */
   thumbnailUrl: string;
 }
 
@@ -48,7 +51,10 @@ export interface PickResponse {
 
 /** Request body for POST /api/triage/start. */
 export interface TriageStartRequest {
-  paths: string[];
+  /** Local filesystem paths (Phase 1). */
+  paths?: string[];
+  /** S3 session ID (Phase 2 — Lambda lists objects with this prefix). */
+  sessionId?: string;
   model?: string;
 }
 
@@ -59,8 +65,10 @@ export interface TriageStartResponse {
 
 /** Request body for POST /api/triage/:id/confirm. */
 export interface TriageConfirmRequest {
-  /** Paths of files the user confirmed for deletion. */
-  deletePaths: string[];
+  /** Paths of files the user confirmed for deletion (Phase 1). */
+  deletePaths?: string[];
+  /** S3 keys of files the user confirmed for deletion (Phase 2). */
+  deleteKeys?: string[];
 }
 
 /** Response from POST /api/triage/:id/confirm. */
@@ -68,4 +76,15 @@ export interface TriageConfirmResponse {
   deleted: number;
   errors: string[];
   reclaimedBytes: number;
+}
+
+/** Response from GET /api/upload-url (Phase 2 only). */
+export interface UploadUrlResponse {
+  uploadUrl: string;
+  key: string;
+}
+
+/** Response from GET /api/media/full when returning presigned URL (Phase 2). */
+export interface FullImageResponse {
+  url: string;
 }

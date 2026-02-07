@@ -8,7 +8,8 @@ A collection of command-line tools for analyzing photos and videos using Google'
 |---------|-------------|
 | `media-select` | AI-powered media selection for Instagram carousels |
 | `media-triage` | AI-powered media triage to identify and delete unsaveable files |
-| `media-web` | Web UI for visual triage and selection (local web server) |
+| `media-web` | Web UI for visual triage and selection (local web server, Phase 1) |
+| `media-lambda` | Cloud-hosted triage via AWS Lambda + S3 (Phase 2) |
 
 ## Features
 
@@ -24,7 +25,7 @@ A collection of command-line tools for analyzing photos and videos using Google'
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.24 or later
 - Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
 - **FFmpeg** (required for video compression)
   - macOS: `brew install ffmpeg`
@@ -117,7 +118,33 @@ The web UI provides:
 1. **File browser** — navigate directories and select media files
 2. **Triage processing** — AI evaluates media and categorizes as keep/discard
 3. **Visual confirmation** — view thumbnails of flagged media before deleting
-4. **Multi-select deletion** — choose exactly which files to remove
+4. **Full-image preview** — click any thumbnail to open the full-resolution file in a new tab
+5. **Multi-select deletion** — choose exactly which files to remove
+
+### Cloud Deployment (Phase 2)
+
+The same triage workflow is also available as a cloud-hosted service:
+
+- **Frontend**: Preact SPA on CloudFront (`https://d10rlnv7vz8qt7.cloudfront.net`)
+- **Backend**: Go Lambda function behind API Gateway
+- **Storage**: S3 with presigned URL uploads (files auto-expire after 24 hours)
+
+The cloud version uses drag-and-drop file upload instead of the native OS picker. Files are uploaded directly to S3 via presigned PUT URLs, then the Lambda downloads them for AI triage using the same Gemini evaluation logic.
+
+```bash
+# Build and deploy the Lambda binary
+GOARCH=amd64 GOOS=linux CGO_ENABLED=0 go build -o bootstrap ./cmd/media-lambda
+zip -j function.zip bootstrap
+aws lambda update-function-code --function-name AiSocialMediaApiHandler --zip-file fileb://function.zip
+
+# Build and deploy the frontend (cloud mode)
+cd web/frontend
+VITE_CLOUD_MODE=1 npm run build
+aws s3 sync dist/ s3://ai-social-media-frontend-123456789012/ --delete
+aws cloudfront create-invalidation --distribution-id EFVHUDLKPXL4H --paths "/*"
+```
+
+See [DDR-026](./docs/design-decisions/DDR-026-phase2-lambda-s3-deployment.md) for the full architecture decision record.
 
 ### Media Selection
 
@@ -197,10 +224,19 @@ ai-social-media-helper/
 ├── cmd/
 │   ├── media-select/        # Media selection CLI (Instagram carousel)
 │   ├── media-triage/        # Media triage CLI (identify unsaveable files)
-│   └── media-web/           # Web server (JSON API + embedded SPA)
+│   ├── media-web/           # Local web server (JSON API + embedded SPA, Phase 1)
+│   └── media-lambda/        # AWS Lambda function (S3-based triage, Phase 2)
 ├── web/
-│   └── frontend/            # Preact SPA (TypeScript + Vite)
-├── internal/                # Shared Go packages
+│   └── frontend/            # Preact SPA (TypeScript + Vite, dual-mode)
+│       └── src/
+│           ├── components/
+│           │   ├── FileBrowser.tsx    # Native OS picker (Phase 1)
+│           │   ├── FileUploader.tsx   # Drag-and-drop S3 upload (Phase 2)
+│           │   ├── SelectedFiles.tsx  # Confirm selection (both modes)
+│           │   └── TriageView.tsx     # Results and deletion (both modes)
+│           ├── api/client.ts          # API client with cloud/local mode
+│           └── types/api.ts           # Shared TypeScript types
+├── internal/                # Shared Go packages (used by all binaries)
 │   ├── auth/               # API key retrieval & validation
 │   ├── chat/               # Gemini API interaction (selection, triage)
 │   ├── filehandler/        # Media file loading, EXIF, thumbnails, compression
@@ -208,7 +244,7 @@ ai-social-media-helper/
 │   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
 ├── docs/                    # Design documentation
-│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-022)
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-026)
 │   └── ...                 # See docs/index.md
 ├── Makefile                 # Build orchestration
 ├── go.mod                   # Go module definition
@@ -273,11 +309,17 @@ go test -cover ./...
 - [x] Model selection flag (--model / -m)
 - [x] Multi-binary CLI layout (media-select + media-triage)
 - [x] Media triage - AI identifies unsaveable photos/videos for deletion (DDR-021)
-- [x] Web UI architecture - Preact SPA with Go JSON API (DDR-022)
-- [ ] Web UI implementation - visual triage with thumbnails and multi-select
+- [x] Web UI - Preact SPA with Go JSON API (DDR-022)
+- [x] Web UI - visual triage with thumbnails and multi-select (DDR-024)
+- [x] AWS IAM deployment user with scoped policies (DDR-023)
+- [x] SSM Parameter Store for runtime secrets (DDR-025)
+- [x] Phase 2 cloud deployment - Lambda + S3 + CloudFront (DDR-026)
+- [x] S3 presigned URL upload with drag-and-drop frontend
+- [x] CloudFront API proxy for same-origin requests
+- [x] CodePipeline CI/CD (GitHub source, Go + Node builds, S3 + Lambda deploy)
+- [ ] Video triage in Lambda (requires FFmpeg Lambda layer)
+- [ ] Custom domain with ACM certificate
 - [ ] Session management
-- [ ] Cloud storage integration (S3, Google Drive)
-- [ ] AWS Lambda migration (see docs/PHASE2-REMOTE-HOSTING.md)
 
 ## License
 

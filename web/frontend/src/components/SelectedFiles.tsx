@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
-import { currentStep, selectedPaths, triageJobId } from "../app";
-import { startTriage } from "../api/client";
+import { currentStep, selectedPaths, triageJobId, uploadSessionId } from "../app";
+import { startTriage, isCloudMode } from "../api/client";
 
 const loading = signal(false);
 const error = signal<string | null>(null);
@@ -9,7 +9,11 @@ async function handleStartTriage() {
   loading.value = true;
   error.value = null;
   try {
-    const res = await startTriage({ paths: selectedPaths.value });
+    const req = isCloudMode
+      ? { sessionId: uploadSessionId.value! }
+      : { paths: selectedPaths.value };
+
+    const res = await startTriage(req);
     triageJobId.value = res.id;
     currentStep.value = "processing";
   } catch (e) {
@@ -23,8 +27,14 @@ function goBack() {
   currentStep.value = "browse";
 }
 
+/** Extract just the filename from a path or S3 key. */
+function basename(pathOrKey: string): string {
+  const parts = pathOrKey.split("/");
+  return parts[parts.length - 1] || pathOrKey;
+}
+
 export function SelectedFiles() {
-  const paths = selectedPaths.value;
+  const items = selectedPaths.value;
 
   return (
     <div class="card">
@@ -36,7 +46,7 @@ export function SelectedFiles() {
           marginBottom: "1rem",
         }}
       >
-        The following {paths.length} path(s) will be sent for AI triage
+        The following {items.length} file(s) will be sent for AI triage
         analysis. Media files will be evaluated and categorized as keep or
         discard.
       </p>
@@ -51,7 +61,7 @@ export function SelectedFiles() {
           marginBottom: "1.5rem",
         }}
       >
-        {paths.map((p) => (
+        {items.map((p) => (
           <div
             key={p}
             style={{
@@ -61,7 +71,7 @@ export function SelectedFiles() {
               borderBottom: "1px solid var(--color-border)",
             }}
           >
-            {p}
+            {isCloudMode ? basename(p) : p}
           </div>
         ))}
       </div>

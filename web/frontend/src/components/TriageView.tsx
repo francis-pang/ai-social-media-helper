@@ -1,10 +1,12 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { currentStep, triageJobId, selectedPaths } from "../app";
+import { currentStep, triageJobId, selectedPaths, uploadSessionId } from "../app";
 import {
   getTriageResults,
   confirmTriage,
   thumbnailUrl,
+  openFullImage,
+  isCloudMode,
 } from "../api/client";
 import type { TriageItem, TriageResults } from "../types/api";
 
@@ -18,6 +20,19 @@ const confirmResult = signal<{
 } | null>(null);
 const error = signal<string | null>(null);
 
+/** Get the identifier for a triage item (key in cloud mode, path in local). */
+function itemId(item: TriageItem): string {
+  return isCloudMode ? (item.key ?? item.path) : item.path;
+}
+
+/** Get the thumbnail source for a triage item. */
+function itemThumb(item: TriageItem): string {
+  if (isCloudMode && item.key) {
+    return thumbnailUrl(item.key);
+  }
+  return thumbnailUrl(item.path);
+}
+
 function pollResults(id: string) {
   const interval = setInterval(async () => {
     try {
@@ -28,7 +43,7 @@ function pollResults(id: string) {
         currentStep.value = "results";
         if (res.discard.length > 0) {
           selectedForDeletion.value = new Set(
-            res.discard.map((item) => item.path),
+            res.discard.map((item) => itemId(item)),
           );
         }
       }
@@ -41,12 +56,12 @@ function pollResults(id: string) {
   return () => clearInterval(interval);
 }
 
-function toggleDeletion(path: string) {
+function toggleDeletion(id: string) {
   const next = new Set(selectedForDeletion.value);
-  if (next.has(path)) {
-    next.delete(path);
+  if (next.has(id)) {
+    next.delete(id);
   } else {
-    next.add(path);
+    next.add(id);
   }
   selectedForDeletion.value = next;
 }
@@ -54,7 +69,7 @@ function toggleDeletion(path: string) {
 function selectAllDiscard() {
   if (!results.value) return;
   selectedForDeletion.value = new Set(
-    results.value.discard.map((item) => item.path),
+    results.value.discard.map((item) => itemId(item)),
   );
 }
 
@@ -66,9 +81,11 @@ async function handleConfirmDeletion() {
   if (!triageJobId.value) return;
   confirmLoading.value = true;
   try {
-    const res = await confirmTriage(triageJobId.value, {
-      deletePaths: Array.from(selectedForDeletion.value),
-    });
+    const ids = Array.from(selectedForDeletion.value);
+    const req = isCloudMode
+      ? { deleteKeys: ids }
+      : { deletePaths: ids };
+    const res = await confirmTriage(triageJobId.value, req);
     confirmResult.value = res;
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to confirm deletion";
@@ -84,6 +101,7 @@ function startOver() {
   error.value = null;
   triageJobId.value = null;
   selectedPaths.value = [];
+  uploadSessionId.value = null;
   currentStep.value = "browse";
 }
 
@@ -131,13 +149,19 @@ function MediaCard({
         }}
       >
         <img
-          src={thumbnailUrl(item.path)}
+          src={itemThumb(item)}
           alt={item.filename}
+          title={item.filename}
           loading="lazy"
+          onClick={(e) => {
+            e.stopPropagation();
+            openFullImage(itemId(item));
+          }}
           style={{
             width: "100%",
             height: "100%",
             objectFit: "cover",
+            cursor: "zoom-in",
           }}
           onError={(e) => {
             (e.target as HTMLImageElement).style.display = "none";
@@ -161,6 +185,7 @@ function MediaCard({
       </div>
       <div style={{ padding: "0.5rem" }}>
         <div
+          title={item.filename}
           style={{
             fontSize: "0.75rem",
             fontFamily: "var(--font-mono)",
@@ -200,8 +225,10 @@ export function TriageView() {
           {confirmResult.value.errors.length === 0 ? "Done" : "Completed with errors"}
         </div>
         <p>
-          Deleted {confirmResult.value.deleted} file(s), reclaimed{" "}
-          {formatBytes(confirmResult.value.reclaimedBytes)}.
+          Deleted {confirmResult.value.deleted} file(s)
+          {!isCloudMode && confirmResult.value.reclaimedBytes > 0 &&
+            `, reclaimed ${formatBytes(confirmResult.value.reclaimedBytes)}`
+          }.
         </p>
         {confirmResult.value.errors.length > 0 && (
           <div
@@ -296,11 +323,11 @@ export function TriageView() {
         >
           {discard.map((item) => (
             <MediaCard
-              key={item.path}
+              key={itemId(item)}
               item={item}
               selectable={true}
-              isSelected={selectedForDeletion.value.has(item.path)}
-              onToggle={() => toggleDeletion(item.path)}
+              isSelected={selectedForDeletion.value.has(itemId(item))}
+              onToggle={() => toggleDeletion(itemId(item))}
             />
           ))}
         </div>
@@ -320,7 +347,7 @@ export function TriageView() {
         >
           {keep.map((item) => (
             <MediaCard
-              key={item.path}
+              key={itemId(item)}
               item={item}
               selectable={false}
               isSelected={false}

@@ -11,6 +11,8 @@
 /media-select
 /media-triage
 /media-web
+/media-lambda
+/bootstrap
 
 # Test binary, built with `go test -c`
 *.test

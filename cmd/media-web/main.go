@@ -140,6 +140,7 @@ func runMain(cmd *cobra.Command, args []string) {
 	mux.HandleFunc("/api/triage/start", handleTriageStart)
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
+	mux.HandleFunc("/api/media/full", handleFullImage)
 
 	// Frontend static files (SPA fallback)
 	frontendSub, err := fs.Sub(frontendFS, "frontend_dist")
@@ -616,6 +617,49 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpError(w, http.StatusBadRequest, "unsupported file type")
+}
+
+func handleFullImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		httpError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if info.IsDir() {
+		httpError(w, http.StatusBadRequest, "path is a directory")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(absPath))
+
+	// Only serve supported media types
+	if _, ok := filehandler.SupportedImageExtensions[ext]; !ok {
+		if _, ok := filehandler.SupportedVideoExtensions[ext]; !ok {
+			httpError(w, http.StatusBadRequest, "unsupported file type")
+			return
+		}
+	}
+
+	// Serve the original file directly — http.ServeFile handles Content-Type,
+	// range requests, and caching headers automatically.
+	http.ServeFile(w, r, absPath)
 }
 
 // --- Triage Processing ---

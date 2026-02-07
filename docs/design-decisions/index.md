@@ -37,6 +37,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-023](./DDR-023-aws-iam-deployment-user.md) | 2026-02-06 | AWS IAM User and Scoped Policies for CDK Deployment | Accepted |
 | [DDR-024](./DDR-024-full-image-preview-tooltip.md) | 2026-02-06 | Full-Image Preview and Filename Tooltip in Triage Web UI | Accepted |
 | [DDR-025](./DDR-025-ssm-parameter-store-secrets.md) | 2026-02-06 | SSM Parameter Store for Runtime Secrets | Accepted |
+| [DDR-026](./DDR-026-phase2-lambda-s3-deployment.md) | 2026-02-07 | Phase 2 Lambda + S3 Cloud Deployment | Accepted |
 
 ---
 
@@ -50,4 +51,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-06 (DDR-025)
+**Last Updated**: 2026-02-07 (DDR-026)

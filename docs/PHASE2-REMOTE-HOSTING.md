@@ -1,7 +1,8 @@
 # Phase 2: Remote Hosting and Lambda Migration
 
-**Status**: Planning (not yet implemented)  
-**Prerequisite**: Phase 1 web UI (DDR-022) must be complete and stable
+**Status**: Implemented (2026-02-07)  
+**Implementation Record**: [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md)  
+**Prerequisite**: Phase 1 web UI (DDR-022) — completed
 
 ## Overview
 
@@ -25,19 +26,18 @@ Phase 1 (current):
                 |-> Local filesystem
                 |-> Gemini API
 
-Phase 2 (target):
-  Browser <-> Static Hosting Platform (e.g., CloudFront)
-                |-> Preact SPA (same build output as Phase 1)
-  Browser <-> API Gateway <-> Go Lambda
-                                |-> S3
-                                |-> Gemini API
+Phase 2 (implemented):
+  Browser <-> CloudFront (d10rlnv7vz8qt7.cloudfront.net)
+                |-> /* : S3 origin (Preact SPA, OAC)
+                |-> /api/* : API Gateway proxy (same-origin)
+  Browser ---> S3 (presigned PUT URL, direct upload)
+  CloudFront /api/* <-> API Gateway <-> Go Lambda
+                                          |-> S3 (download to /tmp)
+                                          |-> Gemini API
+                                          |-> SSM Parameter Store
 ```
 
-The Preact SPA is identical in both phases. The only change is the API base URL:
-- Phase 1: `http://localhost:8080/api/`
-- Phase 2: `https://api.yourdomain.com/`
-
-This is configured via an environment variable or build-time constant in the frontend.
+The Preact SPA is identical in both phases. The CloudFront `/api/*` proxy means the API base URL is `""` (same-origin) in both modes. The only difference is the build-time `VITE_CLOUD_MODE` flag, which switches between the native file picker (Phase 1) and the drag-and-drop S3 uploader (Phase 2).
 
 ---
 
@@ -177,58 +177,50 @@ All options serve the same artifact: the `dist/` folder produced by `npm run bui
 
 ---
 
-## Recommendation
+## Recommendation (Implemented)
 
-**Primary: Option 1 (S3 + CloudFront)** for production deployment.
+**Selected: Option 1 (S3 + CloudFront)** — deployed as of 2026-02-07.
 
-- Gold-standard security with full header control
-- Native AWS integration with Lambda backend (same IAM, Cognito, WAF)
-- The setup complexity is a one-time cost, and the project is already invested in AWS
-
-**Development/staging: Option 2 (Cloudflare Pages)** for preview deployments.
-
-- Free, zero-config SPA routing, excellent DDoS protection
-- Use for PR preview deployments and testing
-- Simpler setup than CloudFront for non-production environments
+- Gold-standard security with full header control (CSP, HSTS, X-Frame-Options)
+- Native AWS integration with Lambda backend (same account, IAM, CloudFront proxy)
+- CloudFront proxies `/api/*` to API Gateway, eliminating CORS and tightening CSP to `connect-src 'self'`
+- S3 bucket is fully private with CloudFront OAC
+- SPA routing via CloudFront custom error responses (403/404 -> `/index.html`)
 
 ---
 
-## Backend Migration Notes (Lambda)
+## Backend Migration (Implemented)
 
-The Go HTTP handlers in `cmd/media-web/main.go` can be adapted to Lambda handlers with minimal changes:
+The Go backend was implemented as a separate binary (`cmd/media-lambda/main.go`) rather than adapting `cmd/media-web` handlers. Key implementation decisions:
 
-1. **Handler signature change**: `http.HandlerFunc` -> `func(ctx, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error)`
-2. **File system access**: Replace `os.Open`/local paths with S3 SDK calls
-3. **Thumbnail serving**: Generate thumbnails on-the-fly or cache in S3
-4. **Media upload**: Frontend uploads directly to S3 via presigned URLs (not through Lambda)
+1. **`httpadapter.NewV2`** wraps a standard `http.ServeMux` for API Gateway HTTP API v2 payload format — handlers are testable with `httptest`
+2. **Presigned URL uploads** — browser uploads directly to S3 (bypasses Lambda 6MB limit); Lambda generates 15-minute presigned PUT URLs
+3. **Download-to-tmp** — Lambda downloads S3 objects to `/tmp/{sessionId}/` so existing `filehandler.LoadMediaFile()` and `chat.AskMediaTriage()` work unchanged
+4. **SSM Parameter Store** — Gemini API key loaded from SSM SecureString at cold start (see [DDR-025](./design-decisions/DDR-025-ssm-parameter-store-secrets.md))
 
-The JSON API contracts (request/response shapes) remain identical. The frontend does not change.
+### Deployed AWS Resources
 
-### New AWS Resources Required
+| Resource | Identifier |
+|----------|-----------|
+| Lambda function | `AiSocialMediaApiHandler` (`provided.al2023`, 1GB, 5min timeout) |
+| API Gateway (HTTP API) | `obopiy55xg.execute-api.us-east-1.amazonaws.com` |
+| S3 bucket (media) | `ai-social-media-uploads-123456789012` (24h lifecycle) |
+| S3 bucket (frontend) | `ai-social-media-frontend-123456789012` |
+| S3 bucket (artifacts) | `ai-social-media-artifacts-123456789012` |
+| CloudFront distribution | `d10rlnv7vz8qt7.cloudfront.net` (ID: EFVHUDLKPXL4H) |
+| SSM parameter | `/ai-social-media/prod/gemini-api-key` |
+| CodePipeline | `AiSocialMediaPipeline` |
 
-| Resource | Purpose |
-|----------|---------|
-| Lambda function | Go binary handling API requests |
-| API Gateway (HTTP API) | Routes HTTP requests to Lambda |
-| S3 bucket (media) | Stores uploaded media files |
-| S3 bucket (frontend) | Stores SPA static files |
-| CloudFront distribution | Serves frontend with security headers |
-| Cognito User Pool | User authentication (if multi-user) |
-| IAM roles | Lambda execution role, S3 access |
-| ACM certificate | HTTPS for custom domain |
-
----
-
-## Timeline Considerations
-
-Phase 2 should not begin until:
-
-1. Phase 1 web UI is feature-complete and stable
-2. The JSON API contracts are finalized through real usage
-3. There is a concrete need for remote access (not just local use)
-
-Premature migration to Lambda adds complexity without benefit if the tool is only used locally.
+Infrastructure is defined in the `ai-social-media-helper-deploy` repository using CDK (TypeScript), with four stacks: Storage, Backend, Frontend, Pipeline.
 
 ---
 
-**Last Updated**: 2026-02-06
+## Current Limitations
+
+1. **Video triage not supported in Lambda** — no FFmpeg/FFprobe in the Lambda runtime; only images are processed. Videos uploaded to S3 are skipped during triage. Can be addressed by adding an FFmpeg Lambda layer.
+2. **No authentication** — the CloudFront distribution is publicly accessible. Single-user personal tool; add Cognito if multi-user is needed.
+3. **No custom domain** — served from `d10rlnv7vz8qt7.cloudfront.net`. Add ACM certificate + Route 53 for a friendly URL.
+
+---
+
+**Last Updated**: 2026-02-07
