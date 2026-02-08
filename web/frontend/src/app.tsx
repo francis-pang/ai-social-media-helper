@@ -7,31 +7,87 @@ import {
   signOut,
 } from "./auth/cognito";
 import { FileBrowser } from "./components/FileBrowser";
-import { FileUploader } from "./components/FileUploader";
 import { LoginForm } from "./components/LoginForm";
+import { MediaUploader } from "./components/MediaUploader";
 import { SelectedFiles } from "./components/SelectedFiles";
 import { TriageView } from "./components/TriageView";
 
-/** Application step in the triage workflow. */
-type Step = "browse" | "confirm-files" | "processing" | "results";
+/** Application steps across both workflows. */
+type Step =
+  // Triage flow (local mode)
+  | "browse"
+  | "confirm-files"
+  | "processing"
+  | "results"
+  // Selection flow (cloud mode — DDR-029)
+  | "upload"
+  | "selecting"
+  | "review-selection"
+  | "enhancing"
+  | "review-enhanced"
+  | "group-posts"
+  | "publish"
+  | "description";
 
-export const currentStep = signal<Step>("browse");
+export const currentStep = signal<Step>(isCloudMode ? "upload" : "browse");
 export const selectedPaths = signal<string[]>([]);
 export const triageJobId = signal<string | null>(null);
 
-/** Upload session ID (Phase 2 cloud mode — groups uploaded files in S3). */
+/** Upload session ID — groups uploaded files in S3 under a common prefix. */
 export const uploadSessionId = signal<string | null>(null);
+
+/** Trip/event context for AI selection (e.g., "3-day trip to Tokyo, Oct 2025"). */
+export const tripContext = signal<string>("");
+
+/** Step history stack for back-navigation in the selection flow. */
+export const stepHistory = signal<Step[]>([]);
+
+/** Navigate to a new step, pushing the current step onto the history stack. */
+export function navigateToStep(step: Step) {
+  stepHistory.value = [...stepHistory.value, currentStep.value];
+  currentStep.value = step;
+}
+
+/** Navigate back to the previous step (pops from history stack). */
+export function navigateBack() {
+  const history = stepHistory.value;
+  if (history.length === 0) return;
+  const prev = history[history.length - 1]!;
+  stepHistory.value = history.slice(0, -1);
+  currentStep.value = prev;
+}
+
+/** Application title — differs by mode. */
+const appTitle = isCloudMode ? "Media Selection" : "Media Triage";
 
 const stepTitle = computed(() => {
   switch (currentStep.value) {
+    // Triage flow
     case "browse":
-      return isCloudMode ? "Upload Media" : "Select Media";
+      return "Select Media";
     case "confirm-files":
       return "Confirm Selection";
     case "processing":
       return "Processing...";
     case "results":
       return "Triage Results";
+    // Selection flow
+    case "upload":
+      return "Upload Media";
+    case "selecting":
+      return "AI Selection";
+    case "review-selection":
+      return "Review Selection";
+    case "enhancing":
+      return "Enhancement";
+    case "review-enhanced":
+      return "Review Enhanced";
+    case "group-posts":
+      return "Group into Posts";
+    case "publish":
+      return "Publish or Download";
+    case "description":
+      return "Post Description";
   }
 });
 
@@ -50,7 +106,7 @@ export function App() {
     return (
       <div>
         <header style={{ marginBottom: "2rem" }}>
-          <h1>Media Triage</h1>
+          <h1>{appTitle}</h1>
         </header>
         <LoginForm />
       </div>
@@ -59,9 +115,16 @@ export function App() {
 
   return (
     <div>
-      <header style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <header
+        style={{
+          marginBottom: "2rem",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
         <div>
-          <h1>Media Triage</h1>
+          <h1>{appTitle}</h1>
           <p style={{ color: "var(--color-text-secondary)" }}>
             {stepTitle.value}
           </p>
@@ -77,11 +140,28 @@ export function App() {
         )}
       </header>
 
-      {currentStep.value === "browse" &&
-        (isCloudMode ? <FileUploader /> : <FileBrowser />)}
+      {/* Triage flow — local mode */}
+      {currentStep.value === "browse" && !isCloudMode && <FileBrowser />}
       {currentStep.value === "confirm-files" && <SelectedFiles />}
       {(currentStep.value === "processing" ||
         currentStep.value === "results") && <TriageView />}
+
+      {/* Selection flow — cloud mode (DDR-029) */}
+      {currentStep.value === "upload" && isCloudMode && <MediaUploader />}
+      {currentStep.value === "selecting" && isCloudMode && (
+        <div class="card" style={{ textAlign: "center", padding: "3rem" }}>
+          <p style={{ color: "var(--color-text-secondary)" }}>
+            AI Selection — coming in Step 2.
+          </p>
+          <button
+            class="outline"
+            onClick={navigateBack}
+            style={{ marginTop: "1rem" }}
+          >
+            Back to Upload
+          </button>
+        </div>
+      )}
     </div>
   );
 }

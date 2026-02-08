@@ -382,6 +382,125 @@ Browser ──► CloudFront ──► API Gateway ──► Lambda
 
 ---
 
+## Media Selection Flow (Cloud Mode — DDR-029)
+
+Cloud mode is being extended from a triage-only workflow to a full media selection and publishing pipeline. The selection flow runs in cloud mode while the triage flow continues to operate in local mode unchanged.
+
+### Step 1: Upload Media
+
+The upload step uses the **File System Access API** (Chrome-only) for a native file/folder picking experience:
+
+```
+┌──────────────────────────────────────────────────┐
+│  Browser (Chrome on macOS)                        │
+│                                                    │
+│  ┌──────────────────────────────────────────────┐ │
+│  │ MediaUploader Component                       │ │
+│  │                                                │ │
+│  │ [Choose Files]  [Choose Folder]               │ │
+│  │  showOpenFilePicker()  showDirectoryPicker()  │ │
+│  │                                                │ │
+│  │ ┌─────────┐ ┌─────────┐ ┌─────────┐          │ │
+│  │ │ Thumb 1 │ │ Thumb 2 │ │ Thumb N │  ← Canvas│ │
+│  │ └─────────┘ └─────────┘ └─────────┘          │ │
+│  │ ═══════════════════ 67% ═══════    ← S3 PUT  │ │
+│  │                                                │ │
+│  │ Trip context: [3-day trip to Tokyo...]        │ │
+│  │                     [Continue to Selection →] │ │
+│  └──────────────────────────────────────────────┘ │
+└────────────────────────┬─────────────────────────┘
+                         │ PUT (presigned URL)
+                         ▼
+┌────────────────────────────────────────────────────┐
+│  S3 Media Bucket                                    │
+│  {sessionId}/IMG_001.jpg                            │
+│  {sessionId}/IMG_002.png                            │
+│  {sessionId}/VID_003.mp4                            │
+└────────────────────────────────────────────────────┘
+```
+
+**Key features:**
+
+- **File System Access API** — `showOpenFilePicker()` for individual files, `showDirectoryPicker()` with recursive scanning for folders
+- **Client-side thumbnails** — generated in-browser using `<canvas>` for images and `<video>` frame extraction for videos
+- **Media filtering** — folder picker iterates entries and only collects supported media types (JPEG, PNG, GIF, WebP, HEIC, MP4, MOV, etc.)
+- **Trip context** — text input describing the event (used by AI selection in later steps)
+- **Drag-and-drop** — retained as supplementary input method alongside the API buttons
+- **S3 upload** — reuses existing presigned PUT URL flow (no backend changes)
+
+See [DDR-029](./design-decisions/DDR-029-file-system-access-api-upload.md) for the full decision record.
+
+### Planned Steps (Not Yet Implemented)
+
+2. **AI Selection** — Gemini analyzes all uploaded media and selects the best items
+3. **Review Selection** — User reviews AI choices, can override selections
+4. **Enhancement** — AI-powered photo editing and video adjustment
+5. **Review Enhanced** — Side-by-side comparison with feedback loop
+6. **Group into Posts** — Drag-and-drop media into post groups (max 20 per post)
+7. **Publish or Download** — Instagram carousel publishing or file download
+8. **Post Description** — AI-generated Instagram captions with iterative feedback
+
+### Backend: Multi-Lambda + Step Functions Architecture (Planned)
+
+Steps 2+ require long-running parallel processing that cannot fit within API Gateway's 30-second timeout. The architecture splits into two orchestration patterns:
+
+1. **User-driven transitions** (upload -> review -> enhance -> group -> publish): Managed via DynamoDB state + frontend polling. The user controls the pace.
+2. **Within-step parallel processing** (generate N thumbnails, enhance N photos): Managed via **AWS Step Functions** Map state with built-in retry, concurrency throttling, and fan-in.
+
+```
+CloudFront ──► API Gateway ──► API Lambda ──► DynamoDB
+                                    │
+                                    ├──► Step Functions: SelectionPipeline
+                                    │       ├── Map: Thumbnail Lambda (per file, MaxConcurrency 20)
+                                    │       └── Selection Lambda (Gemini AI)
+                                    │
+                                    └──► Step Functions: EnhancementPipeline
+                                            ├── Map: Enhancement Lambda (per photo, MaxConcurrency 10)
+                                            └── Map: Video Lambda (per video, MaxConcurrency 5)
+```
+
+**Lambda functions (planned):**
+
+| Lambda | Purpose | Memory | Timeout |
+|--------|---------|--------|---------|
+| API Lambda (existing) | HTTP API, DynamoDB R/W, presigned URLs, start Step Functions | 256 MB | 30s |
+| Thumbnail Lambda | Per-file thumbnail generation (image resize / video frame) | 512 MB | 2 min |
+| Selection Lambda | Gemini AI media selection (all thumbnails + metadata) | 2-4 GB | 15 min |
+| Enhancement Lambda | Per-photo Gemini image editing | 1-2 GB | 5 min |
+| Video Processing Lambda | Per-video ffmpeg enhancement (optional) | 4+ GB | 15 min |
+
+**Step Functions state machines (planned):**
+
+| State Machine | Trigger | Flow |
+|---------------|---------|------|
+| `SelectionPipeline` | `POST /api/selection/start` | List S3 files -> Map: generate thumbnails (parallel) -> Selection Lambda (Gemini) -> Write to DynamoDB |
+| `EnhancementPipeline` | `POST /api/enhance/start` | Split photos/videos -> Parallel: Map enhance photos + Map process videos -> Aggregate -> Write to DynamoDB |
+
+Step Functions provides built-in parallel execution, per-item retry with backoff, concurrency throttling (`MaxConcurrency`), fan-in (wait for all), and visual execution monitoring. Cost is ~$0.002 per session (~$0.60/month at 10 sessions/day).
+
+**Infrastructure (planned):**
+
+| Resource | Purpose |
+|----------|---------|
+| DynamoDB (`media-selection-sessions`) | Single-table session state with TTL auto-cleanup |
+| Step Functions (2 state machines) | Orchestrate parallel thumbnail generation and enhancement |
+| SSM Parameter Store (new keys) | Instagram access token and user ID |
+
+---
+
+## Frontend Components
+
+| Component | Mode | Purpose |
+|-----------|------|---------|
+| `FileBrowser.tsx` | Local | Native OS file picker via Go backend |
+| `FileUploader.tsx` | Cloud (triage) | Drag-and-drop S3 upload for triage flow |
+| `MediaUploader.tsx` | Cloud (selection) | File System Access API pickers, thumbnails, trip context (DDR-029) |
+| `LoginForm.tsx` | Cloud | Cognito authentication UI (DDR-028) |
+| `SelectedFiles.tsx` | Both | File selection confirmation |
+| `TriageView.tsx` | Both | Triage results and deletion interface |
+
+---
+
 ## Future Extensibility
 
 ### Potential Enhancements
@@ -392,6 +511,6 @@ Browser ──► CloudFront ──► API Gateway ──► Lambda
 
 ---
 
-**Last Updated**: 2026-02-07
-**Updated for**: DDR-028 (Security Hardening)
+**Last Updated**: 2026-02-08
+**Updated for**: DDR-029 (File System Access API for Cloud Media Upload)
 

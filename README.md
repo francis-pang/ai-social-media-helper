@@ -129,7 +129,12 @@ The same triage workflow is also available as a cloud-hosted service:
 - **Backend**: Go Lambda function behind API Gateway
 - **Storage**: S3 with presigned URL uploads (files auto-expire after 24 hours)
 
-The cloud version uses drag-and-drop file upload instead of the native OS picker. Files are uploaded directly to S3 via presigned PUT URLs, then the Lambda downloads them for AI triage using the same Gemini evaluation logic.
+The cloud version supports two workflows:
+
+- **Media Triage**: Drag-and-drop file upload → AI evaluation → delete bad files
+- **Media Selection** (new): File/folder picker via File System Access API → AI-powered media selection for Instagram posts (DDR-029)
+
+Files are uploaded directly to S3 via presigned PUT URLs. The selection workflow uses Chrome's File System Access API for native file/folder picking with recursive media filtering and client-side thumbnail generation.
 
 ```bash
 # Build and deploy the Lambda binary
@@ -231,7 +236,8 @@ ai-social-media-helper/
 │       └── src/
 │           ├── components/
 │           │   ├── FileBrowser.tsx    # Native OS picker (Phase 1)
-│           │   ├── FileUploader.tsx   # Drag-and-drop S3 upload (Phase 2)
+│           │   ├── FileUploader.tsx   # Drag-and-drop S3 upload (triage, Phase 2)
+│           │   ├── MediaUploader.tsx  # File System Access API upload (selection, DDR-029)
 │           │   ├── SelectedFiles.tsx  # Confirm selection (both modes)
 │           │   └── TriageView.tsx     # Results and deletion (both modes)
 │           ├── api/client.ts          # API client with cloud/local mode
@@ -244,7 +250,7 @@ ai-social-media-helper/
 │   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
 ├── docs/                    # Design documentation
-│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-026)
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-029)
 │   └── ...                 # See docs/index.md
 ├── Makefile                 # Build orchestration
 ├── go.mod                   # Go module definition
@@ -317,6 +323,11 @@ go test -cover ./...
 - [x] S3 presigned URL upload with drag-and-drop frontend
 - [x] CloudFront API proxy for same-origin requests
 - [x] CodePipeline CI/CD (GitHub source, Go + Node builds, S3 + Lambda deploy)
+- [x] Media selection Step 1: File System Access API upload with thumbnails and trip context (DDR-029)
+- [ ] Media selection Step 2: AI-powered media selection (Step Functions + multi-Lambda)
+- [ ] Media selection Step 3-8: Enhancement, grouping, publishing, description
+- [ ] DynamoDB session state store
+- [ ] Step Functions orchestration (SelectionPipeline, EnhancementPipeline)
 - [ ] Video triage in Lambda (requires FFmpeg Lambda layer)
 - [ ] Custom domain with ACM certificate
 - [ ] Session management
