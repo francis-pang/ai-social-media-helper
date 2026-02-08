@@ -1,6 +1,6 @@
 import { signal, computed } from "@preact/signals";
 import { navigateBack, navigateToStep } from "../app";
-import { thumbnailUrl, openFullImage } from "../api/client";
+import { thumbnailUrl } from "../api/client";
 import type { PostGroup, GroupableMediaItem } from "../types/api";
 
 // --- Constants ---
