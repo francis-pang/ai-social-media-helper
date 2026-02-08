@@ -41,6 +41,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-027](./DDR-027-container-image-lambda-local-commands.md) | 2026-02-07 | Container Image Lambda for Local OS Command Dependencies | Accepted |
 | [DDR-028](./DDR-028-security-hardening.md) | 2026-02-07 | Security Hardening for Cloud Deployment | Implemented |
 | [DDR-029](./DDR-029-file-system-access-api-upload.md) | 2026-02-08 | File System Access API for Cloud Media Upload | Accepted |
+| [DDR-030](./DDR-030-cloud-selection-backend.md) | 2026-02-08 | Cloud Selection Backend Architecture | Accepted |
 
 ---
 
@@ -55,4 +56,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-08 (DDR-029)
+**Last Updated**: 2026-02-08 (DDR-030)

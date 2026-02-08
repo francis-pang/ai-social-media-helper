@@ -430,10 +430,41 @@ The upload step uses the **File System Access API** (Chrome-only) for a native f
 
 See [DDR-029](./design-decisions/DDR-029-file-system-access-api-upload.md) for the full decision record.
 
+### Steps 2 & 3: AI Selection + Review (DDR-030)
+
+After upload, the user clicks "Continue to Selection" to trigger AI analysis.
+
+**Step 2 (AI Selection)** — Backend processing:
+
+1. API Lambda receives `POST /api/selection/start` with session ID and trip context
+2. Lists all media files in the session's S3 prefix
+3. Downloads files to `/tmp`, generates 400px thumbnails (goroutines, 10 concurrent)
+4. Uploads thumbnails to S3 at `{sessionId}/thumbnails/{filename}.jpg` (pre-generation cache)
+5. For images: generates 1024px thumbnails for Gemini (in-memory)
+6. For videos: compresses with ffmpeg (AV1+Opus) and uploads to Gemini Files API
+7. Sends ALL media to Gemini in a single API call for comparative analysis
+8. Gemini returns structured JSON with selected items, excluded items, and scene groups
+9. Frontend polls `GET /api/selection/{id}/results` every 3 seconds
+
+**Step 3 (Review Selection)** — Frontend review:
+
+- **Selected section**: Grid of thumbnails with rank badge, type badge, scene label, justification, and comparison notes
+- **Excluded section**: Collapsible grid with category badges, exclusion reasons, and duplicate references
+- **Scene groups**: Collapsible view showing media grouped by detected scenes (visual similarity + time/GPS gaps)
+- **Override**: User can move items between selected/excluded (client-side only)
+- **Confirm**: Proceeds to enhancement with the final selection
+
+**Key design decisions (DDR-030):**
+
+- **Structured JSON output**: Gemini returns a JSON object (not freeform text) for type-safe parsing
+- **No item limit**: AI selects all worthy items; post grouping (max 20 per carousel) happens in Step 6
+- **Thumbnail pre-generation**: Cached in S3 during selection; served directly for all downstream steps
+- **Video thumbnails**: Frame extraction at 1s using ffmpeg (replaces SVG placeholders)
+
+See [DDR-030](./design-decisions/DDR-030-cloud-selection-backend.md) for the full decision record.
+
 ### Planned Steps (Not Yet Implemented)
 
-2. **AI Selection** — Gemini analyzes all uploaded media and selects the best items
-3. **Review Selection** — User reviews AI choices, can override selections
 4. **Enhancement** — AI-powered photo editing and video adjustment
 5. **Review Enhanced** — Side-by-side comparison with feedback loop
 6. **Group into Posts** — Drag-and-drop media into post groups (max 20 per post)
@@ -495,6 +526,7 @@ Step Functions provides built-in parallel execution, per-item retry with backoff
 | `FileBrowser.tsx` | Local | Native OS file picker via Go backend |
 | `FileUploader.tsx` | Cloud (triage) | Drag-and-drop S3 upload for triage flow |
 | `MediaUploader.tsx` | Cloud (selection) | File System Access API pickers, thumbnails, trip context (DDR-029) |
+| `SelectionView.tsx` | Cloud (selection) | AI selection processing + review with override (DDR-030) |
 | `LoginForm.tsx` | Cloud | Cognito authentication UI (DDR-028) |
 | `SelectedFiles.tsx` | Both | File selection confirmation |
 | `TriageView.tsx` | Both | Triage results and deletion interface |
@@ -512,5 +544,5 @@ Step Functions provides built-in parallel execution, per-item retry with backoff
 ---
 
 **Last Updated**: 2026-02-08
-**Updated for**: DDR-029 (File System Access API for Cloud Media Upload)
+**Updated for**: DDR-030 (Cloud Selection Backend Architecture)
 

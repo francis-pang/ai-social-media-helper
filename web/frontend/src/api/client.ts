@@ -9,6 +9,9 @@ import type {
   TriageConfirmResponse,
   UploadUrlResponse,
   FullImageResponse,
+  SelectionStartRequest,
+  SelectionStartResponse,
+  SelectionResults,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -162,4 +165,26 @@ export async function openFullImage(pathOrKey: string): Promise<void> {
   } else {
     window.open(fullImageUrl(pathOrKey), "_blank");
   }
+}
+
+// --- Selection APIs (DDR-030) ---
+
+/** Start a media selection job for the given session. */
+export function startSelection(
+  req: SelectionStartRequest,
+): Promise<SelectionStartResponse> {
+  return fetchJSON<SelectionStartResponse>("/api/selection/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Get selection results (poll until status is "complete" or "error"). */
+export function getSelectionResults(
+  id: string,
+  sessionId: string,
+): Promise<SelectionResults> {
+  return fetchJSON<SelectionResults>(
+    `/api/selection/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
+  );
 }

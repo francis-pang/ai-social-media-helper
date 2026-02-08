@@ -132,9 +132,9 @@ The same triage workflow is also available as a cloud-hosted service:
 The cloud version supports two workflows:
 
 - **Media Triage**: Drag-and-drop file upload → AI evaluation → delete bad files
-- **Media Selection** (new): File/folder picker via File System Access API → AI-powered media selection for Instagram posts (DDR-029)
+- **Media Selection** (new): File/folder picker → AI-powered selection → review with override (DDR-029, DDR-030)
 
-Files are uploaded directly to S3 via presigned PUT URLs. The selection workflow uses Chrome's File System Access API for native file/folder picking with recursive media filtering and client-side thumbnail generation.
+Files are uploaded directly to S3 via presigned PUT URLs. The selection workflow uses Chrome's File System Access API for native file/folder picking with recursive media filtering and client-side thumbnail generation. After upload, Gemini analyzes all media in a single call for comparative selection (scene detection, deduplication, content evaluation) and returns structured JSON results. The review UI displays selected/excluded items with justifications, scene groups, and user override capability.
 
 ```bash
 # Build and deploy the Lambda binary
@@ -324,8 +324,10 @@ go test -cover ./...
 - [x] CloudFront API proxy for same-origin requests
 - [x] CodePipeline CI/CD (GitHub source, Go + Node builds, S3 + Lambda deploy)
 - [x] Media selection Step 1: File System Access API upload with thumbnails and trip context (DDR-029)
-- [ ] Media selection Step 2: AI-powered media selection (Step Functions + multi-Lambda)
-- [ ] Media selection Step 3-8: Enhancement, grouping, publishing, description
+- [x] Media selection Step 2: AI-powered selection with structured JSON output and thumbnail pre-generation (DDR-030)
+- [x] Media selection Step 3: Review selection with override, scene groups, and exclusion reasons (DDR-030)
+- [ ] Media selection Step 4-5: AI-powered media enhancement with feedback loops
+- [ ] Media selection Step 6-8: Post grouping, publishing, description
 - [ ] DynamoDB session state store
 - [ ] Step Functions orchestration (SelectionPipeline, EnhancementPipeline)
 - [ ] Video triage in Lambda (requires FFmpeg Lambda layer)

@@ -10,6 +10,7 @@ import { FileBrowser } from "./components/FileBrowser";
 import { LoginForm } from "./components/LoginForm";
 import { MediaUploader } from "./components/MediaUploader";
 import { SelectedFiles } from "./components/SelectedFiles";
+import { SelectionView } from "./components/SelectionView";
 import { TriageView } from "./components/TriageView";
 
 /** Application steps across both workflows. */
@@ -146,22 +147,11 @@ export function App() {
       {(currentStep.value === "processing" ||
         currentStep.value === "results") && <TriageView />}
 
-      {/* Selection flow — cloud mode (DDR-029) */}
+      {/* Selection flow — cloud mode (DDR-029, DDR-030) */}
       {currentStep.value === "upload" && isCloudMode && <MediaUploader />}
-      {currentStep.value === "selecting" && isCloudMode && (
-        <div class="card" style={{ textAlign: "center", padding: "3rem" }}>
-          <p style={{ color: "var(--color-text-secondary)" }}>
-            AI Selection — coming in Step 2.
-          </p>
-          <button
-            class="outline"
-            onClick={navigateBack}
-            style={{ marginTop: "1rem" }}
-          >
-            Back to Upload
-          </button>
-        </div>
-      )}
+      {(currentStep.value === "selecting" ||
+        currentStep.value === "review-selection") &&
+        isCloudMode && <SelectionView />}
     </div>
   );
 }

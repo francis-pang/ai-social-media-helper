@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,53 @@ const DefaultMaxPhotos = 20
 
 // DefaultMaxMedia is the default maximum number of media items to select.
 const DefaultMaxMedia = 20
+
+// --- Structured JSON Selection Types (DDR-030) ---
+
+// SelectionResult is the structured AI selection output for programmatic parsing.
+// See DDR-030: Cloud Selection Backend Architecture.
+type SelectionResult struct {
+	Selected    []SelectedItem `json:"selected"`
+	Excluded    []ExcludedItem `json:"excluded"`
+	SceneGroups []SceneGroup   `json:"sceneGroups"`
+}
+
+// SelectedItem represents a media item chosen by the AI.
+type SelectedItem struct {
+	Rank           int    `json:"rank"`
+	Media          int    `json:"media"`                     // 1-indexed media number
+	Filename       string `json:"filename"`
+	Type           string `json:"type"`                      // "Photo" or "Video"
+	Scene          string `json:"scene"`
+	Justification  string `json:"justification"`
+	ComparisonNote string `json:"comparisonNote,omitempty"`
+}
+
+// ExcludedItem represents a media item not chosen by the AI, with a reason.
+type ExcludedItem struct {
+	Media       int    `json:"media"`
+	Filename    string `json:"filename"`
+	Reason      string `json:"reason"`
+	Category    string `json:"category"` // "near-duplicate", "quality-issue", "content-mismatch", "redundant-scene"
+	DuplicateOf string `json:"duplicateOf,omitempty"`
+}
+
+// SceneGroup is a group of media items detected as belonging to the same scene.
+type SceneGroup struct {
+	Name      string           `json:"name"`
+	GPS       string           `json:"gps,omitempty"`
+	TimeRange string           `json:"timeRange,omitempty"`
+	Items     []SceneGroupItem `json:"items"`
+}
+
+// SceneGroupItem is a media item within a scene group.
+type SceneGroupItem struct {
+	Media       int    `json:"media"`
+	Filename    string `json:"filename"`
+	Type        string `json:"type"`
+	Selected    bool   `json:"selected"`
+	Description string `json:"description"`
+}
 
 // SelectionSystemInstruction provides context for quality-agnostic photo selection tasks.
 // Loaded from embedded prompt file. See DDR-019: Externalized Prompt Templates.
@@ -647,6 +695,415 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 		Msg("Media selection complete")
 
 	return response, nil
+}
+
+// --- Structured JSON Selection (DDR-030) ---
+
+// MediaSelectionJSONInstruction is the system instruction for structured JSON selection output.
+// No item limit — the AI selects all worthy items. See DDR-030.
+const MediaSelectionJSONInstruction = `You are selecting media items (photos AND videos) for social media posts. The user has access to Google's comprehensive photo enhancement suite including Magic Editor, Reimagine, Help Me Edit, Unblur, Magic Eraser, Portrait Light, Best Take, Face Retouch, Auto-Enhance, Portrait Blur, and Sky & Color Pop.
+
+REFERENCE PHOTO: The first image provided is a reference photo of Francis, the owner of this media. Use this to identify Francis in the candidate media. The candidate media starts from the second file.
+
+VIDEO PREVIEWS: Videos have been compressed for efficient analysis. Judge content, not compression artifacts. The original videos are high quality.
+
+CRITICAL: Media quality is NOT a selection criterion. Only exclude items that are completely unusable (extremely blurry, corrupt, accidental shots that cannot be enhanced to Instagram quality even with these tools).
+
+EQUAL WEIGHTING: Photos and videos compete equally. Select the best media regardless of type. A compelling 15-second video may be better than multiple similar photos.
+
+AUDIO ANALYSIS: For videos, consider audio content (music, speech, ambient sounds) in your selection. Videos with engaging audio may enhance the carousel's storytelling.
+
+SELECTION PRIORITIES (in order of weight):
+
+1. SUBJECT DIVERSITY (Highest Priority)
+   - Select media covering different subjects: food, architecture, landscape, people, activities, objects
+   - Each item should add a distinct type of content
+   - Prioritize DEPTH over coverage: allocate more items to visually interesting scenes, fewer to less interesting ones
+
+2. SCENE REPRESENTATION
+   - Detect scenes using: visual similarity + time gaps (2+ hours) + location gaps (1km+)
+   - Use GPS coordinates to identify different venues/locations
+   - Ensure each major sub-event/location is represented
+
+3. MEDIA TYPE SYNERGY
+   - Consider whether a scene is better captured as photo or video
+   - Action/motion scenes may benefit from video
+   - Static/compositional scenes may work better as photos
+
+4. ENHANCEMENT POTENTIAL (For Duplicates Only)
+   - When choosing between similar items, pick the one requiring least enhancement effort
+   - Consider: exposure, blur, composition, expressions
+
+5. PEOPLE VARIETY (Lower Priority)
+   - Include different groups or individuals if relevant to the event
+   - Secondary to subject and scene diversity
+
+6. TIME OF DAY (Tiebreaker Only)
+   - Only use to break ties between otherwise equal items
+   - Prefer variety across morning/afternoon/evening if choosing between equals
+
+DEDUPLICATION: Strictly one item per scene/moment. Recommend best candidate based on content and enhancement potential.
+
+NO ITEM LIMIT: Select ALL items that are worthy of posting. Do not limit yourself to any fixed number. Select as many or as few as the content deserves.
+
+OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown fences, no explanatory text before or after. The JSON must match this exact schema:
+
+{
+  "selected": [
+    {
+      "rank": 1,
+      "media": <1-indexed media number matching metadata>,
+      "filename": "<exact filename from metadata>",
+      "type": "Photo" or "Video",
+      "scene": "<scene name>",
+      "justification": "<why this item was selected>",
+      "comparisonNote": "<optional: chosen over X because...>"
+    }
+  ],
+  "excluded": [
+    {
+      "media": <number>,
+      "filename": "<exact filename>",
+      "reason": "<specific exclusion reason>",
+      "category": "near-duplicate" or "quality-issue" or "content-mismatch" or "redundant-scene",
+      "duplicateOf": "<optional: filename of the preferred item>"
+    }
+  ],
+  "sceneGroups": [
+    {
+      "name": "<scene name>",
+      "gps": "<coordinates or venue name if known>",
+      "timeRange": "<time range>",
+      "items": [
+        {
+          "media": <number>,
+          "filename": "<filename>",
+          "type": "Photo" or "Video",
+          "selected": true or false,
+          "description": "<brief description>"
+        }
+      ]
+    }
+  ]
+}
+
+RULES:
+- Respond with ONLY the JSON object
+- Every media item must appear in either "selected" or "excluded"
+- Every media item must appear in exactly one scene group
+- The "excluded" list MUST include a specific reason for EVERY non-selected item
+- Rank selected items by recommendation priority (1 = best)`
+
+// BuildMediaSelectionJSONPrompt creates a prompt for structured JSON media selection
+// with no item limit. See DDR-030: Cloud Selection Backend Architecture.
+func BuildMediaSelectionJSONPrompt(files []*filehandler.MediaFile, tripContext string) string {
+	var sb strings.Builder
+
+	// Count media types
+	var imageCount, videoCount int
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		if filehandler.IsImage(ext) {
+			imageCount++
+		} else if filehandler.IsVideo(ext) {
+			videoCount++
+		}
+	}
+
+	sb.WriteString("## Media Selection Task\n\n")
+	sb.WriteString(fmt.Sprintf("You are reviewing %d media items (%d photos, %d videos). Select ALL items worthy of posting — there is no maximum limit.\n\n",
+		len(files), imageCount, videoCount))
+
+	// User context section
+	sb.WriteString("### Trip/Event Context\n\n")
+	if tripContext != "" {
+		sb.WriteString(tripContext)
+		sb.WriteString("\n\n")
+	} else {
+		sb.WriteString("No context provided. Infer the event type from media and metadata.\n\n")
+	}
+
+	sb.WriteString("### Media Metadata\n\n")
+	sb.WriteString("Below is the metadata for each media item. Media files are provided in the same order.\n\n")
+
+	for i, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		mediaType := "Photo"
+		if filehandler.IsVideo(ext) {
+			mediaType = "Video"
+		}
+
+		sb.WriteString(fmt.Sprintf("**Media %d: %s** [%s]\n", i+1, filepath.Base(file.Path), mediaType))
+
+		if file.Metadata != nil {
+			if file.Metadata.HasGPSData() {
+				lat, lon := file.Metadata.GetGPS()
+				sb.WriteString(fmt.Sprintf("- GPS: %.6f, %.6f\n", lat, lon))
+			}
+			if file.Metadata.HasDateData() {
+				date := file.Metadata.GetDate()
+				sb.WriteString(fmt.Sprintf("- Date: %s\n", date.Format("Monday, January 2, 2006 at 3:04 PM")))
+			}
+
+			switch m := file.Metadata.(type) {
+			case *filehandler.ImageMetadata:
+				if m.CameraMake != "" || m.CameraModel != "" {
+					sb.WriteString(fmt.Sprintf("- Camera: %s %s\n", m.CameraMake, m.CameraModel))
+				}
+			case *filehandler.VideoMetadata:
+				if m.Duration > 0 {
+					sb.WriteString(fmt.Sprintf("- Duration: %s\n", formatVideoDuration(m.Duration)))
+				}
+				if m.Width > 0 && m.Height > 0 {
+					sb.WriteString(fmt.Sprintf("- Resolution: %dx%d\n", m.Width, m.Height))
+				}
+				hasAudio := m.AudioCodec != ""
+				sb.WriteString(fmt.Sprintf("- Has Audio: %v\n", hasAudio))
+				if hasAudio {
+					sb.WriteString("- Audio Note: Analyze audio for music, speech, ambient sounds\n")
+				}
+			}
+		} else {
+			sb.WriteString("- No metadata available\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("### Output\n\n")
+	sb.WriteString("Respond with ONLY the JSON object as specified in the system instruction. No other text.\n")
+
+	return sb.String()
+}
+
+// AskMediaSelectionJSON sends mixed media to Gemini and returns structured selection results.
+// Unlike AskMediaSelection which returns freeform text, this returns a parsed SelectionResult.
+// No item limit — the AI selects all worthy items. See DDR-030.
+func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string) (*SelectionResult, error) {
+	// Count media types for logging
+	var imageCount, videoCount int
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		if filehandler.IsImage(ext) {
+			imageCount++
+		} else if filehandler.IsVideo(ext) {
+			videoCount++
+		}
+	}
+
+	log.Info().
+		Int("total_media", len(files)).
+		Int("images", imageCount).
+		Int("videos", videoCount).
+		Bool("has_context", tripContext != "").
+		Str("model", modelName).
+		Msg("Starting structured JSON media selection with Gemini (DDR-030)")
+
+	// Track resources for cleanup
+	var uploadedFiles []*genai.File
+	var cleanupFuncs []func()
+
+	defer func() {
+		for _, cleanup := range cleanupFuncs {
+			cleanup()
+		}
+		for _, f := range uploadedFiles {
+			if err := client.DeleteFile(ctx, f.Name); err != nil {
+				log.Warn().Err(err).Str("file", f.Name).Msg("Failed to delete uploaded Gemini file")
+			} else {
+				log.Debug().Str("file", f.Name).Msg("Uploaded Gemini file deleted")
+			}
+		}
+	}()
+
+	// Build the prompt
+	prompt := BuildMediaSelectionJSONPrompt(files, tripContext)
+
+	// Configure model with JSON system instruction
+	model := client.GenerativeModel(modelName)
+	model.SystemInstruction = &genai.Content{
+		Parts: []genai.Part{
+			genai.Text(MediaSelectionJSONInstruction),
+		},
+	}
+
+	// Build parts: reference photo first, then media, then prompt
+	var parts []genai.Part
+
+	// Add Francis reference photo as the first image (DDR-017)
+	log.Debug().
+		Int("reference_bytes", len(assets.FrancisReferencePhoto)).
+		Msg("Including Francis reference photo for identification")
+	parts = append(parts, genai.Blob{
+		MIMEType: assets.FrancisReferenceMIMEType,
+		Data:     assets.FrancisReferencePhoto,
+	})
+
+	// Process each media file
+	log.Info().Msg("Processing media files for JSON selection...")
+
+	for i, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+
+		if filehandler.IsImage(ext) {
+			thumbData, mimeType, err := filehandler.GenerateThumbnail(file, filehandler.DefaultThumbnailMaxDimension)
+			if err != nil {
+				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to generate thumbnail, skipping")
+				continue
+			}
+
+			log.Debug().
+				Int("index", i+1).
+				Str("file", filepath.Base(file.Path)).
+				Int("thumb_bytes", len(thumbData)).
+				Msg("Image thumbnail ready for JSON selection")
+
+			parts = append(parts, genai.Blob{
+				MIMEType: mimeType,
+				Data:     thumbData,
+			})
+
+		} else if filehandler.IsVideo(ext) {
+			log.Info().
+				Str("file", filepath.Base(file.Path)).
+				Int64("size_mb", file.Size/(1024*1024)).
+				Msg("Compressing video for JSON selection...")
+
+			var videoMeta *filehandler.VideoMetadata
+			if file.Metadata != nil {
+				videoMeta, _ = file.Metadata.(*filehandler.VideoMetadata)
+			}
+
+			compressedPath, compressedSize, cleanup, err := filehandler.CompressVideoForGemini(ctx, file.Path, videoMeta)
+			if err != nil {
+				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to compress video, skipping")
+				continue
+			}
+			cleanupFuncs = append(cleanupFuncs, cleanup)
+
+			log.Info().
+				Str("file", filepath.Base(file.Path)).
+				Int64("original_mb", file.Size/(1024*1024)).
+				Int64("compressed_mb", compressedSize/(1024*1024)).
+				Msg("Video compressed for JSON selection")
+
+			uploadedFile, err := uploadVideoFile(ctx, client, compressedPath)
+			if err != nil {
+				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video, skipping")
+				continue
+			}
+			uploadedFiles = append(uploadedFiles, uploadedFile)
+
+			parts = append(parts, genai.FileData{
+				MIMEType: uploadedFile.MIMEType,
+				URI:      uploadedFile.URI,
+			})
+		}
+	}
+
+	// Add the text prompt at the end
+	parts = append(parts, genai.Text(prompt))
+
+	log.Info().
+		Int("num_images", imageCount).
+		Int("num_videos", len(uploadedFiles)).
+		Msg("Sending media to Gemini for JSON selection...")
+
+	// Generate content
+	resp, err := model.GenerateContent(ctx, parts...)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to generate JSON selection from Gemini")
+		return nil, fmt.Errorf("failed to generate content: %w", err)
+	}
+
+	if resp == nil || len(resp.Candidates) == 0 {
+		log.Warn().Msg("Received empty response from Gemini")
+		return nil, fmt.Errorf("received empty response from Gemini API")
+	}
+
+	// Extract text from response
+	var result strings.Builder
+	for _, candidate := range resp.Candidates {
+		if candidate.Content != nil {
+			for _, part := range candidate.Content.Parts {
+				if text, ok := part.(genai.Text); ok {
+					result.WriteString(string(text))
+				}
+			}
+		}
+	}
+
+	responseText := result.String()
+	log.Debug().
+		Int("response_length", len(responseText)).
+		Msg("Received JSON selection response from Gemini")
+
+	// Parse JSON response
+	selectionResult, err := parseSelectionResponse(responseText)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse selection response: %w", err)
+	}
+
+	log.Info().
+		Int("selected", len(selectionResult.Selected)).
+		Int("excluded", len(selectionResult.Excluded)).
+		Int("scenes", len(selectionResult.SceneGroups)).
+		Msg("JSON media selection complete")
+
+	return selectionResult, nil
+}
+
+// parseSelectionResponse extracts and parses the JSON object from Gemini's response.
+// Handles cases where Gemini wraps the JSON in markdown code fences.
+func parseSelectionResponse(response string) (*SelectionResult, error) {
+	text := strings.TrimSpace(response)
+
+	// Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+	if strings.HasPrefix(text, "```") {
+		lines := strings.Split(text, "\n")
+		if len(lines) >= 3 {
+			startIdx := 1
+			endIdx := len(lines) - 1
+			for i := len(lines) - 1; i >= 0; i-- {
+				if strings.TrimSpace(lines[i]) == "```" {
+					endIdx = i
+					break
+				}
+			}
+			text = strings.Join(lines[startIdx:endIdx], "\n")
+		}
+	}
+
+	text = strings.TrimSpace(text)
+
+	// Try to find JSON object in the text if it's embedded in other text
+	if !strings.HasPrefix(text, "{") {
+		startIdx := strings.Index(text, "{")
+		if startIdx == -1 {
+			log.Error().Str("response", response).Msg("No JSON object found in selection response")
+			return nil, fmt.Errorf("no JSON object found in response")
+		}
+		text = text[startIdx:]
+	}
+
+	// Find the matching closing brace
+	if endIdx := strings.LastIndex(text, "}"); endIdx != -1 {
+		text = text[:endIdx+1]
+	}
+
+	var result SelectionResult
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		log.Error().
+			Err(err).
+			Str("json_text", text[:min(len(text), 500)]).
+			Msg("Failed to parse selection JSON")
+		return nil, fmt.Errorf("invalid JSON in selection response: %w", err)
+	}
+
+	if len(result.Selected) == 0 && len(result.Excluded) == 0 {
+		return nil, fmt.Errorf("empty selection results (no items selected or excluded)")
+	}
+
+	return &result, nil
 }
 
 // uploadVideoFile uploads a video file to Gemini Files API and waits for processing.

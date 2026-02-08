@@ -295,13 +295,14 @@ func ScanDirectoryMediaWithOptions(dirPath string, opts ScanOptions) ([]*MediaFi
 	return mediaFiles, nil
 }
 
-// GenerateThumbnail creates a low-resolution thumbnail of the image.
+// GenerateThumbnail creates a low-resolution thumbnail of a media file.
 // Returns the thumbnail bytes, MIME type, and any error.
 //
 // Strategy:
 //   - JPEG/PNG: Resize using pure Go (golang.org/x/image/draw)
 //   - HEIC/HEIF: Use ffmpeg to convert to JPEG thumbnail (cross-platform, DDR-027)
 //   - GIF/WebP: Return original file (typically small)
+//   - Video (MP4/MOV/AVI/WebM/MKV): Extract frame at 1s using ffmpeg (DDR-030)
 func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, error) {
 	ext := strings.ToLower(filepath.Ext(mediaFile.Path))
 
@@ -326,9 +327,78 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 		}
 		return data, mediaFile.MIMEType, nil
 
+	case ".mp4", ".mov", ".avi", ".webm", ".mkv":
+		return GenerateVideoThumbnail(mediaFile.Path, maxDimension)
+
 	default:
 		return nil, "", fmt.Errorf("unsupported format for thumbnail: %s", ext)
 	}
+}
+
+// GenerateVideoThumbnail extracts a frame from a video at the 1-second mark
+// and returns it as a JPEG thumbnail. Uses ffmpeg for extraction.
+// Falls back to a frame at 0s if the video is shorter than 1 second.
+// See DDR-030: Cloud Selection Backend Architecture.
+func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string, error) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return nil, "", fmt.Errorf("ffmpeg not found: video thumbnail generation requires ffmpeg")
+	}
+
+	tmpFile, err := os.CreateTemp("", "vthumb-*.jpg")
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	// ffmpeg -i input.mp4 -ss 1 -vframes 1 -vf "scale='min(1024,iw)':-2" -y output.jpg
+	// -ss 1: seek to 1 second (avoids black/blank first frames)
+	// -vframes 1: extract single frame
+	// scale filter: downscale only if larger, preserve aspect ratio, ensure even height
+	vf := fmt.Sprintf("scale='min(%d,iw)':-2", maxDimension)
+	cmd := exec.Command(ffmpegPath,
+		"-i", videoPath,
+		"-ss", "1",
+		"-vframes", "1",
+		"-vf", vf,
+		"-f", "image2",
+		"-y", tmpPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Retry at 0s in case the video is shorter than 1 second
+		cmd2 := exec.Command(ffmpegPath,
+			"-i", videoPath,
+			"-vframes", "1",
+			"-vf", vf,
+			"-f", "image2",
+			"-y", tmpPath,
+		)
+		output2, err2 := cmd2.CombinedOutput()
+		if err2 != nil {
+			return nil, "", fmt.Errorf("ffmpeg frame extraction failed: %w: %s / %s", err2, string(output), string(output2))
+		}
+	}
+
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read video thumbnail: %w", err)
+	}
+
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("ffmpeg produced empty thumbnail for %s", filepath.Base(videoPath))
+	}
+
+	log.Debug().
+		Str("video", filepath.Base(videoPath)).
+		Int("thumb_size", len(data)).
+		Int("max_dim", maxDimension).
+		Msg("Video thumbnail generated (ffmpeg frame extraction)")
+
+	return data, "image/jpeg", nil
 }
 
 // generateThumbnailPureGo resizes JPEG/PNG images using pure Go.

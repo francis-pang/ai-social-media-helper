@@ -88,3 +88,70 @@ export interface UploadUrlResponse {
 export interface FullImageResponse {
   url: string;
 }
+
+// --- Selection types (DDR-030) ---
+
+/** Request body for POST /api/selection/start. */
+export interface SelectionStartRequest {
+  sessionId: string;
+  tripContext: string;
+  model?: string;
+}
+
+/** Response from POST /api/selection/start. */
+export interface SelectionStartResponse {
+  id: string;
+}
+
+/** A media item selected by the AI. */
+export interface SelectionItem {
+  rank: number;
+  media: number;
+  filename: string;
+  key: string;
+  type: "Photo" | "Video";
+  scene: string;
+  justification: string;
+  comparisonNote?: string;
+  thumbnailUrl: string;
+}
+
+/** A media item excluded by the AI, with a reason. */
+export interface ExcludedItem {
+  media: number;
+  filename: string;
+  key: string;
+  reason: string;
+  category: "near-duplicate" | "quality-issue" | "content-mismatch" | "redundant-scene";
+  duplicateOf?: string;
+  thumbnailUrl: string;
+}
+
+/** A scene group detected by the AI. */
+export interface SelectionSceneGroup {
+  name: string;
+  gps?: string;
+  timeRange?: string;
+  items: SelectionSceneGroupItem[];
+}
+
+/** A media item within a scene group. */
+export interface SelectionSceneGroupItem {
+  media: number;
+  filename: string;
+  key: string;
+  type: "Photo" | "Video";
+  selected: boolean;
+  description: string;
+  thumbnailUrl: string;
+}
+
+/** Response from GET /api/selection/{id}/results. */
+export interface SelectionResults {
+  id: string;
+  status: "pending" | "processing" | "complete" | "error";
+  selected: SelectionItem[] | null;
+  excluded: ExcludedItem[] | null;
+  sceneGroups: SelectionSceneGroup[] | null;
+  error?: string;
+}
