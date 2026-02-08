@@ -20,9 +20,11 @@ Implement a **Step Functions-orchestrated ZIP bundling strategy** (Option D3) wi
 
 3. **Step Functions state machine** (`DownloadPipeline`) orchestrates parallel ZIP creation with per-bundle retry, concurrency throttling, and fan-in. Each ZIP is created by a separate Lambda invocation (or goroutine in the interim in-process implementation).
 
-4. **Streaming ZIP to S3** — each ZIP is assembled by downloading source files from S3 to Lambda `/tmp`, writing a ZIP file in `/tmp`, and uploading the ZIP back to S3. Since each bundle is capped at 375 MB (videos) or typically ≤ 300 MB (images), the 10 GB `/tmp` limit is never a concern.
+4. **Zstandard (zstd) compression at level 12** — ZIP entries are compressed using zstd (ZIP method 93, APPNOTE 6.3.7) at level 12 via `github.com/klauspost/compress/zstd`. Level 12 maps to `SpeedBestCompression` in the Go library — the highest compression available. While media files (JPEG, MP4) are already compressed and see modest reduction, RAW photos (CR2, NEF, TIFF) and uncompressed audio tracks benefit significantly. The zstd encoder at level 12 requires approximately 128 MB of memory per concurrent writer, so the Lambda must be configured with **≥ 2 GB memory**.
 
-5. **Presigned GET URLs** — after ZIP creation, presigned S3 GET URLs (1-hour expiry) are generated for each ZIP bundle and returned to the frontend.
+5. **ZIP creation in Lambda `/tmp`** — each ZIP is assembled by downloading source files from S3 to Lambda `/tmp`, compressing with zstd into a ZIP file in `/tmp`, and uploading the ZIP back to S3. Since each bundle is capped at 375 MB (videos) or typically ≤ 300 MB (images), the 10 GB `/tmp` limit is never a concern.
+
+6. **Presigned GET URLs** — after ZIP creation, presigned S3 GET URLs (1-hour expiry) are generated for each ZIP bundle and returned to the frontend.
 
 ### Speed Threshold Calculation
 
@@ -34,6 +36,8 @@ Implement a **Step Functions-orchestrated ZIP bundling strategy** (Option D3) wi
 | Conservative estimate | 100 Mbps |
 | Target download time | ≤ 30 seconds per bundle |
 | **Max bundle size** | **100 Mbps × 30s ÷ 8 = 375 MB** |
+| ZIP compression | Zstandard (zstd) level 12 via `klauspost/compress` |
+| Lambda memory | ≥ 2 GB (zstd level 12 encoder window) |
 
 ### Bundle Naming Convention
 
@@ -50,7 +54,7 @@ Start → CalculateBundles → Map: CreateZIP (parallel) → GenerateURLs → Do
 ```
 
 - **CalculateBundles**: HeadObject on each key, separate images/videos, group videos into ≤ 375 MB bundles
-- **Map: CreateZIP**: One Lambda invocation per bundle (MaxConcurrency 5), downloads files from S3, creates ZIP in `/tmp`, uploads ZIP to S3
+- **Map: CreateZIP**: One Lambda invocation per bundle (MaxConcurrency 5, **2 GB memory**), downloads files from S3, creates zstd-compressed ZIP in `/tmp`, uploads ZIP to S3
 - **GenerateURLs**: Presigned GET URLs for each completed ZIP
 
 ### Interim Implementation
@@ -74,7 +78,7 @@ Since Step Functions infrastructure is not yet deployed, the initial implementat
 
 4. **Step Functions for resilience** — ZIP creation is I/O-intensive (download N files, write ZIP, upload). Step Functions provides automatic retry per bundle, concurrency control, and visual monitoring.
 
-5. **ZIP format** — universally supported by all operating systems without additional software. No decompression step needed on macOS (auto-expands in Finder).
+5. **ZIP with zstd compression** — ZIP is universally supported by all operating systems. Zstandard (zstd) at level 12 provides high compression ratios while maintaining fast decompression speed (~1.5 GB/s). macOS 12+ and modern archive utilities (7-Zip, The Unarchiver, `ditto`) support zstd-compressed ZIPs. The higher Lambda memory cost (2 GB vs 256 MB) is offset by reduced S3 storage and faster download times from smaller bundles.
 
 ## Alternatives Considered
 
@@ -85,6 +89,8 @@ Since Step Functions infrastructure is not yet deployed, the initial implementat
 | Single ZIP for everything | Videos + images together could exceed 375 MB threshold; user must wait for entire download even if they only want photos |
 | Fixed file count per ZIP | File sizes vary enormously (1 MB photo vs 500 MB video); count-based splitting doesn't guarantee acceptable download times |
 | Client-side ZIP (JSZip) | Browser memory limits; blocks UI thread; no resumability; large files cause tab crashes |
+| ZIP with Deflate compression | Lower compression ratio than zstd; slower compression at equivalent ratios; universal compatibility is not needed (target is Chrome on macOS 16+) |
+| ZIP with Store (no compression) | No size reduction; wastes bandwidth for RAW photos and uncompressed audio tracks; larger bundles may exceed 375 MB threshold |
 
 ## Consequences
 
@@ -92,13 +98,16 @@ Since Step Functions infrastructure is not yet deployed, the initial implementat
 - Each download bundle completes within 30 seconds for typical AT&T Internet Air users
 - Images always in a single convenient ZIP
 - Videos intelligently grouped by size, not arbitrarily split
+- Zstd level 12 provides high compression ratio — reduces download size and S3 transfer costs
+- Zstd decompression is extremely fast (~1.5 GB/s) — no perceptible delay for the user
 - Parallel ZIP creation reduces total wait time
 - Step Functions provides retry and monitoring for production reliability
-- macOS auto-expands ZIPs in Finder — zero friction
 
 **Trade-offs:**
 - Multiple video ZIPs for large media sets (user downloads 2-3 files instead of 1)
 - S3 storage cost for temporary ZIP files (mitigated by 24-hour TTL auto-expiration)
+- Lambda requires ≥ 2 GB memory for zstd level 12 encoder (higher cost per invocation vs 256 MB)
+- Zstd-compressed ZIPs (method 93) require macOS 12+ or a modern archive utility — older OS versions may not decompress them natively
 - Step Functions adds ~$0.001 per download job in state transition costs
 - Initial implementation uses goroutines (no Step Functions retry/monitoring until infrastructure is deployed)
 

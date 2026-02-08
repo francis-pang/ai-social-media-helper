@@ -479,7 +479,7 @@ After grouping media into post groups, the user can download each group's media 
 1. User clicks "Prepare Download" on a post group
 2. Backend queries each file's size via S3 `HeadObject`
 3. Backend groups files into bundles: 1 image ZIP + N video ZIPs (≤ 375 MB each)
-4. Backend creates each ZIP by downloading from S3, writing to `/tmp`, and uploading the ZIP back to S3
+4. Backend creates each ZIP with **Zstandard (zstd) level 12 compression** by downloading from S3, compressing to `/tmp`, and uploading the ZIP back to S3
 5. Frontend polls for progress and displays download links as bundles complete
 6. Each download link is a presigned S3 GET URL (1-hour expiry) with `Content-Disposition: attachment`
 
@@ -526,7 +526,7 @@ CloudFront ──► API Gateway ──► API Lambda ──► DynamoDB
 | Selection Lambda | Gemini AI media selection (all thumbnails + metadata) | 2-4 GB | 15 min |
 | Enhancement Lambda | Per-photo Gemini image editing | 1-2 GB | 5 min |
 | Video Processing Lambda | Per-video ffmpeg enhancement (optional) | 4+ GB | 15 min |
-| ZIP Lambda | Per-bundle ZIP creation for downloads (DDR-034) | 1-2 GB | 10 min |
+| ZIP Lambda | Per-bundle zstd-compressed ZIP creation for downloads (DDR-034) | 2 GB | 10 min |
 
 **Step Functions state machines (planned):**
 

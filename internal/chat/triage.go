@@ -10,8 +10,8 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"google.golang.org/genai"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/genai"
 )
 
 // TriageResult represents the AI's verdict for a single media item.

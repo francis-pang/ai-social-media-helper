@@ -11,8 +11,8 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"google.golang.org/genai"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/genai"
 )
 
 // DefaultMaxPhotos is the default maximum number of photos to select.
@@ -34,9 +34,9 @@ type SelectionResult struct {
 // SelectedItem represents a media item chosen by the AI.
 type SelectedItem struct {
 	Rank           int    `json:"rank"`
-	Media          int    `json:"media"`                     // 1-indexed media number
+	Media          int    `json:"media"` // 1-indexed media number
 	Filename       string `json:"filename"`
-	Type           string `json:"type"`                      // "Photo" or "Video"
+	Type           string `json:"type"` // "Photo" or "Video"
 	Scene          string `json:"scene"`
 	Justification  string `json:"justification"`
 	ComparisonNote string `json:"comparisonNote,omitempty"`
