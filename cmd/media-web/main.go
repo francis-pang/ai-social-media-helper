@@ -583,6 +583,12 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject path traversal attempts (DDR-028 Problem 6)
+	if containsPathTraversal(filePath) {
+		httpError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		httpError(w, http.StatusBadRequest, "invalid path")
@@ -644,6 +650,12 @@ func handleFullImage(w http.ResponseWriter, r *http.Request) {
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
 		httpError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	// Reject path traversal attempts (DDR-028 Problem 6)
+	if containsPathTraversal(filePath) {
+		httpError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 

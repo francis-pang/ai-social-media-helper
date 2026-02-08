@@ -116,8 +116,10 @@ export function startTriage(
 }
 
 /** Get triage results (poll until status is "complete" or "error"). */
-export function getTriageResults(id: string): Promise<TriageResults> {
-  return fetchJSON<TriageResults>(`/api/triage/${id}/results`);
+export function getTriageResults(id: string, sessionId?: string): Promise<TriageResults> {
+  // In cloud mode, pass sessionId for ownership verification (DDR-028)
+  const params = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+  return fetchJSON<TriageResults>(`/api/triage/${id}/results${params}`);
 }
 
 /** Confirm deletion of selected files. */

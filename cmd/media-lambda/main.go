@@ -421,10 +421,17 @@ func handleTriageRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/triage/{id}/results
+// GET /api/triage/{id}/results?sessionId=...
 func handleTriageResults(w http.ResponseWriter, r *http.Request, job *triageJob) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Ownership check: the caller must provide the sessionId that started the job (DDR-028 Problem 9)
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" || sessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -451,10 +458,17 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, job *triageJob)
 	}
 
 	var req struct {
+		SessionID  string   `json:"sessionId"`
 		DeleteKeys []string `json:"deleteKeys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Ownership check: the caller must provide the sessionId that started the job (DDR-028 Problem 9)
+	if req.SessionID == "" || req.SessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
 

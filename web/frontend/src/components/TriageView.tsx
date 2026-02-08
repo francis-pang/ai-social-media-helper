@@ -34,9 +34,11 @@ function itemThumb(item: TriageItem): string {
 }
 
 function pollResults(id: string) {
+  // Pass sessionId for ownership verification in cloud mode (DDR-028)
+  const sessionId = isCloudMode ? uploadSessionId.value ?? undefined : undefined;
   const interval = setInterval(async () => {
     try {
-      const res = await getTriageResults(id);
+      const res = await getTriageResults(id, sessionId);
       results.value = res;
       if (res.status === "complete" || res.status === "error") {
         clearInterval(interval);
@@ -82,8 +84,9 @@ async function handleConfirmDeletion() {
   confirmLoading.value = true;
   try {
     const ids = Array.from(selectedForDeletion.value);
+    // Include sessionId for ownership verification in cloud mode (DDR-028)
     const req = isCloudMode
-      ? { deleteKeys: ids }
+      ? { deleteKeys: ids, sessionId: uploadSessionId.value }
       : { deletePaths: ids };
     const res = await confirmTriage(triageJobId.value, req);
     confirmResult.value = res;
