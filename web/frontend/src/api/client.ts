@@ -10,6 +10,7 @@ import type {
   UploadUrlResponse,
   FullImageResponse,
 } from "../types/api";
+import { getIdToken } from "../auth/cognito";
 
 /**
  * Whether we're running in cloud mode (served from CloudFront with API Gateway).
@@ -23,12 +24,19 @@ export const isCloudMode: boolean = !!import.meta.env.VITE_CLOUD_MODE;
 const BASE = "";
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  // Attach Cognito JWT token for authenticated API calls (DDR-028)
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) || {}),
+  };
+  const token = await getIdToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE}${url}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
   if (!res.ok) {
     const body = await res.text();

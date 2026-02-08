@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,14 +88,22 @@ type triageResultItem struct {
 var (
 	jobsMu sync.Mutex
 	jobs   = make(map[string]*triageJob)
-	jobSeq int
 )
+
+// newJobID generates a cryptographically random job ID to prevent
+// sequential enumeration. (DDR-028 Problem 8)
+func newJobID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatal().Err(err).Msg("Failed to generate random job ID")
+	}
+	return "triage-" + hex.EncodeToString(b)
+}
 
 func newJob(paths []string) *triageJob {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
-	jobSeq++
-	id := fmt.Sprintf("triage-%d", jobSeq)
+	id := newJobID()
 	j := &triageJob{
 		id:     id,
 		status: "pending",
@@ -250,6 +260,12 @@ func handleBrowse(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		dirPath = home
+	}
+
+	// Reject path traversal attempts (DDR-028 Problem 6)
+	if containsPathTraversal(dirPath) {
+		httpError(w, http.StatusBadRequest, "invalid path")
+		return
 	}
 
 	absPath, err := filepath.Abs(dirPath)
@@ -802,6 +818,13 @@ func isValidDeletePath(job *triageJob, path string) bool {
 		}
 	}
 	return false
+}
+
+// containsPathTraversal returns true if the path contains directory traversal
+// sequences that could escape the intended directory. (DDR-028 Problem 6)
+func containsPathTraversal(p string) bool {
+	cleaned := filepath.Clean(p)
+	return strings.Contains(cleaned, "..")
 }
 
 // --- JSON Helpers ---

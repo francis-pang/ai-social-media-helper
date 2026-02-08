@@ -53,9 +53,19 @@ func getFromGPG() (string, error) {
 
 	passphrasePath, err := getPassphrasePath()
 	if err == nil {
-		if _, statErr := os.Stat(passphrasePath); statErr == nil {
-			log.Debug().Str("passphrase_file", passphrasePath).Msg("Using passphrase file for GPG decryption")
-			args = append(args, "--pinentry-mode", "loopback", "--passphrase-file", passphrasePath)
+		fi, statErr := os.Stat(passphrasePath)
+		if statErr == nil {
+			// Verify file permissions — passphrase file must be owner-only (DDR-028 Problem 14)
+			mode := fi.Mode().Perm()
+			if mode&0077 != 0 {
+				log.Warn().
+					Str("passphrase_file", passphrasePath).
+					Str("permissions", fmt.Sprintf("%04o", mode)).
+					Msg("Passphrase file has insecure permissions (should be 0600); skipping")
+			} else {
+				log.Debug().Str("passphrase_file", passphrasePath).Msg("Using passphrase file for GPG decryption")
+				args = append(args, "--pinentry-mode", "loopback", "--passphrase-file", passphrasePath)
+			}
 		}
 	}
 

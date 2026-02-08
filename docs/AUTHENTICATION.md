@@ -540,5 +540,65 @@ fi
 
 ---
 
-**Last Updated**: 2025-12-31  
-**Version**: 1.1.0
+## Cloud Authentication (DDR-028)
+
+In cloud mode (deployed to AWS), the application uses **Amazon Cognito User Pool** for user authentication instead of API keys.
+
+### Architecture
+
+```
+Browser ──► CloudFront ──► API Gateway ──► Lambda
+                              │
+                         JWT Authorizer
+                         (Cognito User Pool)
+```
+
+- The Cognito User Pool has **self-signup disabled** — users are provisioned by the admin
+- API Gateway validates the JWT token before forwarding requests to Lambda
+- The frontend SPA uses `amazon-cognito-identity-js` for authentication
+- JWT tokens are stored in browser memory and refreshed automatically
+- Health endpoint (`/api/health`) is unauthenticated for monitoring
+
+### User Provisioning
+
+Since self-signup is disabled, create users via AWS CLI:
+
+```bash
+# Create the user (sends a temporary password via email)
+aws cognito-idp admin-create-user \
+  --user-pool-id <user-pool-id> \
+  --username <email> \
+  --user-attributes Name=email,Value=<email> Name=email_verified,Value=true
+
+# Set a permanent password (skip temporary password flow)
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <user-pool-id> \
+  --username <email> \
+  --password '<password>' \
+  --permanent
+```
+
+### Frontend Configuration
+
+The frontend needs two environment variables at build time:
+
+```bash
+VITE_CLOUD_MODE=1
+VITE_COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx
+VITE_COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+These are output by the CDK stack (`UserPoolId` and `UserPoolClientId`).
+
+### Password Policy
+
+- Minimum 12 characters
+- Requires uppercase, lowercase, digits, and symbols
+- Token validity: 1 hour (ID/access), 7 days (refresh)
+
+See [DDR-028](./design-decisions/DDR-028-security-hardening.md) for the full security hardening decision record.
+
+---
+
+**Last Updated**: 2026-02-07
+**Version**: 1.2.0

@@ -340,13 +340,45 @@ Phase 2 migrates the application from a local tool to a remotely hosted service.
 | S3 (media uploads) | Stores uploaded media files (24h auto-expiration) |
 | S3 (frontend) | Stores Preact SPA static assets |
 | CloudFront | Serves frontend + proxies `/api/*` to API Gateway |
-| API Gateway HTTP API | Routes requests to Lambda |
+| API Gateway HTTP API | Routes requests to Lambda (JWT authorizer) |
 | Lambda (`provided.al2023`) | Go binary handling API requests |
+| Cognito User Pool | Authentication (DDR-028) |
 | SSM Parameter Store | Gemini API key (SecureString) |
 | CodePipeline | CI/CD: GitHub source -> Go + Node builds -> S3 + Lambda deploy |
 
 See [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md) for the full decision record.
+See [DDR-028](./design-decisions/DDR-028-security-hardening.md) for the security hardening decision record.
 See [PHASE2-REMOTE-HOSTING.md](./PHASE2-REMOTE-HOSTING.md) for the hosting platform evaluation.
+
+---
+
+## Security Architecture (DDR-028)
+
+The cloud deployment is hardened with defense-in-depth security:
+
+```
+Browser ──► CloudFront ──► API Gateway ──► Lambda
+  │              │               │            │
+  │  x-origin-verify     JWT Authorizer  Origin verify
+  │  custom header       (Cognito)       middleware
+  │                                          │
+  │              Input validation ◄──────────┘
+  │              (sessionId, filename, S3 key,
+  │               content type, file size)
+```
+
+| Layer | Control | Purpose |
+|-------|---------|---------|
+| CloudFront | Origin-verify header | Blocks direct API Gateway access |
+| API Gateway | JWT authorizer (Cognito) | Authentication |
+| API Gateway | Default throttling (100 burst / 50 rps) | Rate limiting / DoS protection |
+| API Gateway | CORS locked to CloudFront domain | Cross-origin restriction |
+| Lambda | Origin-verify middleware | Defense-in-depth for header check |
+| Lambda | Input validation (UUID, filename regex) | Injection / traversal prevention |
+| Lambda | Content-type allowlist + size limits | Upload abuse prevention |
+| Lambda | Random job IDs (crypto/rand) | Enumeration prevention |
+| Lambda | Safe error messages | Information leak prevention |
+| S3 | CORS locked to CloudFront domain | Cross-origin restriction |
 
 ---
 
@@ -354,13 +386,12 @@ See [PHASE2-REMOTE-HOSTING.md](./PHASE2-REMOTE-HOSTING.md) for the hosting platf
 
 ### Potential Enhancements
 
-1. **Video support in Lambda** — Add an FFmpeg Lambda layer to enable video metadata extraction and compression for cloud triage
-2. **Custom domain** — ACM certificate + Route 53 for a friendly URL
-3. **Authentication** — Cognito User Pool for multi-user support
-4. **Google Drive storage provider** — Triage media already uploaded to Google Drive without re-downloading
+1. **Custom domain** — ACM certificate + Route 53 for a friendly URL
+2. **AWS WAF** — Web Application Firewall with managed rule sets (~$6-8/mo, see DDR-028)
+3. **Google Drive storage provider** — Triage media already uploaded to Google Drive without re-downloading
 
 ---
 
 **Last Updated**: 2026-02-07
-**Updated for**: DDR-026 (Phase 2 Lambda + S3 Cloud Deployment)
+**Updated for**: DDR-028 (Security Hardening)
 

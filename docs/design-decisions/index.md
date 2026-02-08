@@ -39,6 +39,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-025](./DDR-025-ssm-parameter-store-secrets.md) | 2026-02-06 | SSM Parameter Store for Runtime Secrets | Accepted |
 | [DDR-026](./DDR-026-phase2-lambda-s3-deployment.md) | 2026-02-07 | Phase 2 Lambda + S3 Cloud Deployment | Accepted |
 | [DDR-027](./DDR-027-container-image-lambda-local-commands.md) | 2026-02-07 | Container Image Lambda for Local OS Command Dependencies | Accepted |
+| [DDR-028](./DDR-028-security-hardening.md) | 2026-02-07 | Security Hardening for Cloud Deployment | Implemented |
 
 ---
 
@@ -47,9 +48,10 @@ For new decisions, use [design_template.md](./design_template.md).
 | Status | Meaning |
 |--------|---------|
 | **Accepted** | Decision is in effect |
+| **Implemented** | Decision is in effect and fully implemented |
 | **Superseded** | Replaced by a newer decision |
 | **Deprecated** | No longer applicable |
 
 ---
 
-**Last Updated**: 2026-02-07 (DDR-027)
+**Last Updated**: 2026-02-07 (DDR-028)

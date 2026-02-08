@@ -9,8 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "preact": "^10.25.4",
-    "@preact/signals": "^2.0.2"
+    "@preact/signals": "^2.0.2",
+    "amazon-cognito-identity-js": "^6.3.16",
+    "preact": "^10.25.4"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.9.4",

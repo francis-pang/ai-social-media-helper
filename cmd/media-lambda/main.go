@@ -3,9 +3,16 @@
 // It wraps the same triage logic from the chat package behind API Gateway,
 // using S3 for media storage instead of the local filesystem.
 //
+// Security (DDR-028):
+//   - Origin-verify middleware blocks direct API Gateway access (CloudFront-only)
+//   - Input validation on sessionId (UUID), filename (safe chars), S3 key (uuid/filename)
+//   - Content-type allowlist and file size limits for uploads
+//   - Cryptographically random job IDs prevent enumeration
+//   - Session ownership enforced on triage results/confirm
+//
 // Endpoints:
 //
-//	GET  /api/health               — health check
+//	GET  /api/health               — health check (no auth required)
 //	GET  /api/upload-url           — presigned S3 PUT URL for browser upload
 //	POST /api/triage/start         — start triage from uploaded S3 files
 //	GET  /api/triage/{id}/results  — poll triage results
@@ -16,12 +23,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -41,11 +51,92 @@ import (
 	"google.golang.org/api/option"
 )
 
+// --- Input Validation (DDR-028) ---
+
+// uuidRegex matches UUID v4 format: 8-4-4-4-12 lowercase hex with dashes.
+var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// safeFilenameRegex allows alphanumeric, dots, hyphens, underscores, spaces, and parentheses.
+var safeFilenameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._ ()-]{0,254}$`)
+
+func validateSessionID(id string) error {
+	if !uuidRegex.MatchString(id) {
+		return fmt.Errorf("invalid sessionId: must be a UUID (e.g., a1b2c3d4-e5f6-7890-abcd-ef1234567890)")
+	}
+	return nil
+}
+
+func validateFilename(name string) error {
+	if name == "" {
+		return fmt.Errorf("filename is required")
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return fmt.Errorf("filename contains invalid characters")
+	}
+	if !safeFilenameRegex.MatchString(name) {
+		return fmt.Errorf("filename contains invalid characters; only alphanumeric, dots, hyphens, underscores, spaces, and parentheses allowed")
+	}
+	return nil
+}
+
+func validateS3Key(key string) error {
+	if strings.Contains(key, "..") || strings.HasPrefix(key, "/") || strings.Contains(key, "\\") {
+		return fmt.Errorf("invalid key")
+	}
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 || !uuidRegex.MatchString(parts[0]) || parts[1] == "" {
+		return fmt.Errorf("invalid key format: expected <uuid>/<filename>")
+	}
+	return nil
+}
+
+// --- Upload Validation (DDR-028) ---
+
+// allowedContentTypes is the content-type allowlist for uploads.
+var allowedContentTypes = map[string]bool{
+	// Photos
+	"image/jpeg":    true,
+	"image/png":     true,
+	"image/gif":     true,
+	"image/webp":    true,
+	"image/heic":    true,
+	"image/heif":    true,
+	"image/tiff":    true,
+	"image/bmp":     true,
+	"image/svg+xml": true,
+	// RAW camera formats
+	"image/x-adobe-dng":     true,
+	"image/x-canon-cr2":     true,
+	"image/x-canon-cr3":     true,
+	"image/x-nikon-nef":     true,
+	"image/x-sony-arw":      true,
+	"image/x-fuji-raf":      true,
+	"image/x-olympus-orf":   true,
+	"image/x-panasonic-rw2": true,
+	"image/x-samsung-srw":   true,
+	// Videos
+	"video/mp4":        true,
+	"video/quicktime":  true,
+	"video/webm":       true,
+	"video/x-msvideo":  true,
+	"video/x-matroska": true,
+	"video/3gpp":       true,
+	"video/MP2T":       true,
+}
+
+const maxPhotoSize int64 = 50 * 1024 * 1024        // 50 MB
+const maxVideoSize int64 = 5 * 1024 * 1024 * 1024  // 5 GB
+
+func isVideoContentType(ct string) bool {
+	return strings.HasPrefix(ct, "video/")
+}
+
 // AWS clients initialized at cold start.
 var (
-	s3Client    *s3.Client
-	presigner   *s3.PresignClient
-	mediaBucket string
+	s3Client          *s3.Client
+	presigner         *s3.PresignClient
+	mediaBucket       string
+	originVerifySecret string // DDR-028: shared secret for CloudFront origin verification
 )
 
 func init() {
@@ -61,6 +152,11 @@ func init() {
 	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
 	if mediaBucket == "" {
 		log.Fatal().Msg("MEDIA_BUCKET_NAME environment variable is required")
+	}
+
+	originVerifySecret = os.Getenv("ORIGIN_VERIFY_SECRET")
+	if originVerifySecret == "" {
+		log.Warn().Msg("ORIGIN_VERIFY_SECRET not set — origin verification disabled")
 	}
 
 	// Load Gemini API key from SSM Parameter Store if not set via env var.
@@ -82,6 +178,25 @@ func init() {
 	}
 }
 
+// withOriginVerify is middleware that rejects requests lacking the correct
+// x-origin-verify header. CloudFront injects this header via a custom origin
+// header, so direct API Gateway access is blocked. (DDR-028 Problem 1)
+func withOriginVerify(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if originVerifySecret == "" {
+			// Secret not configured — allow through (dev/initial deploy)
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Header.Get("x-origin-verify") != originVerifySecret {
+			log.Warn().Str("path", r.URL.Path).Msg("Blocked request: missing or invalid x-origin-verify header")
+			httpError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -92,7 +207,10 @@ func main() {
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)
 
-	adapter := httpadapter.NewV2(mux)
+	// Wrap with origin-verify middleware (DDR-028)
+	handler := withOriginVerify(mux)
+
+	adapter := httpadapter.NewV2(handler)
 	lambda.Start(adapter.ProxyWithContext)
 }
 
@@ -109,6 +227,12 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/upload-url?sessionId=...&filename=...&contentType=...
 // Returns a presigned S3 PUT URL so the browser can upload directly to S3.
+//
+// Security (DDR-028):
+//   - sessionId must be a valid UUID
+//   - filename is sanitized and validated against safe character set
+//   - contentType must be in the allowed media type list
+//   - Presigned URL includes Content-Length constraint to enforce size limits
 func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -124,14 +248,38 @@ func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize filename
-	filename = filepath.Base(filename)
+	// Validate sessionId is a proper UUID (DDR-028 Problem 3)
+	if err := validateSessionID(sessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Sanitize and validate filename (DDR-028 Problem 4)
+	filename = filepath.Base(filename) // strip directory components
+	if err := validateFilename(filename); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Validate content type against allowlist (DDR-028 Problem 7)
+	if !allowedContentTypes[contentType] {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type: %s", contentType))
+		return
+	}
+
+	// Enforce file size limits (DDR-028 Problem 7)
+	sizeLimit := maxPhotoSize
+	if isVideoContentType(contentType) {
+		sizeLimit = maxVideoSize
+	}
+
 	key := sessionID + "/" + filename
 
 	result, err := presigner.PresignPutObject(context.Background(), &s3.PutObjectInput{
-		Bucket:      &mediaBucket,
-		Key:         &key,
-		ContentType: &contentType,
+		Bucket:         &mediaBucket,
+		Key:            &key,
+		ContentType:    &contentType,
+		ContentLength:  aws.Int64(sizeLimit),
 	}, s3.WithPresignExpires(15*time.Minute))
 	if err != nil {
 		log.Error().Err(err).Str("key", key).Msg("Failed to generate presigned URL")
@@ -169,14 +317,22 @@ type triageResultItem struct {
 var (
 	jobsMu sync.Mutex
 	jobs   = make(map[string]*triageJob)
-	jobSeq int
 )
+
+// newJobID generates a cryptographically random job ID to prevent
+// sequential enumeration. (DDR-028 Problem 8)
+func newJobID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatal().Err(err).Msg("Failed to generate random job ID")
+	}
+	return "triage-" + hex.EncodeToString(b)
+}
 
 func newJob(sessionID string) *triageJob {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
-	jobSeq++
-	id := fmt.Sprintf("triage-%d", jobSeq)
+	id := newJobID()
 	j := &triageJob{
 		id:        id,
 		sessionID: sessionID,
@@ -214,6 +370,11 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "sessionId is required")
 		return
 	}
+	// Validate sessionId is a proper UUID (DDR-028 Problem 3)
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	model := chat.DefaultModelName
 	if req.Model != "" {
@@ -243,9 +404,10 @@ func handleTriageRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	action := parts[1]
 
+	// Use a generic "not found" to prevent job ID enumeration (DDR-028 Problem 8)
 	job := getJob(jobID)
 	if job == nil {
-		httpError(w, http.StatusNotFound, "job not found")
+		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -339,6 +501,12 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate S3 key format (DDR-028 Problem 5)
+	if err := validateS3Key(key); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	ext := strings.ToLower(filepath.Ext(key))
 
 	// For images, download from S3, generate thumbnail, return bytes.
@@ -396,6 +564,12 @@ func handleFullImage(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")
 	if key == "" {
 		httpError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+
+	// Validate S3 key format (DDR-028 Problem 5)
+	if err := validateS3Key(key); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -616,6 +790,17 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
-func httpError(w http.ResponseWriter, status int, message string) {
-	respondJSON(w, status, map[string]string{"error": message})
+// httpError sends a JSON error response. The clientMsg is returned to the caller.
+// Optional internalDetails are logged server-side but never sent to the client.
+// This prevents leaking sensitive info (S3 paths, ARNs, stack traces) while
+// keeping client messages useful for debugging. (DDR-028 Problem 16)
+func httpError(w http.ResponseWriter, status int, clientMsg string, internalDetails ...string) {
+	if len(internalDetails) > 0 {
+		log.Error().
+			Int("status", status).
+			Str("clientMsg", clientMsg).
+			Strs("internalDetails", internalDetails).
+			Msg("HTTP error with internal details")
+	}
+	respondJSON(w, status, map[string]string{"error": clientMsg})
 }
