@@ -28,6 +28,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg" // register JPEG decoder for image.DecodeConfig
+	_ "image/png"  // register PNG decoder for image.DecodeConfig
 	"io"
 	"net/http"
 	"os"
@@ -47,9 +50,7 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
-	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
-	"google.golang.org/api/option"
 )
 
 // --- Input Validation (DDR-028) ---
@@ -125,8 +126,8 @@ var allowedContentTypes = map[string]bool{
 	"video/MP2T":       true,
 }
 
-const maxPhotoSize int64 = 50 * 1024 * 1024        // 50 MB
-const maxVideoSize int64 = 5 * 1024 * 1024 * 1024  // 5 GB
+const maxPhotoSize int64 = 50 * 1024 * 1024       // 50 MB
+const maxVideoSize int64 = 5 * 1024 * 1024 * 1024 // 5 GB
 
 func isVideoContentType(ct string) bool {
 	return strings.HasPrefix(ct, "video/")
@@ -134,9 +135,9 @@ func isVideoContentType(ct string) bool {
 
 // AWS clients initialized at cold start.
 var (
-	s3Client          *s3.Client
-	presigner         *s3.PresignClient
-	mediaBucket       string
+	s3Client           *s3.Client
+	presigner          *s3.PresignClient
+	mediaBucket        string
 	originVerifySecret string // DDR-028: shared secret for CloudFront origin verification
 )
 
@@ -207,6 +208,8 @@ func main() {
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
 	mux.HandleFunc("/api/selection/start", handleSelectionStart)
 	mux.HandleFunc("/api/selection/", handleSelectionRoutes)
+	mux.HandleFunc("/api/enhance/start", handleEnhanceStart)
+	mux.HandleFunc("/api/enhance/", handleEnhanceRoutes)
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)
 
@@ -279,10 +282,10 @@ func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 	key := sessionID + "/" + filename
 
 	result, err := presigner.PresignPutObject(context.Background(), &s3.PutObjectInput{
-		Bucket:         &mediaBucket,
-		Key:            &key,
-		ContentType:    &contentType,
-		ContentLength:  aws.Int64(sizeLimit),
+		Bucket:        &mediaBucket,
+		Key:           &key,
+		ContentType:   &contentType,
+		ContentLength: aws.Int64(sizeLimit),
 	}, s3.WithPresignExpires(15*time.Minute))
 	if err != nil {
 		log.Error().Err(err).Str("key", key).Msg("Failed to generate presigned URL")
@@ -640,12 +643,11 @@ func runTriageJob(job *triageJob, model string) {
 		return
 	}
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	client, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		setJobError(job, fmt.Sprintf("Failed to create Gemini client: %v", err))
 		return
 	}
-	defer client.Close()
 
 	// List objects in the session prefix
 	prefix := job.sessionID + "/"
@@ -949,12 +951,11 @@ func runSelectionJob(job *selectionJob, tripContext string, model string) {
 		return
 	}
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	client, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		setSelectionJobError(job, fmt.Sprintf("Failed to create Gemini client: %v", err))
 		return
 	}
-	defer client.Close()
 
 	// List objects in the session prefix
 	prefix := job.sessionID + "/"
@@ -1154,6 +1155,556 @@ func preGenerateThumbnails(ctx context.Context, sessionID string, files []*fileh
 
 	wg.Wait()
 	log.Info().Int("count", len(files)).Msg("Thumbnail pre-generation complete")
+}
+
+// --- Enhancement Job Management (DDR-031) ---
+
+type enhancementJob struct {
+	mu             sync.Mutex
+	id             string
+	sessionID      string
+	status         string // "pending", "processing", "complete", "error"
+	items          []enhancementResultItem
+	totalCount     int
+	completedCount int
+	errMsg         string
+}
+
+type enhancementResultItem struct {
+	Key              string               `json:"key"`
+	Filename         string               `json:"filename"`
+	Phase            string               `json:"phase"`
+	OriginalKey      string               `json:"originalKey"`
+	EnhancedKey      string               `json:"enhancedKey"`
+	OriginalThumbKey string               `json:"originalThumbKey"`
+	EnhancedThumbKey string               `json:"enhancedThumbKey"`
+	Phase1Text       string               `json:"phase1Text"`
+	Analysis         *chat.AnalysisResult `json:"analysis,omitempty"`
+	ImagenEdits      int                  `json:"imagenEdits"`
+	FeedbackHistory  []chat.FeedbackEntry `json:"feedbackHistory"`
+	Error            string               `json:"error,omitempty"`
+}
+
+var (
+	enhJobsMu sync.Mutex
+	enhJobs   = make(map[string]*enhancementJob)
+)
+
+func newEnhancementJobID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatal().Err(err).Msg("Failed to generate random enhancement job ID")
+	}
+	return "enh-" + hex.EncodeToString(b)
+}
+
+func newEnhancementJob(sessionID string) *enhancementJob {
+	enhJobsMu.Lock()
+	defer enhJobsMu.Unlock()
+	id := newEnhancementJobID()
+	j := &enhancementJob{
+		id:        id,
+		sessionID: sessionID,
+		status:    "pending",
+	}
+	enhJobs[id] = j
+	return j
+}
+
+func getEnhancementJob(id string) *enhancementJob {
+	enhJobsMu.Lock()
+	defer enhJobsMu.Unlock()
+	return enhJobs[id]
+}
+
+func setEnhancementJobError(job *enhancementJob, msg string) {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	job.status = "error"
+	job.errMsg = msg
+	log.Error().Str("job", job.id).Str("error", msg).Msg("Enhancement job failed")
+}
+
+// --- Enhancement Endpoints (DDR-031) ---
+
+// POST /api/enhance/start
+// Body: {"sessionId": "uuid", "keys": ["uuid/file1.jpg", ...]}
+func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string   `json:"sessionId"`
+		Keys      []string `json:"keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" {
+		httpError(w, http.StatusBadRequest, "sessionId is required")
+		return
+	}
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Keys) == 0 {
+		httpError(w, http.StatusBadRequest, "at least one key is required")
+		return
+	}
+
+	// Validate all keys belong to the session
+	for _, key := range req.Keys {
+		if err := validateS3Key(key); err != nil {
+			httpError(w, http.StatusBadRequest, fmt.Sprintf("invalid key: %s", err.Error()))
+			return
+		}
+		if !strings.HasPrefix(key, req.SessionID+"/") {
+			httpError(w, http.StatusBadRequest, "key does not belong to session")
+			return
+		}
+	}
+
+	// Filter to photos only (enhancement is for photos)
+	var photoKeys []string
+	for _, key := range req.Keys {
+		ext := strings.ToLower(filepath.Ext(key))
+		if filehandler.IsImage(ext) {
+			photoKeys = append(photoKeys, key)
+		}
+	}
+
+	if len(photoKeys) == 0 {
+		httpError(w, http.StatusBadRequest, "no photo files in the provided keys")
+		return
+	}
+
+	job := newEnhancementJob(req.SessionID)
+	go runEnhancementJob(job, photoKeys)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"id": job.id,
+	})
+}
+
+func handleEnhanceRoutes(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/enhance/"), "/")
+	if len(parts) < 2 {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	jobID := parts[0]
+	if !strings.HasPrefix(jobID, "enh-") {
+		jobID = "enh-" + jobID
+	}
+	action := parts[1]
+
+	job := getEnhancementJob(jobID)
+	if job == nil {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	switch action {
+	case "results":
+		handleEnhanceResults(w, r, job)
+	case "feedback":
+		handleEnhanceFeedback(w, r, job)
+	default:
+		httpError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// GET /api/enhance/{id}/results?sessionId=...
+func handleEnhanceResults(w http.ResponseWriter, r *http.Request, job *enhancementJob) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Ownership check (DDR-028)
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" || sessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	resp := map[string]interface{}{
+		"id":             job.id,
+		"status":         job.status,
+		"items":          job.items,
+		"totalCount":     job.totalCount,
+		"completedCount": job.completedCount,
+	}
+	if job.errMsg != "" {
+		resp["error"] = job.errMsg
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/enhance/{id}/feedback
+// Body: {"sessionId": "uuid", "key": "uuid/file.jpg", "feedback": "make it brighter"}
+func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, job *enhancementJob) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"sessionId"`
+		Key       string `json:"key"`
+		Feedback  string `json:"feedback"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Ownership check (DDR-028)
+	if req.SessionID == "" || req.SessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if req.Key == "" || req.Feedback == "" {
+		httpError(w, http.StatusBadRequest, "key and feedback are required")
+		return
+	}
+
+	// Find the item
+	job.mu.Lock()
+	var targetIdx int = -1
+	for i, item := range job.items {
+		if item.Key == req.Key || item.EnhancedKey == req.Key {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx == -1 {
+		job.mu.Unlock()
+		httpError(w, http.StatusNotFound, "item not found in enhancement job")
+		return
+	}
+	item := job.items[targetIdx]
+	job.mu.Unlock()
+
+	// Run feedback processing asynchronously
+	go func() {
+		ctx := context.Background()
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			return
+		}
+
+		geminiImageClient := chat.NewGeminiImageClient(apiKey)
+
+		// Download the current enhanced image
+		enhancedKey := item.EnhancedKey
+		if enhancedKey == "" {
+			enhancedKey = item.Key
+		}
+
+		tmpPath, cleanup, err := downloadFromS3(ctx, enhancedKey)
+		if err != nil {
+			log.Error().Err(err).Str("key", enhancedKey).Msg("Failed to download enhanced image for feedback")
+			return
+		}
+		defer cleanup()
+
+		imageData, err := os.ReadFile(tmpPath)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to read enhanced image")
+			return
+		}
+
+		// Determine MIME type
+		ext := strings.ToLower(filepath.Ext(enhancedKey))
+		mime := "image/jpeg"
+		if m, ok := filehandler.SupportedImageExtensions[ext]; ok {
+			mime = m
+		}
+
+		// Get image dimensions for mask generation
+		imgConfig, _, err := image.DecodeConfig(bytes.NewReader(imageData))
+		imageWidth := 1024
+		imageHeight := 1024
+		if err == nil {
+			imageWidth = imgConfig.Width
+			imageHeight = imgConfig.Height
+		}
+
+		// Set up Imagen client (optional)
+		var imagenClient *chat.ImagenClient
+		vertexProject := os.Getenv("VERTEX_AI_PROJECT")
+		vertexRegion := os.Getenv("VERTEX_AI_REGION")
+		vertexToken := os.Getenv("VERTEX_AI_TOKEN")
+		if vertexProject != "" && vertexRegion != "" && vertexToken != "" {
+			imagenClient = chat.NewImagenClient(vertexProject, vertexRegion, vertexToken)
+		}
+
+		// Process feedback
+		resultData, resultMIME, feedbackEntry, err := chat.ProcessFeedback(
+			ctx, geminiImageClient, imagenClient,
+			imageData, mime, req.Feedback,
+			item.FeedbackHistory, imageWidth, imageHeight,
+		)
+		if err != nil {
+			log.Warn().Err(err).Msg("Feedback processing failed")
+		}
+
+		// Upload the result to S3
+		if resultData != nil && len(resultData) > 0 {
+			feedbackKey := fmt.Sprintf("%s/enhanced/%s", job.sessionID, filepath.Base(item.Key))
+			contentType := resultMIME
+			_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      &mediaBucket,
+				Key:         &feedbackKey,
+				Body:        bytes.NewReader(resultData),
+				ContentType: &contentType,
+			})
+			if uploadErr != nil {
+				log.Error().Err(uploadErr).Str("key", feedbackKey).Msg("Failed to upload feedback result")
+				return
+			}
+
+			// Generate and upload thumbnail
+			thumbKey := fmt.Sprintf("%s/thumbnails/enhanced-%s.jpg", job.sessionID,
+				strings.TrimSuffix(filepath.Base(item.Key), filepath.Ext(item.Key)))
+			thumbData, _, thumbErr := generateThumbnailFromBytes(resultData, resultMIME, 400)
+			if thumbErr == nil {
+				thumbContentType := "image/jpeg"
+				s3Client.PutObject(ctx, &s3.PutObjectInput{
+					Bucket:      &mediaBucket,
+					Key:         &thumbKey,
+					Body:        bytes.NewReader(thumbData),
+					ContentType: &thumbContentType,
+				})
+			}
+
+			// Update job state
+			job.mu.Lock()
+			job.items[targetIdx].EnhancedKey = feedbackKey
+			job.items[targetIdx].EnhancedThumbKey = thumbKey
+			job.items[targetIdx].Phase = chat.PhaseFeedback
+			if feedbackEntry != nil {
+				job.items[targetIdx].FeedbackHistory = append(job.items[targetIdx].FeedbackHistory, *feedbackEntry)
+			}
+			job.mu.Unlock()
+		}
+	}()
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"status": "processing",
+	})
+}
+
+// --- Enhancement Processing ---
+
+func runEnhancementJob(job *enhancementJob, photoKeys []string) {
+	job.mu.Lock()
+	job.status = "processing"
+	job.totalCount = len(photoKeys)
+	// Initialize items
+	for _, key := range photoKeys {
+		job.items = append(job.items, enhancementResultItem{
+			Key:         key,
+			Filename:    filepath.Base(key),
+			Phase:       chat.PhaseInitial,
+			OriginalKey: key,
+		})
+	}
+	job.mu.Unlock()
+
+	ctx := context.Background()
+
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		setEnhancementJobError(job, "GEMINI_API_KEY not configured")
+		return
+	}
+
+	geminiImageClient := chat.NewGeminiImageClient(apiKey)
+
+	// Set up Imagen client (optional — only if Vertex AI is configured)
+	var imagenClient *chat.ImagenClient
+	vertexProject := os.Getenv("VERTEX_AI_PROJECT")
+	vertexRegion := os.Getenv("VERTEX_AI_REGION")
+	vertexToken := os.Getenv("VERTEX_AI_TOKEN")
+	if vertexProject != "" && vertexRegion != "" && vertexToken != "" {
+		imagenClient = chat.NewImagenClient(vertexProject, vertexRegion, vertexToken)
+		log.Info().Msg("Imagen 3 client configured for Phase 3 surgical edits")
+	} else {
+		log.Info().Msg("Imagen 3 not configured — Phase 3 will be skipped")
+	}
+
+	// Process each photo sequentially (to stay within rate limits)
+	// Future: use Step Functions Map state for parallel processing
+	for i, key := range photoKeys {
+		log.Info().
+			Int("index", i+1).
+			Int("total", len(photoKeys)).
+			Str("key", key).
+			Msg("Enhancing photo")
+
+		// Download from S3
+		tmpPath, cleanup, err := downloadFromS3(ctx, key)
+		if err != nil {
+			job.mu.Lock()
+			job.items[i].Phase = chat.PhaseError
+			job.items[i].Error = fmt.Sprintf("Download failed: %v", err)
+			job.mu.Unlock()
+			log.Warn().Err(err).Str("key", key).Msg("Failed to download photo for enhancement")
+			continue
+		}
+
+		imageData, err := os.ReadFile(tmpPath)
+		cleanup()
+		if err != nil {
+			job.mu.Lock()
+			job.items[i].Phase = chat.PhaseError
+			job.items[i].Error = fmt.Sprintf("Read failed: %v", err)
+			job.mu.Unlock()
+			continue
+		}
+
+		// Determine MIME type
+		ext := strings.ToLower(filepath.Ext(key))
+		mime := "image/jpeg"
+		if m, ok := filehandler.SupportedImageExtensions[ext]; ok {
+			mime = m
+		}
+
+		// Get image dimensions for mask generation
+		imgConfig, _, configErr := image.DecodeConfig(bytes.NewReader(imageData))
+		imageWidth := 1024
+		imageHeight := 1024
+		if configErr == nil {
+			imageWidth = imgConfig.Width
+			imageHeight = imgConfig.Height
+		}
+
+		// Run the full enhancement pipeline
+		job.mu.Lock()
+		job.items[i].Phase = chat.PhaseOne
+		job.mu.Unlock()
+
+		state, err := chat.RunFullEnhancement(ctx, geminiImageClient, imagenClient, imageData, mime, imageWidth, imageHeight)
+		if err != nil {
+			job.mu.Lock()
+			job.items[i].Phase = chat.PhaseError
+			job.items[i].Error = err.Error()
+			if state != nil {
+				job.items[i].Phase1Text = state.Phase1Text
+				job.items[i].Analysis = state.Analysis
+			}
+			job.mu.Unlock()
+			log.Warn().Err(err).Str("key", key).Msg("Enhancement pipeline failed")
+			// Continue with next photo — partial success is acceptable
+			job.mu.Lock()
+			job.completedCount++
+			job.mu.Unlock()
+			continue
+		}
+
+		// Upload enhanced image to S3
+		enhancedKey := fmt.Sprintf("%s/enhanced/%s", job.sessionID, filepath.Base(key))
+		contentType := state.CurrentMIME
+		if contentType == "" {
+			contentType = mime
+		}
+		_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      &mediaBucket,
+			Key:         &enhancedKey,
+			Body:        bytes.NewReader(state.CurrentData),
+			ContentType: &contentType,
+		})
+		if uploadErr != nil {
+			job.mu.Lock()
+			job.items[i].Phase = chat.PhaseError
+			job.items[i].Error = fmt.Sprintf("Upload failed: %v", uploadErr)
+			job.mu.Unlock()
+			log.Error().Err(uploadErr).Str("key", enhancedKey).Msg("Failed to upload enhanced image")
+			job.mu.Lock()
+			job.completedCount++
+			job.mu.Unlock()
+			continue
+		}
+
+		// Generate and upload thumbnail of enhanced version
+		enhancedThumbKey := fmt.Sprintf("%s/thumbnails/enhanced-%s.jpg", job.sessionID,
+			strings.TrimSuffix(filepath.Base(key), filepath.Ext(key)))
+		thumbData, _, thumbErr := generateThumbnailFromBytes(state.CurrentData, contentType, 400)
+		if thumbErr == nil {
+			thumbContentType := "image/jpeg"
+			s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      &mediaBucket,
+				Key:         &enhancedThumbKey,
+				Body:        bytes.NewReader(thumbData),
+				ContentType: &thumbContentType,
+			})
+		}
+
+		// Update job state
+		job.mu.Lock()
+		job.items[i].Phase = state.Phase
+		job.items[i].EnhancedKey = enhancedKey
+		job.items[i].EnhancedThumbKey = enhancedThumbKey
+		job.items[i].OriginalThumbKey = fmt.Sprintf("%s/thumbnails/%s.jpg", job.sessionID,
+			strings.TrimSuffix(filepath.Base(key), filepath.Ext(key)))
+		job.items[i].Phase1Text = state.Phase1Text
+		job.items[i].Analysis = state.Analysis
+		job.items[i].ImagenEdits = state.ImagenEdits
+		job.completedCount++
+		job.mu.Unlock()
+
+		log.Info().
+			Int("index", i+1).
+			Str("key", key).
+			Str("phase", state.Phase).
+			Float64("score", 0). // Will be filled from analysis
+			Msg("Photo enhancement complete")
+	}
+
+	job.mu.Lock()
+	job.status = "complete"
+	job.mu.Unlock()
+
+	log.Info().
+		Int("total", job.totalCount).
+		Int("completed", job.completedCount).
+		Msg("Enhancement job complete")
+}
+
+// generateThumbnailFromBytes creates a thumbnail from raw image bytes.
+func generateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension int) ([]byte, string, error) {
+	// Write to temp file, generate thumbnail, clean up
+	tmpFile, err := os.CreateTemp("", "enhance-thumb-*")
+	if err != nil {
+		return nil, "", err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(imageData); err != nil {
+		tmpFile.Close()
+		return nil, "", err
+	}
+	tmpFile.Close()
+
+	info, _ := os.Stat(tmpPath)
+	mf := &filehandler.MediaFile{
+		Path:     tmpPath,
+		MIMEType: mimeType,
+		Size:     info.Size(),
+	}
+
+	return filehandler.GenerateThumbnail(mf, maxDimension)
 }
 
 // --- S3 Helpers ---

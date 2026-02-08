@@ -12,6 +12,7 @@ import {
   getSelectionResults,
   openFullImage,
 } from "../api/client";
+import { enhancementKeys } from "./EnhancementView";
 import type {
   SelectionItem,
   ExcludedItem,
@@ -177,7 +178,9 @@ function getEffectiveExcluded(): ExcludedItem[] {
 // --- Navigation ---
 
 function handleConfirmSelection() {
-  // Proceed to enhancement (Step 4) — for now just navigate
+  // Collect effective selected keys and pass to enhancement (DDR-031)
+  const selected = getEffectiveSelected();
+  enhancementKeys.value = selected.map((item) => item.key);
   navigateToStep("enhancing");
 }
 

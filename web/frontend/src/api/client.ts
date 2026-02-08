@@ -12,6 +12,11 @@ import type {
   SelectionStartRequest,
   SelectionStartResponse,
   SelectionResults,
+  EnhancementStartRequest,
+  EnhancementStartResponse,
+  EnhancementResults,
+  EnhancementFeedbackRequest,
+  EnhancementFeedbackResponse,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -186,5 +191,41 @@ export function getSelectionResults(
 ): Promise<SelectionResults> {
   return fetchJSON<SelectionResults>(
     `/api/selection/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
+// --- Enhancement APIs (DDR-031) ---
+
+/** Start a photo enhancement job for the given media keys. */
+export function startEnhancement(
+  req: EnhancementStartRequest,
+): Promise<EnhancementStartResponse> {
+  return fetchJSON<EnhancementStartResponse>("/api/enhance/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Get enhancement results (poll until status is "complete" or "error"). */
+export function getEnhancementResults(
+  id: string,
+  sessionId: string,
+): Promise<EnhancementResults> {
+  return fetchJSON<EnhancementResults>(
+    `/api/enhance/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
+/** Submit feedback for a specific photo in an enhancement job. */
+export function submitEnhancementFeedback(
+  id: string,
+  req: EnhancementFeedbackRequest,
+): Promise<EnhancementFeedbackResponse> {
+  return fetchJSON<EnhancementFeedbackResponse>(
+    `/api/enhance/${id}/feedback`,
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
   );
 }

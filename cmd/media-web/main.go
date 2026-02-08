@@ -23,11 +23,9 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
-	"github.com/google/generative-ai-go/genai"
 	"github.com/ncruces/zenity"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"google.golang.org/api/option"
 )
 
 //go:embed all:frontend_dist
@@ -131,15 +129,13 @@ func runMain(cmd *cobra.Command, args []string) {
 	}
 
 	ctx := context.Background()
-	validationClient, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	validationClient, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Gemini client for validation")
 	}
 	if err := auth.ValidateAPIKey(ctx, validationClient); err != nil {
-		validationClient.Close()
 		log.Fatal().Err(err).Msg("Invalid API key")
 	}
-	validationClient.Close()
 	log.Info().Msg("API key validated")
 
 	mux := http.NewServeMux()
@@ -707,12 +703,11 @@ func runTriageJob(job *triageJob, model string) {
 		return
 	}
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	client, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		setJobError(job, fmt.Sprintf("Failed to create Gemini client: %v", err))
 		return
 	}
-	defer client.Close()
 
 	// Collect all media files from the provided paths
 	var allMediaFiles []*filehandler.MediaFile

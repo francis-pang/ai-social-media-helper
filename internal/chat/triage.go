@@ -10,7 +10,7 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 	"github.com/rs/zerolog/log"
 )
 
@@ -126,7 +126,7 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 			cleanup()
 		}
 		for _, f := range uploadedFiles {
-			if err := client.DeleteFile(ctx, f.Name); err != nil {
+			if _, err := client.Files.Delete(ctx, f.Name, nil); err != nil {
 				log.Warn().Err(err).Str("file", f.Name).Msg("Failed to delete uploaded Gemini file")
 			} else {
 				log.Debug().Str("file", f.Name).Msg("Uploaded Gemini file deleted")
@@ -138,15 +138,14 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 	prompt := BuildMediaTriagePrompt(files)
 
 	// Configure model with triage system instruction
-	model := client.GenerativeModel(modelName)
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{
-			genai.Text(assets.TriageSystemPrompt),
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: assets.TriageSystemPrompt}},
 		},
 	}
 
 	// Build parts: media files then prompt (no reference photo for triage)
-	var parts []genai.Part
+	var parts []*genai.Part
 
 	// Process each media file
 	log.Info().Msg("Processing media files for triage...")
@@ -169,9 +168,11 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 				Str("mime", mimeType).
 				Msg("Image thumbnail ready for triage")
 
-			parts = append(parts, genai.Blob{
-				MIMEType: mimeType,
-				Data:     thumbData,
+			parts = append(parts, &genai.Part{
+				InlineData: &genai.Blob{
+					MIMEType: mimeType,
+					Data:     thumbData,
+				},
 			})
 
 		} else if filehandler.IsVideo(ext) {
@@ -217,15 +218,17 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 				Str("uri", uploadedFile.URI).
 				Msg("Video uploaded for triage")
 
-			parts = append(parts, genai.FileData{
-				MIMEType: uploadedFile.MIMEType,
-				URI:      uploadedFile.URI,
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{
+					MIMEType: uploadedFile.MIMEType,
+					FileURI:  uploadedFile.URI,
+				},
 			})
 		}
 	}
 
 	// Add the text prompt at the end
-	parts = append(parts, genai.Text(prompt))
+	parts = append(parts, &genai.Part{Text: prompt})
 
 	log.Info().
 		Int("num_images", imageCount).
@@ -233,30 +236,20 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 		Msg("Sending media to Gemini for batch triage...")
 
 	// Generate content
-	resp, err := model.GenerateContent(ctx, parts...)
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate triage from Gemini")
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || len(resp.Candidates) == 0 {
+	if resp == nil || resp.Text() == "" {
 		log.Warn().Msg("Received empty response from Gemini")
 		return nil, fmt.Errorf("received empty response from Gemini API")
 	}
 
 	// Extract text from response
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					result.WriteString(string(text))
-				}
-			}
-		}
-	}
-
-	responseText := result.String()
+	responseText := resp.Text()
 	log.Debug().
 		Int("response_length", len(responseText)).
 		Msg("Received triage response from Gemini")

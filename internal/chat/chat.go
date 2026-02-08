@@ -10,8 +10,8 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/genai"
 )
 
 // SystemInstruction provides context for media analysis with extracted metadata.
@@ -25,36 +25,30 @@ const UploadPollingInterval = 5 * time.Second
 // UploadTimeout is the maximum time to wait for upload processing.
 const UploadTimeout = 10 * time.Minute
 
+// NewGeminiClient creates a new Gemini API client using the provided API key.
+// Uses the new google.golang.org/genai SDK (SDK-A migration).
+func NewGeminiClient(ctx context.Context, apiKey string) (*genai.Client, error) {
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
+	}
+	return client, nil
+}
+
 // AskTextQuestion sends a text-only question to the Gemini API and returns the response.
 func AskTextQuestion(ctx context.Context, client *genai.Client, question string) (string, error) {
 	log.Debug().Str("question", question).Msg("Sending text question to Gemini")
 
-	model := client.GenerativeModel(GetModelName())
-
-	resp, err := model.GenerateContent(ctx, genai.Text(question))
+	resp, err := client.Models.GenerateContent(ctx, GetModelName(), genai.Text(question), nil)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate content")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || len(resp.Candidates) == 0 {
-		log.Warn().Msg("Received empty response from Gemini")
-		return "", fmt.Errorf("received empty response from Gemini API")
-	}
-
-	// Extract text from response
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					result.WriteString(string(text))
-				}
-			}
-		}
-	}
-
-	response := result.String()
+	response := resp.Text()
 	log.Debug().Int("response_length", len(response)).Msg("Received response from Gemini")
 
 	return response, nil
@@ -145,64 +139,47 @@ func AskMediaQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 	}
 	defer func() {
 		// Clean up uploaded file after inference to manage quota
-		if err := client.DeleteFile(ctx, file.Name); err != nil {
+		if _, err := client.Files.Delete(ctx, file.Name, nil); err != nil {
 			log.Warn().Err(err).Str("file", file.Name).Msg("Failed to delete uploaded file")
 		} else {
 			log.Debug().Str("file", file.Name).Msg("Uploaded file deleted from Gemini storage")
 		}
 	}()
 
-	// Configure model with system instruction for metadata context
-	model := client.GenerativeModel(GetModelName())
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{
-			genai.Text(SystemInstruction),
-		},
-	}
-
 	// Build parts: reference photo + file reference + question (DDR-017)
 	log.Debug().
 		Int("reference_bytes", len(assets.FrancisReferencePhoto)).
 		Msg("Including Francis reference photo for identification")
-	parts := []genai.Part{
+	parts := []*genai.Part{
 		// Francis reference photo first for identification
-		genai.Blob{
+		{InlineData: &genai.Blob{
 			MIMEType: assets.FrancisReferenceMIMEType,
 			Data:     assets.FrancisReferencePhoto,
-		},
+		}},
 		// Target media to analyze
-		genai.FileData{
+		{FileData: &genai.FileData{
 			MIMEType: file.MIMEType,
-			URI:      file.URI,
+			FileURI:  file.URI,
+		}},
+		{Text: question},
+	}
+
+	// Configure model with system instruction for metadata context
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: SystemInstruction}},
 		},
-		genai.Text(question),
 	}
 
 	// Generate content
-	resp, err := model.GenerateContent(ctx, parts...)
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := client.Models.GenerateContent(ctx, GetModelName(), contents, config)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate content from media")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || len(resp.Candidates) == 0 {
-		log.Warn().Msg("Received empty response from Gemini")
-		return "", fmt.Errorf("received empty response from Gemini API")
-	}
-
-	// Extract text from response
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					result.WriteString(string(text))
-				}
-			}
-		}
-	}
-
-	response := result.String()
+	response := resp.Text()
 	log.Debug().Int("response_length", len(response)).Msg("Received media analysis response from Gemini")
 
 	return response, nil
@@ -224,7 +201,7 @@ func uploadAndWaitForProcessing(ctx context.Context, client *genai.Client, media
 
 	// Upload the file
 	uploadStart := time.Now()
-	file, err := client.UploadFile(ctx, "", f, &genai.UploadFileOptions{
+	file, err := client.Files.Upload(ctx, f, &genai.UploadFileConfig{
 		MIMEType: mediaFile.MIMEType,
 	})
 	if err != nil {
@@ -251,7 +228,7 @@ func uploadAndWaitForProcessing(ctx context.Context, client *genai.Client, media
 		time.Sleep(UploadPollingInterval)
 
 		// Get updated file state
-		file, err = client.GetFile(ctx, file.Name)
+		file, err = client.Files.Get(ctx, file.Name, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get file state: %w", err)
 		}
@@ -314,4 +291,26 @@ func BuildSocialMediaImagePrompt(metadataContext string) string {
 // Prompt content loaded from embedded template. See DDR-019: Externalized Prompt Templates.
 func BuildSocialMediaVideoPrompt(metadataContext string) string {
 	return assets.RenderSocialMediaVideoPrompt(metadataContext)
+}
+
+// extractTextFromResponse extracts all text from a GenerateContentResponse.
+// This is a helper for cases where resp.Text() is not sufficient (e.g., when
+// we need to handle partial responses or multiple candidates).
+func extractTextFromResponse(resp *genai.GenerateContentResponse) string {
+	if resp == nil || len(resp.Candidates) == 0 {
+		return ""
+	}
+
+	var result strings.Builder
+	for _, candidate := range resp.Candidates {
+		if candidate.Content != nil {
+			for _, part := range candidate.Content.Parts {
+				if part.Text != "" {
+					result.WriteString(part.Text)
+				}
+			}
+		}
+	}
+
+	return result.String()
 }

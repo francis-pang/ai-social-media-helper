@@ -11,7 +11,7 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 	"github.com/rs/zerolog/log"
 )
 
@@ -428,23 +428,24 @@ func AskPhotoSelection(ctx context.Context, client *genai.Client, files []*fileh
 	prompt := BuildPhotoSelectionPrompt(files, maxPhotos, tripContext)
 
 	// Configure model with system instruction
-	model := client.GenerativeModel(GetModelName())
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{
-			genai.Text(SelectionSystemInstruction),
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: SelectionSystemInstruction}},
 		},
 	}
 
 	// Build parts: reference photo first, then thumbnails, then prompt
-	var parts []genai.Part
+	var parts []*genai.Part
 
 	// Add Francis reference photo as the first image (DDR-017)
 	log.Debug().
 		Int("reference_bytes", len(assets.FrancisReferencePhoto)).
 		Msg("Including Francis reference photo for identification")
-	parts = append(parts, genai.Blob{
-		MIMEType: assets.FrancisReferenceMIMEType,
-		Data:     assets.FrancisReferencePhoto,
+	parts = append(parts, &genai.Part{
+		InlineData: &genai.Blob{
+			MIMEType: assets.FrancisReferenceMIMEType,
+			Data:     assets.FrancisReferencePhoto,
+		},
 	})
 
 	// Generate and add thumbnails
@@ -464,44 +465,36 @@ func AskPhotoSelection(ctx context.Context, client *genai.Client, files []*fileh
 			Str("mime", mimeType).
 			Msg("Thumbnail ready")
 
-		parts = append(parts, genai.Blob{
-			MIMEType: mimeType,
-			Data:     thumbData,
+		parts = append(parts, &genai.Part{
+			InlineData: &genai.Blob{
+				MIMEType: mimeType,
+				Data:     thumbData,
+			},
 		})
 	}
 
 	// Add the text prompt at the end
-	parts = append(parts, genai.Text(prompt))
+	parts = append(parts, &genai.Part{Text: prompt})
 
 	log.Info().
 		Int("num_thumbnails", len(parts)-2). // -2 for reference photo and prompt
 		Msg("Sending thumbnails to Gemini for quality-agnostic selection...")
 
 	// Generate content
-	resp, err := model.GenerateContent(ctx, parts...)
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := client.Models.GenerateContent(ctx, GetModelName(), contents, config)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate selection from Gemini")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || len(resp.Candidates) == 0 {
+	if resp == nil {
 		log.Warn().Msg("Received empty response from Gemini")
 		return "", fmt.Errorf("received empty response from Gemini API")
 	}
 
 	// Extract text from response
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					result.WriteString(string(text))
-				}
-			}
-		}
-	}
-
-	response := result.String()
+	response := resp.Text()
 	log.Info().
 		Int("response_length", len(response)).
 		Msg("Photo selection complete")
@@ -549,7 +542,7 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 		}
 		// Delete uploaded Gemini files to avoid quota accumulation
 		for _, f := range uploadedFiles {
-			if err := client.DeleteFile(ctx, f.Name); err != nil {
+			if _, err := client.Files.Delete(ctx, f.Name, nil); err != nil {
 				log.Warn().Err(err).Str("file", f.Name).Msg("Failed to delete uploaded Gemini file")
 			} else {
 				log.Debug().Str("file", f.Name).Msg("Uploaded Gemini file deleted")
@@ -561,23 +554,24 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 	prompt := BuildMediaSelectionPrompt(files, maxItems, tripContext)
 
 	// Configure model with system instruction
-	model := client.GenerativeModel(modelName)
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{
-			genai.Text(MediaSelectionSystemInstruction),
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: MediaSelectionSystemInstruction}},
 		},
 	}
 
 	// Build parts: reference photo first, then media, then prompt
-	var parts []genai.Part
+	var parts []*genai.Part
 
 	// Add Francis reference photo as the first image (DDR-017)
 	log.Debug().
 		Int("reference_bytes", len(assets.FrancisReferencePhoto)).
 		Msg("Including Francis reference photo for identification")
-	parts = append(parts, genai.Blob{
-		MIMEType: assets.FrancisReferenceMIMEType,
-		Data:     assets.FrancisReferencePhoto,
+	parts = append(parts, &genai.Part{
+		InlineData: &genai.Blob{
+			MIMEType: assets.FrancisReferenceMIMEType,
+			Data:     assets.FrancisReferencePhoto,
+		},
 	})
 
 	// Process each media file
@@ -601,9 +595,11 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 				Str("mime", mimeType).
 				Msg("Image thumbnail ready")
 
-			parts = append(parts, genai.Blob{
-				MIMEType: mimeType,
-				Data:     thumbData,
+			parts = append(parts, &genai.Part{
+				InlineData: &genai.Blob{
+					MIMEType: mimeType,
+					Data:     thumbData,
+				},
 			})
 
 		} else if filehandler.IsVideo(ext) {
@@ -650,15 +646,17 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 				Msg("Video uploaded")
 
 			// Add file reference to parts
-			parts = append(parts, genai.FileData{
-				MIMEType: uploadedFile.MIMEType,
-				URI:      uploadedFile.URI,
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{
+					MIMEType: uploadedFile.MIMEType,
+					FileURI:  uploadedFile.URI,
+				},
 			})
 		}
 	}
 
 	// Add the text prompt at the end
-	parts = append(parts, genai.Text(prompt))
+	parts = append(parts, &genai.Part{Text: prompt})
 
 	log.Info().
 		Int("num_images", imageCount).
@@ -666,30 +664,20 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 		Msg("Sending media to Gemini for unified selection...")
 
 	// Generate content
-	resp, err := model.GenerateContent(ctx, parts...)
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate selection from Gemini")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || len(resp.Candidates) == 0 {
+	if resp == nil {
 		log.Warn().Msg("Received empty response from Gemini")
 		return "", fmt.Errorf("received empty response from Gemini API")
 	}
 
 	// Extract text from response
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					result.WriteString(string(text))
-				}
-			}
-		}
-	}
-
-	response := result.String()
+	response := resp.Text()
 	log.Info().
 		Int("response_length", len(response)).
 		Msg("Media selection complete")
@@ -907,7 +895,7 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 			cleanup()
 		}
 		for _, f := range uploadedFiles {
-			if err := client.DeleteFile(ctx, f.Name); err != nil {
+			if _, err := client.Files.Delete(ctx, f.Name, nil); err != nil {
 				log.Warn().Err(err).Str("file", f.Name).Msg("Failed to delete uploaded Gemini file")
 			} else {
 				log.Debug().Str("file", f.Name).Msg("Uploaded Gemini file deleted")
@@ -919,23 +907,24 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	prompt := BuildMediaSelectionJSONPrompt(files, tripContext)
 
 	// Configure model with JSON system instruction
-	model := client.GenerativeModel(modelName)
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{
-			genai.Text(MediaSelectionJSONInstruction),
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: MediaSelectionJSONInstruction}},
 		},
 	}
 
 	// Build parts: reference photo first, then media, then prompt
-	var parts []genai.Part
+	var parts []*genai.Part
 
 	// Add Francis reference photo as the first image (DDR-017)
 	log.Debug().
 		Int("reference_bytes", len(assets.FrancisReferencePhoto)).
 		Msg("Including Francis reference photo for identification")
-	parts = append(parts, genai.Blob{
-		MIMEType: assets.FrancisReferenceMIMEType,
-		Data:     assets.FrancisReferencePhoto,
+	parts = append(parts, &genai.Part{
+		InlineData: &genai.Blob{
+			MIMEType: assets.FrancisReferenceMIMEType,
+			Data:     assets.FrancisReferencePhoto,
+		},
 	})
 
 	// Process each media file
@@ -957,9 +946,11 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 				Int("thumb_bytes", len(thumbData)).
 				Msg("Image thumbnail ready for JSON selection")
 
-			parts = append(parts, genai.Blob{
-				MIMEType: mimeType,
-				Data:     thumbData,
+			parts = append(parts, &genai.Part{
+				InlineData: &genai.Blob{
+					MIMEType: mimeType,
+					Data:     thumbData,
+				},
 			})
 
 		} else if filehandler.IsVideo(ext) {
@@ -993,15 +984,17 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 			}
 			uploadedFiles = append(uploadedFiles, uploadedFile)
 
-			parts = append(parts, genai.FileData{
-				MIMEType: uploadedFile.MIMEType,
-				URI:      uploadedFile.URI,
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{
+					MIMEType: uploadedFile.MIMEType,
+					FileURI:  uploadedFile.URI,
+				},
 			})
 		}
 	}
 
 	// Add the text prompt at the end
-	parts = append(parts, genai.Text(prompt))
+	parts = append(parts, &genai.Part{Text: prompt})
 
 	log.Info().
 		Int("num_images", imageCount).
@@ -1009,30 +1002,20 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 		Msg("Sending media to Gemini for JSON selection...")
 
 	// Generate content
-	resp, err := model.GenerateContent(ctx, parts...)
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate JSON selection from Gemini")
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || len(resp.Candidates) == 0 {
+	if resp == nil {
 		log.Warn().Msg("Received empty response from Gemini")
 		return nil, fmt.Errorf("received empty response from Gemini API")
 	}
 
 	// Extract text from response
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					result.WriteString(string(text))
-				}
-			}
-		}
-	}
-
-	responseText := result.String()
+	responseText := resp.Text()
 	log.Debug().
 		Int("response_length", len(responseText)).
 		Msg("Received JSON selection response from Gemini")
@@ -1128,7 +1111,7 @@ func uploadVideoFile(ctx context.Context, client *genai.Client, filePath string)
 
 	// Upload the file
 	uploadStart := time.Now()
-	file, err := client.UploadFile(ctx, "", f, &genai.UploadFileOptions{
+	file, err := client.Files.Upload(ctx, f, &genai.UploadFileConfig{
 		MIMEType: "video/webm", // Compressed output is always WebM
 	})
 	if err != nil {
@@ -1158,7 +1141,7 @@ func uploadVideoFile(ctx context.Context, client *genai.Client, filePath string)
 		time.Sleep(uploadPollingInterval)
 
 		// Get updated file state
-		file, err = client.GetFile(ctx, file.Name)
+		file, err = client.Files.Get(ctx, file.Name, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get file state: %w", err)
 		}

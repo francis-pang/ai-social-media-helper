@@ -14,10 +14,9 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
-	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"google.golang.org/api/option"
+	"google.golang.org/genai"
 )
 
 // CLI flags
@@ -98,11 +97,10 @@ func runMain(cmd *cobra.Command, args []string) {
 	}
 
 	ctx := context.Background()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	client, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create Gemini client")
 	}
-	defer client.Close()
 
 	log.Info().Msg("connection successful - Gemini client initialized")
 

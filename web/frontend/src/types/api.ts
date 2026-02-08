@@ -155,3 +155,105 @@ export interface SelectionResults {
   sceneGroups: SelectionSceneGroup[] | null;
   error?: string;
 }
+
+// --- Enhancement types (DDR-031) ---
+
+/** Request body for POST /api/enhance/start. */
+export interface EnhancementStartRequest {
+  sessionId: string;
+  keys: string[];
+}
+
+/** Response from POST /api/enhance/start. */
+export interface EnhancementStartResponse {
+  id: string;
+}
+
+/** Analysis of what further improvements are needed (Phase 2 output). */
+export interface AnalysisResult {
+  overallAssessment: string;
+  remainingImprovements: ImprovementItem[];
+  professionalScore: number;
+  targetScore: number;
+  noFurtherEditsNeeded: boolean;
+}
+
+/** A single improvement recommendation from analysis. */
+export interface ImprovementItem {
+  type: string;
+  description: string;
+  region: string;
+  impact: "high" | "medium" | "low";
+  imagenSuitable: boolean;
+  editInstruction: string;
+}
+
+/** A feedback entry recording one round of user feedback. */
+export interface FeedbackEntry {
+  userFeedback: string;
+  modelResponse: string;
+  method: "gemini" | "imagen";
+  success: boolean;
+}
+
+/** A single photo enhancement result item. */
+export interface EnhancementItem {
+  key: string;
+  filename: string;
+  phase: "initial" | "phase1" | "phase2" | "phase3" | "feedback" | "complete" | "error";
+  originalKey: string;
+  enhancedKey: string;
+  originalThumbKey: string;
+  enhancedThumbKey: string;
+  phase1Text: string;
+  analysis?: AnalysisResult;
+  imagenEdits: number;
+  feedbackHistory: FeedbackEntry[];
+  error?: string;
+}
+
+/** Response from GET /api/enhance/{id}/results. */
+export interface EnhancementResults {
+  id: string;
+  status: "pending" | "processing" | "complete" | "error";
+  items: EnhancementItem[] | null;
+  totalCount: number;
+  completedCount: number;
+  error?: string;
+}
+
+/** Request body for POST /api/enhance/{id}/feedback. */
+export interface EnhancementFeedbackRequest {
+  sessionId: string;
+  key: string;
+  feedback: string;
+}
+
+/** Response from POST /api/enhance/{id}/feedback. */
+export interface EnhancementFeedbackResponse {
+  status: string;
+}
+
+// --- Post Grouping types (DDR-033) ---
+
+/** A post group — a collection of media items destined for one Instagram carousel or download bundle. */
+export interface PostGroup {
+  /** Unique identifier for this group. */
+  id: string;
+  /** Descriptive label for the group — used for organization and as context for AI caption generation. */
+  label: string;
+  /** S3 keys of enhanced media items in this group. */
+  keys: string[];
+}
+
+/** A media item available for grouping — carries display info from enhancement results. */
+export interface GroupableMediaItem {
+  /** S3 key (enhanced version if available, otherwise original). */
+  key: string;
+  /** Original filename for display. */
+  filename: string;
+  /** Thumbnail S3 key for display. */
+  thumbnailKey: string;
+  /** Media type. */
+  type: "Photo" | "Video";
+}

@@ -7,8 +7,10 @@ import {
   signOut,
 } from "./auth/cognito";
 import { FileBrowser } from "./components/FileBrowser";
+import { EnhancementView } from "./components/EnhancementView";
 import { LoginForm } from "./components/LoginForm";
 import { MediaUploader } from "./components/MediaUploader";
+import { PostGrouper } from "./components/PostGrouper";
 import { SelectedFiles } from "./components/SelectedFiles";
 import { SelectionView } from "./components/SelectionView";
 import { TriageView } from "./components/TriageView";
@@ -147,11 +149,17 @@ export function App() {
       {(currentStep.value === "processing" ||
         currentStep.value === "results") && <TriageView />}
 
-      {/* Selection flow — cloud mode (DDR-029, DDR-030) */}
+      {/* Selection flow — cloud mode (DDR-029, DDR-030, DDR-031) */}
       {currentStep.value === "upload" && isCloudMode && <MediaUploader />}
       {(currentStep.value === "selecting" ||
         currentStep.value === "review-selection") &&
         isCloudMode && <SelectionView />}
+      {(currentStep.value === "enhancing" ||
+        currentStep.value === "review-enhanced") &&
+        isCloudMode && <EnhancementView />}
+
+      {/* Post grouping (DDR-033) */}
+      {currentStep.value === "group-posts" && isCloudMode && <PostGrouper />}
     </div>
   );
 }

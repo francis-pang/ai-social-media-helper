@@ -32,6 +32,32 @@ var SelectionSystemPrompt string
 //go:embed prompts/triage-system.txt
 var TriageSystemPrompt string
 
+// EnhancementSystemPrompt provides instructions for AI photo enhancement.
+// See DDR-031: Multi-Step Photo Enhancement Pipeline.
+//
+//go:embed prompts/enhancement-system.txt
+var EnhancementSystemPrompt string
+
+// EnhancementAnalysisPrompt provides instructions for analyzing an enhanced photo
+// to determine what further improvements are needed.
+// See DDR-031: Multi-Step Photo Enhancement Pipeline.
+//
+//go:embed prompts/enhancement-analysis.txt
+var EnhancementAnalysisPrompt string
+
+// VideoEnhancementSystemPrompt provides instructions for AI video frame enhancement.
+// See DDR-032: Multi-Step Frame-Based Video Enhancement Pipeline.
+//
+//go:embed prompts/video-enhancement-system.txt
+var VideoEnhancementSystemPrompt string
+
+// VideoEnhancementAnalysisPrompt provides instructions for analyzing an enhanced
+// video frame to determine what further improvements are needed.
+// See DDR-032: Multi-Step Frame-Based Video Enhancement Pipeline.
+//
+//go:embed prompts/video-enhancement-analysis.txt
+var VideoEnhancementAnalysisPrompt string
+
 // --- Dynamic prompt templates (require metadata context) ---
 
 //go:embed prompts/social-media-image.txt

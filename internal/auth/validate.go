@@ -5,9 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/google/generative-ai-go/genai"
 	"github.com/rs/zerolog/log"
-	"google.golang.org/api/googleapi"
+	"google.golang.org/genai"
 )
 
 // ValidationError represents a specific type of API key validation failure.
@@ -51,10 +50,8 @@ func ValidateAPIKey(ctx context.Context, client *genai.Client) error {
 	log.Debug().Msg("Validating API key with Gemini API")
 
 	// Use Gemini 3 Flash Preview (free tier compatible)
-	model := client.GenerativeModel("gemini-3-flash-preview")
-
 	// Make a minimal request to validate the API key
-	resp, err := model.GenerateContent(ctx, genai.Text("hi"))
+	resp, err := client.Models.GenerateContent(ctx, "gemini-3-flash-preview", genai.Text("hi"), nil)
 	if err != nil {
 		return classifyError(err)
 	}
@@ -82,9 +79,9 @@ func classifyError(err error) *ValidationError {
 	errLower := strings.ToLower(errMsg)
 
 	// Check for Google API errors
-	var googleErr *googleapi.Error
-	if errors.As(err, &googleErr) {
-		return classifyGoogleAPIError(googleErr)
+	var apiErr *genai.APIError
+	if errors.As(err, &apiErr) {
+		return classifyAPIError(apiErr)
 	}
 
 	// Check for common error patterns in the error message
@@ -133,8 +130,8 @@ func classifyError(err error) *ValidationError {
 	}
 }
 
-// classifyGoogleAPIError categorizes a Google API error.
-func classifyGoogleAPIError(err *googleapi.Error) *ValidationError {
+// classifyAPIError categorizes a Google API error.
+func classifyAPIError(err *genai.APIError) *ValidationError {
 	switch err.Code {
 	case 400:
 		log.Error().Int("code", err.Code).Msg("Bad request - possibly invalid API key format")
