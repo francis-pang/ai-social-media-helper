@@ -234,6 +234,50 @@ export interface EnhancementFeedbackResponse {
   status: string;
 }
 
+// --- Download types (DDR-034) ---
+
+/** Request body for POST /api/download/start. */
+export interface DownloadStartRequest {
+  sessionId: string;
+  keys: string[];
+  groupLabel: string;
+}
+
+/** Response from POST /api/download/start. */
+export interface DownloadStartResponse {
+  id: string;
+}
+
+/** A single ZIP bundle in a download job. */
+export interface DownloadBundle {
+  /** Bundle type: "images" or "videos". */
+  type: "images" | "videos";
+  /** Display filename: e.g., "Tokyo Day 1-images.zip". */
+  name: string;
+  /** S3 key of the created ZIP (populated on completion). */
+  zipKey: string;
+  /** Presigned GET URL for downloading (populated on completion). */
+  downloadUrl: string;
+  /** Number of files in this bundle. */
+  fileCount: number;
+  /** Total size of original files in bytes. */
+  totalSize: number;
+  /** Size of the ZIP file in bytes (populated on completion). */
+  zipSize: number;
+  /** Bundle creation status. */
+  status: "pending" | "processing" | "complete" | "error";
+  /** Error message if status is "error". */
+  error?: string;
+}
+
+/** Response from GET /api/download/{id}/results. */
+export interface DownloadResults {
+  id: string;
+  status: "pending" | "processing" | "complete" | "error";
+  bundles: DownloadBundle[] | null;
+  error?: string;
+}
+
 // --- Post Grouping types (DDR-033) ---
 
 /** A post group — a collection of media items destined for one Instagram carousel or download bundle. */

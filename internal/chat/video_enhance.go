@@ -1,0 +1,610 @@
+package chat
+
+// video_enhance.go orchestrates the multi-step frame-based video enhancement pipeline.
+// It decomposes a video into frames, groups similar frames by color histogram,
+// enhances representative frames using Gemini 3 Pro Image + Imagen 3, then
+// reassembles the video with the enhancements propagated via color LUT.
+// See DDR-032: Multi-Step Frame-Based Video Enhancement Pipeline.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/fpang/gemini-media-cli/internal/assets"
+	"github.com/fpang/gemini-media-cli/internal/filehandler"
+
+	"github.com/rs/zerolog/log"
+)
+
+// VideoEnhancementConfig configures the video enhancement pipeline.
+type VideoEnhancementConfig struct {
+	// GeminiAPIKey is the Gemini API key for image editing and analysis.
+	GeminiAPIKey string
+
+	// VertexAIProject is the GCP project ID for Imagen 3 (optional).
+	VertexAIProject string
+
+	// VertexAIRegion is the GCP region for Imagen 3 (optional).
+	VertexAIRegion string
+
+	// VertexAIAccessToken is the GCP OAuth2 access token for Imagen 3 (optional).
+	VertexAIAccessToken string
+
+	// SimilarityThreshold is the histogram correlation threshold for frame grouping.
+	// Default: 0.92
+	SimilarityThreshold float64
+
+	// MaxAnalysisIterations is the maximum number of analysis→edit iterations per group.
+	// Default: 3
+	MaxAnalysisIterations int
+
+	// TargetProfessionalScore is the minimum score to stop iterating.
+	// Default: 8.5
+	TargetProfessionalScore float64
+
+	// UserFeedback is optional user feedback to incorporate during enhancement.
+	// Used during feedback sessions to re-enhance with additional instructions.
+	UserFeedback string
+}
+
+// VideoEnhancementResult contains the output of the video enhancement pipeline.
+type VideoEnhancementResult struct {
+	// OutputPath is the path to the enhanced video file.
+	OutputPath string
+
+	// TotalFrames is the number of frames processed.
+	TotalFrames int
+
+	// TotalGroups is the number of frame groups identified.
+	TotalGroups int
+
+	// GroupResults contains per-group enhancement details.
+	GroupResults []GroupEnhancementResult
+
+	// TotalDuration is the total processing time.
+	TotalDuration time.Duration
+
+	// EnhancementSummary is a human-readable summary of all enhancements.
+	EnhancementSummary string
+}
+
+// GroupEnhancementResult contains the enhancement result for a single frame group.
+type GroupEnhancementResult struct {
+	// GroupIndex is the 0-based index of this group.
+	GroupIndex int
+
+	// FrameCount is the number of frames in this group.
+	FrameCount int
+
+	// Phase1Description is the description from Gemini's initial enhancement.
+	Phase1Description string
+
+	// AnalysisIterations is the number of analysis→edit cycles performed.
+	AnalysisIterations int
+
+	// FinalScore is the professional quality score after all enhancements.
+	FinalScore float64
+
+	// ImprovementsApplied lists the types of improvements made.
+	ImprovementsApplied []string
+}
+
+// analysisResult mirrors the JSON response from the video enhancement analysis prompt.
+type videoAnalysisResult struct {
+	OverallAssessment     string                  `json:"overallAssessment"`
+	RemainingImprovements []videoAnalysisImprovement `json:"remainingImprovements"`
+	ProfessionalScore     float64                 `json:"professionalScore"`
+	TargetScore           float64                 `json:"targetScore"`
+	NoFurtherEditsNeeded  bool                    `json:"noFurtherEditsNeeded"`
+}
+
+type videoAnalysisImprovement struct {
+	Type             string `json:"type"`
+	Description      string `json:"description"`
+	Region           string `json:"region"`
+	Impact           string `json:"impact"`
+	ImagenSuitable   bool   `json:"imagenSuitable"`
+	EditInstruction  string `json:"editInstruction"`
+	SafeForPropagation bool `json:"safeForPropagation"`
+}
+
+// EnhanceVideo runs the full multi-step video enhancement pipeline.
+//
+// Pipeline phases:
+//  1. Extract frames from video (ffmpeg)
+//  2. Group frames by color histogram similarity
+//  3. Enhance representative frames with Gemini 3 Pro Image
+//  4. Analyze enhanced frames + apply Imagen 3 surgical edits (iterative)
+//  5. Propagate enhancements via color LUT + reassemble video (ffmpeg)
+//
+// Parameters:
+//   - videoPath: path to the source video file
+//   - outputPath: path for the enhanced output video
+//   - metadata: video metadata (for FPS and duration)
+//   - config: enhancement configuration
+func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, metadata *filehandler.VideoMetadata, config VideoEnhancementConfig) (*VideoEnhancementResult, error) {
+	startTime := time.Now()
+
+	log.Info().
+		Str("video", filepath.Base(videoPath)).
+		Str("output", filepath.Base(outputPath)).
+		Msg("Starting multi-step video enhancement pipeline (DDR-032)")
+
+	// Apply defaults
+	if config.SimilarityThreshold <= 0 {
+		config.SimilarityThreshold = filehandler.DefaultSimilarityThreshold
+	}
+	if config.MaxAnalysisIterations <= 0 {
+		config.MaxAnalysisIterations = 3
+	}
+	if config.TargetProfessionalScore <= 0 {
+		config.TargetProfessionalScore = 8.5
+	}
+
+	// Initialize AI clients — create SDK client from API key
+	genaiClient, err := NewGeminiClient(ctx, config.GeminiAPIKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
+	}
+	geminiClient := NewGeminiImageClient(genaiClient)
+
+	var imagenClient *ImagenClient
+	if config.VertexAIProject != "" && config.VertexAIAccessToken != "" {
+		imagenClient = NewImagenClient(config.VertexAIProject, config.VertexAIRegion, config.VertexAIAccessToken)
+		log.Info().Msg("Imagen 3 client configured for surgical edits")
+	} else {
+		log.Info().Msg("Imagen 3 not configured — skipping mask-based edits")
+	}
+
+	// --- Phase 1: Frame Extraction ---
+	log.Info().Msg("Phase 1: Extracting frames from video")
+
+	extraction, err := filehandler.ExtractFrames(ctx, videoPath, metadata)
+	if err != nil {
+		return nil, fmt.Errorf("phase 1 failed: %w", err)
+	}
+	defer extraction.Cleanup()
+
+	log.Info().
+		Int("total_frames", extraction.TotalFrames).
+		Float64("extraction_fps", extraction.ExtractionFPS).
+		Msg("Phase 1 complete: frames extracted")
+
+	// --- Phase 2: Frame Grouping ---
+	log.Info().Msg("Phase 2: Grouping frames by color histogram similarity")
+
+	groups, err := filehandler.GroupFramesByHistogram(extraction.FramePaths, config.SimilarityThreshold)
+	if err != nil {
+		return nil, fmt.Errorf("phase 2 failed: %w", err)
+	}
+
+	log.Info().
+		Int("total_groups", len(groups)).
+		Msg("Phase 2 complete: frames grouped")
+
+	// Create output directory for enhanced frames
+	enhancedFrameDir, err := os.MkdirTemp("", "enhanced-frames-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create enhanced frame directory: %w", err)
+	}
+	defer os.RemoveAll(enhancedFrameDir)
+
+	// --- Phase 3 & 4: Enhance representative frames ---
+	groupResults := make([]GroupEnhancementResult, len(groups))
+	var summaryParts []string
+
+	for i, group := range groups {
+		log.Info().
+			Int("group", i).
+			Int("frame_count", group.FrameCount).
+			Str("representative", filepath.Base(group.RepresentativePath)).
+			Msg("Phase 3-4: Enhancing group representative frame")
+
+		result, err := enhanceFrameGroup(ctx, geminiClient, imagenClient, group, i, config)
+		if err != nil {
+			log.Error().Err(err).Int("group", i).Msg("Group enhancement failed, using original frames")
+			// On failure, copy original frames to enhanced directory
+			if copyErr := copyGroupFrames(group, enhancedFrameDir); copyErr != nil {
+				return nil, fmt.Errorf("failed to copy original frames for group %d: %w", i, copyErr)
+			}
+			groupResults[i] = GroupEnhancementResult{
+				GroupIndex: i,
+				FrameCount: group.FrameCount,
+			}
+			continue
+		}
+
+		groupResults[i] = result.GroupEnhancementResult
+
+		// Apply color LUT to propagate enhancement to all frames in group
+		if result.lutContent != "" {
+			log.Info().
+				Int("group", i).
+				Int("frame_count", group.FrameCount).
+				Msg("Propagating enhancement via color LUT")
+
+			err = filehandler.ApplyLUTToFrames(ctx, group.FramePaths, result.lutContent, enhancedFrameDir)
+			if err != nil {
+				log.Error().Err(err).Int("group", i).Msg("LUT propagation failed, copying enhanced rep + original others")
+				if copyErr := copyGroupFrames(group, enhancedFrameDir); copyErr != nil {
+					return nil, fmt.Errorf("failed to copy frames for group %d after LUT failure: %w", i, copyErr)
+				}
+			}
+		} else {
+			// No LUT — copy original frames (shouldn't happen normally)
+			if copyErr := copyGroupFrames(group, enhancedFrameDir); copyErr != nil {
+				return nil, fmt.Errorf("failed to copy frames for group %d: %w", i, copyErr)
+			}
+		}
+
+		if result.Phase1Description != "" {
+			summaryParts = append(summaryParts, fmt.Sprintf("Group %d (%d frames): %s", i+1, group.FrameCount, result.Phase1Description))
+		}
+	}
+
+	// --- Phase 5: Reassemble Video ---
+	log.Info().Msg("Phase 5: Reassembling video from enhanced frames")
+
+	err = filehandler.ReassembleVideo(ctx, enhancedFrameDir, videoPath, outputPath, extraction.ExtractionFPS)
+	if err != nil {
+		return nil, fmt.Errorf("phase 5 failed: %w", err)
+	}
+
+	totalDuration := time.Since(startTime)
+
+	summary := "Video enhancement complete."
+	if len(summaryParts) > 0 {
+		summary = fmt.Sprintf("Enhanced %d frame groups: %s", len(groups), joinStrings(summaryParts, "; "))
+	}
+
+	log.Info().
+		Dur("total_duration", totalDuration).
+		Int("groups", len(groups)).
+		Int("frames", extraction.TotalFrames).
+		Msg("Video enhancement pipeline complete")
+
+	return &VideoEnhancementResult{
+		OutputPath:         outputPath,
+		TotalFrames:        extraction.TotalFrames,
+		TotalGroups:        len(groups),
+		GroupResults:       groupResults,
+		TotalDuration:      totalDuration,
+		EnhancementSummary: summary,
+	}, nil
+}
+
+// internalGroupResult extends GroupEnhancementResult with internal state.
+type internalGroupResult struct {
+	GroupEnhancementResult
+	lutContent string // .cube LUT for propagation
+}
+
+// enhanceFrameGroup enhances a single frame group's representative frame
+// through all phases (Gemini enhancement → analysis → Imagen iteration).
+func enhanceFrameGroup(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, group filehandler.FrameGroup, groupIndex int, config VideoEnhancementConfig) (*internalGroupResult, error) {
+	result := &internalGroupResult{
+		GroupEnhancementResult: GroupEnhancementResult{
+			GroupIndex: groupIndex,
+			FrameCount: group.FrameCount,
+		},
+	}
+
+	// Read the representative frame
+	repData, err := os.ReadFile(group.RepresentativePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read representative frame: %w", err)
+	}
+
+	// --- Phase 3: Gemini 3 Pro Image Enhancement ---
+	instruction := assets.VideoEnhancementSystemPrompt
+	if config.UserFeedback != "" {
+		instruction = fmt.Sprintf("%s\n\nADDITIONAL USER FEEDBACK:\n%s", instruction, config.UserFeedback)
+	}
+
+	geminiResult, err := geminiClient.EditImage(ctx, repData, "image/jpeg", instruction, "")
+	if err != nil {
+		return nil, fmt.Errorf("Gemini enhancement failed: %w", err)
+	}
+
+	result.Phase1Description = geminiResult.Text
+	enhancedData := geminiResult.ImageData
+	enhancedMIME := geminiResult.ImageMIMEType
+
+	log.Info().
+		Int("group", groupIndex).
+		Int("enhanced_bytes", len(enhancedData)).
+		Msg("Phase 3 complete: Gemini enhancement done")
+
+	// --- Phase 4: Analysis + Imagen Iteration ---
+	for iteration := 0; iteration < config.MaxAnalysisIterations; iteration++ {
+		log.Info().
+			Int("group", groupIndex).
+			Int("iteration", iteration+1).
+			Msg("Phase 4: Analyzing enhanced frame for further improvements")
+
+		// Analyze the enhanced frame
+		analysisText, err := geminiClient.AnalyzeImage(ctx, enhancedData, enhancedMIME, assets.VideoEnhancementAnalysisPrompt, "")
+		if err != nil {
+			log.Warn().Err(err).Int("group", groupIndex).Int("iteration", iteration+1).
+				Msg("Analysis failed, stopping iterations")
+			break
+		}
+
+		// Parse analysis result
+		analysis, err := parseVideoAnalysis(analysisText)
+		if err != nil {
+			log.Warn().Err(err).Int("group", groupIndex).
+				Str("raw_response", truncateString(analysisText, 500)).
+				Msg("Failed to parse analysis response, stopping iterations")
+			break
+		}
+
+		result.FinalScore = analysis.ProfessionalScore
+
+		log.Info().
+			Float64("score", analysis.ProfessionalScore).
+			Int("improvements", len(analysis.RemainingImprovements)).
+			Bool("no_further_edits", analysis.NoFurtherEditsNeeded).
+			Msg("Analysis result")
+
+		// Check if we've reached the target quality
+		if analysis.NoFurtherEditsNeeded || analysis.ProfessionalScore >= config.TargetProfessionalScore {
+			log.Info().
+				Int("group", groupIndex).
+				Float64("score", analysis.ProfessionalScore).
+				Msg("Target quality reached, stopping iterations")
+			break
+		}
+
+		// Filter improvements safe for video propagation
+		var safeImprovements []videoAnalysisImprovement
+		for _, imp := range analysis.RemainingImprovements {
+			if imp.SafeForPropagation && (imp.Impact == "high" || imp.Impact == "medium") {
+				safeImprovements = append(safeImprovements, imp)
+			}
+		}
+
+		if len(safeImprovements) == 0 {
+			log.Info().
+				Int("group", groupIndex).
+				Msg("No safe propagation improvements remaining")
+			break
+		}
+
+		// Apply improvements
+		enhancedData, enhancedMIME, err = applyVideoImprovements(ctx, geminiClient, imagenClient, enhancedData, enhancedMIME, safeImprovements, config)
+		if err != nil {
+			log.Warn().Err(err).Int("group", groupIndex).
+				Msg("Improvement application failed, using current enhanced version")
+			break
+		}
+
+		result.AnalysisIterations = iteration + 1
+		for _, imp := range safeImprovements {
+			result.ImprovementsApplied = append(result.ImprovementsApplied, imp.Type)
+		}
+	}
+
+	// Compute color LUT from original → final enhanced representative
+	// Write the enhanced representative frame to a temp file for LUT computation
+	enhancedRepPath, err := writeTempJPEG(enhancedData, "enhanced-rep-*.jpg")
+	if err != nil {
+		return nil, fmt.Errorf("failed to write enhanced representative: %w", err)
+	}
+	defer os.Remove(enhancedRepPath)
+
+	lutContent, err := filehandler.ComputeColorLUT(group.RepresentativePath, enhancedRepPath)
+	if err != nil {
+		log.Warn().Err(err).Int("group", groupIndex).
+			Msg("LUT computation failed — enhancement won't propagate to other frames")
+	} else {
+		result.lutContent = lutContent
+	}
+
+	return result, nil
+}
+
+// applyVideoImprovements applies a set of improvements to an enhanced frame.
+// It first tries Gemini for global edits, then Imagen for localized mask-based edits.
+func applyVideoImprovements(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, improvements []videoAnalysisImprovement, config VideoEnhancementConfig) ([]byte, string, error) {
+	currentData := imageData
+	currentMIME := imageMIME
+
+	// Separate Imagen-suitable (localized) and global improvements
+	var globalInstructions []string
+	var imagenEdits []videoAnalysisImprovement
+
+	for _, imp := range improvements {
+		if imp.ImagenSuitable && imagenClient != nil && imagenClient.IsConfigured() {
+			imagenEdits = append(imagenEdits, imp)
+		} else {
+			globalInstructions = append(globalInstructions, imp.EditInstruction)
+		}
+	}
+
+	// Apply global improvements via Gemini in a single pass
+	if len(globalInstructions) > 0 {
+		combinedInstruction := "Apply these specific improvements to the video frame:\n"
+		for i, inst := range globalInstructions {
+			combinedInstruction += fmt.Sprintf("%d. %s\n", i+1, inst)
+		}
+
+		result, err := geminiClient.EditImage(ctx, currentData, currentMIME, combinedInstruction, "")
+		if err != nil {
+			log.Warn().Err(err).Msg("Gemini global improvement pass failed")
+		} else {
+			currentData = result.ImageData
+			currentMIME = result.ImageMIMEType
+			log.Info().
+				Int("improvements", len(globalInstructions)).
+				Msg("Global improvements applied via Gemini")
+		}
+	}
+
+	// Apply localized improvements via Imagen 3
+	for _, edit := range imagenEdits {
+		if imagenClient == nil || !imagenClient.IsConfigured() {
+			break
+		}
+
+		// Generate mask for the region
+		// We need image dimensions — decode temporarily
+		width, height, err := getImageDimensions(currentData)
+		if err != nil {
+			log.Warn().Err(err).Str("region", edit.Region).
+				Msg("Failed to get image dimensions for mask generation")
+			continue
+		}
+
+		maskData, err := GenerateRegionMask(width, height, edit.Region)
+		if err != nil {
+			log.Warn().Err(err).Str("region", edit.Region).
+				Msg("Failed to generate region mask")
+			continue
+		}
+
+		editMode := "inpainting-remove"
+		if edit.Type == "background-cleanup" || edit.Type == "blemish-removal" {
+			editMode = "inpainting-remove"
+		}
+
+		imagenResult, err := imagenClient.EditWithMask(ctx, currentData, maskData, edit.EditInstruction, editMode)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("type", edit.Type).
+				Str("region", edit.Region).
+				Msg("Imagen edit failed, skipping")
+			continue
+		}
+
+		currentData = imagenResult.ImageData
+		currentMIME = imagenResult.MIMEType
+		log.Info().
+			Str("type", edit.Type).
+			Str("region", edit.Region).
+			Msg("Localized improvement applied via Imagen 3")
+	}
+
+	return currentData, currentMIME, nil
+}
+
+// parseVideoAnalysis parses the JSON response from the video enhancement analysis.
+func parseVideoAnalysis(text string) (*videoAnalysisResult, error) {
+	// Strip any markdown code fences that Gemini might add
+	text = stripMarkdownFences(text)
+
+	var result videoAnalysisResult
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse analysis JSON: %w (text: %s)", err, truncateString(text, 200))
+	}
+
+	return &result, nil
+}
+
+// stripMarkdownFences removes ```json ... ``` wrapping from text.
+func stripMarkdownFences(text string) string {
+	// Find opening fence
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '{' {
+			start = i
+			break
+		}
+	}
+
+	// Find closing brace
+	end := len(text)
+	for i := len(text) - 1; i >= 0; i-- {
+		if text[i] == '}' {
+			end = i + 1
+			break
+		}
+	}
+
+	if start < end {
+		return text[start:end]
+	}
+	return text
+}
+
+// getImageDimensions decodes a JPEG/PNG to get its width and height.
+func getImageDimensions(data []byte) (int, int, error) {
+	img, _, err := decodeImage(data)
+	if err != nil {
+		return 0, 0, err
+	}
+	bounds := img.Bounds()
+	return bounds.Dx(), bounds.Dy(), nil
+}
+
+// decodeImage tries to decode image data as JPEG, then PNG.
+func decodeImage(data []byte) (image.Image, string, error) {
+	// Try JPEG first
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err == nil {
+		return img, "image/jpeg", nil
+	}
+
+	// Try PNG
+	img, err = png.Decode(bytes.NewReader(data))
+	if err == nil {
+		return img, "image/png", nil
+	}
+
+	return nil, "", fmt.Errorf("failed to decode image as JPEG or PNG")
+}
+
+// writeTempJPEG writes image data to a temporary JPEG file.
+func writeTempJPEG(data []byte, pattern string) (string, error) {
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	path := f.Name()
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("failed to write image data: %w", err)
+	}
+	f.Close()
+
+	return path, nil
+}
+
+// copyGroupFrames copies original frames to the enhanced directory
+// (used as fallback when enhancement fails).
+func copyGroupFrames(group filehandler.FrameGroup, outputDir string) error {
+	for _, framePath := range group.FramePaths {
+		data, err := os.ReadFile(framePath)
+		if err != nil {
+			return fmt.Errorf("failed to read frame %s: %w", framePath, err)
+		}
+
+		outputPath := filepath.Join(outputDir, filepath.Base(framePath))
+		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+			return fmt.Errorf("failed to write frame %s: %w", outputPath, err)
+		}
+	}
+	return nil
+}
+
+// joinStrings joins strings with a separator (avoids importing strings for this one use).
+func joinStrings(parts []string, sep string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += sep
+		}
+		result += p
+	}
+	return result
+}

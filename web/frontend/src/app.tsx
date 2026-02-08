@@ -6,6 +6,7 @@ import {
   authLoading,
   signOut,
 } from "./auth/cognito";
+import { DownloadView } from "./components/DownloadView";
 import { FileBrowser } from "./components/FileBrowser";
 import { EnhancementView } from "./components/EnhancementView";
 import { LoginForm } from "./components/LoginForm";
@@ -160,6 +161,9 @@ export function App() {
 
       {/* Post grouping (DDR-033) */}
       {currentStep.value === "group-posts" && isCloudMode && <PostGrouper />}
+
+      {/* Download (DDR-034) */}
+      {currentStep.value === "publish" && isCloudMode && <DownloadView />}
     </div>
   );
 }

@@ -17,6 +17,9 @@ import type {
   EnhancementResults,
   EnhancementFeedbackRequest,
   EnhancementFeedbackResponse,
+  DownloadStartRequest,
+  DownloadStartResponse,
+  DownloadResults,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -227,5 +230,27 @@ export function submitEnhancementFeedback(
       method: "POST",
       body: JSON.stringify(req),
     },
+  );
+}
+
+// --- Download APIs (DDR-034) ---
+
+/** Start a download job to create ZIP bundles for a post group. */
+export function startDownload(
+  req: DownloadStartRequest,
+): Promise<DownloadStartResponse> {
+  return fetchJSON<DownloadStartResponse>("/api/download/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Get download results (poll until status is "complete" or "error"). */
+export function getDownloadResults(
+  id: string,
+  sessionId: string,
+): Promise<DownloadResults> {
+  return fetchJSON<DownloadResults>(
+    `/api/download/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
   );
 }

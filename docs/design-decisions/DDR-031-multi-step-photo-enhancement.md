@@ -13,8 +13,8 @@ After AI selection (Steps 2-3, DDR-030), selected photos need enhancement before
 3. **Analysis and gap identification** requires Gemini 3 Pro's reasoning capability to evaluate the current state of an image and determine what further enhancements would bring it to professional quality.
 
 Key constraints:
-- The current SDK (`github.com/google/generative-ai-go v0.19.0`) does not support image output from Gemini — Gemini 3 Pro Image editing requires direct REST API calls
-- Imagen 3 mask-based editing requires Vertex AI (GCP project, service account) — also via REST API
+- Gemini 3 Pro Image editing and analysis use the `google.golang.org/genai` SDK (v1.45.0) which natively supports image output via `ResponseModalities`
+- Imagen 3 mask-based editing requires Vertex AI (GCP project, service account) — accessed via REST API
 - Multi-turn feedback loops need persistent conversation state
 - Lambda has a 30-second API Gateway timeout — enhancement must run asynchronously
 - Each photo enhancement may take 10-30+ seconds across multiple passes
@@ -44,7 +44,7 @@ Send the original photo with an enhancement instruction to `gemini-3-pro-image-p
 - Sharpening and noise reduction
 - Composition improvement (straightening, minor cropping)
 
-This uses the Gemini REST API (`generateContent` with `responseModalities: ["TEXT", "IMAGE"]`), avoiding the SDK migration.
+This uses the `google.golang.org/genai` SDK with `ResponseModalities: ["TEXT", "IMAGE"]` in the `GenerateContentConfig`.
 
 **Phase 2 — Gemini 3 Pro: Professional Quality Analysis**
 
@@ -110,25 +110,28 @@ The feedback is always attempted with Gemini 3 Pro Image first because:
 
 If Gemini 3 Pro Image can't fully address the feedback (detected by re-analysis), the system falls back to Imagen 3 for precise surgical edits.
 
-### 3. SDK Approach: REST API (SDK-C)
+### 3. SDK Approach: google.golang.org/genai (SDK-A)
 
-Both Gemini 3 Pro Image and Imagen 3 are accessed via direct REST API calls, keeping the existing `github.com/google/generative-ai-go` SDK unchanged for selection and triage:
+The entire project uses the unified `google.golang.org/genai` SDK (v1.45.0). This SDK natively supports image output via `ResponseModalities`, eliminating the need for REST API calls for Gemini models.
 
-**Gemini 3 Pro Image REST endpoint:**
+**Gemini 3 Pro Image (via SDK):**
+```go
+config := &genai.GenerateContentConfig{
+    ResponseModalities: []string{"TEXT", "IMAGE"},
+}
+resp, err := client.Models.GenerateContent(ctx, "gemini-3-pro-image-preview", contents, config)
 ```
-POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key={API_KEY}
-```
 
-**Imagen 3 REST endpoint (Vertex AI):**
+**Imagen 3 (via REST API — Vertex AI):**
 ```
 POST https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/google/models/imagen-3.0-capability-001:predict
 ```
 
 Benefits:
-- Zero changes to existing SDK usage
-- Surgical addition of new capabilities
-- Both APIs are well-documented REST endpoints
-- Can be migrated to SDK calls later when full SDK migration happens
+- Unified SDK for all Gemini API calls (triage, selection, enhancement, analysis)
+- SDK handles auth, retries, error types, and response parsing
+- Native image output support — no manual base64 encoding/decoding
+- Imagen 3 still uses REST API as it requires Vertex AI (separate auth)
 
 ### 4. Enhancement State Persistence
 
@@ -193,9 +196,9 @@ No single model handles all enhancement scenarios:
 
 User feedback is typically expressible as natural language instructions ("make the sky bluer", "brighten the shadows"). Gemini handles these natively. Imagen 3 requires a mask, making it slower and more complex for simple requests. Only when Gemini can't satisfy the request do we escalate to Imagen 3.
 
-### Why REST API instead of SDK migration?
+### Why SDK-A migration (google.golang.org/genai)?
 
-The SDK migration (SDK-A) touches 5-7 files across the entire codebase and requires testing all existing triage/selection functionality. The enhancement feature is additive — using REST API adds the new capability without risking regression in working features. The REST API approach also works for Imagen 3, which requires Vertex AI (a different SDK entirely).
+The new `google.golang.org/genai` SDK (v1.45.0) provides native support for image output via `ResponseModalities`, making REST API workarounds unnecessary for Gemini models. The migration provides a cleaner, more maintainable codebase with unified SDK usage. Imagen 3 continues to use REST API as it requires Vertex AI authentication (separate from the Gemini API key).
 
 ## Alternatives Considered
 
@@ -204,7 +207,7 @@ The SDK migration (SDK-A) touches 5-7 files across the entire codebase and requi
 | Gemini Flash Image (P1) instead of Pro (P2) | Lower quality output; Pro provides better results for the first critical enhancement pass |
 | Imagen 3 as primary enhancer | Cannot do global adjustments (color, exposure, lighting); requires masks for every edit |
 | Single-pass Gemini only (no Imagen) | Misses surgical edits like object removal that Gemini handles imprecisely |
-| Full SDK migration before enhancement | High risk of regression in working triage/selection; orthogonal to enhancement logic |
+| REST API only (no SDK migration) | More boilerplate, manual JSON handling, no retry/error type support from SDK |
 | Go image processing (P5) | Vastly lower quality; limited to basic brightness/contrast; no AI intelligence |
 
 ## Consequences
@@ -213,13 +216,13 @@ The SDK migration (SDK-A) touches 5-7 files across the entire codebase and requi
 - Professional-grade enhancement combining two complementary AI models
 - Natural feedback loop: Gemini first (fast, natural language), Imagen fallback (precise, surgical)
 - Multi-turn conversation preserves context across feedback iterations
-- REST API approach adds capabilities without risking existing functionality
+- Unified SDK approach for all Gemini operations (selection, triage, enhancement, analysis)
 - Pipeline phases can run independently, enabling partial success
 - Enhancement state structured for future DynamoDB migration
 
 **Trade-offs:**
 - Phase 3 (Imagen 3) requires Vertex AI GCP project setup and service account — not available until infrastructure is provisioned
-- REST API has more boilerplate than SDK calls (manual JSON marshaling, auth handling)
+- Imagen 3 REST API has boilerplate (manual JSON marshaling, auth handling) — not yet migrated to SDK
 - Multi-phase pipeline is slower than single-pass (10-30s per phase per photo)
 - In-memory state is lost if Lambda container is recycled (consistent with triage/selection; DynamoDB migration planned)
 - Gemini 3 Pro Image output resolution may not match input (~1024px typical output vs 4032px phone photos)

@@ -42,6 +42,10 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-028](./DDR-028-security-hardening.md) | 2026-02-07 | Security Hardening for Cloud Deployment | Implemented |
 | [DDR-029](./DDR-029-file-system-access-api-upload.md) | 2026-02-08 | File System Access API for Cloud Media Upload | Accepted |
 | [DDR-030](./DDR-030-cloud-selection-backend.md) | 2026-02-08 | Cloud Selection Backend Architecture | Accepted |
+| [DDR-031](./DDR-031-multi-step-photo-enhancement.md) | 2026-02-08 | Multi-Step Photo Enhancement Pipeline | Accepted |
+| [DDR-032](./DDR-032-multi-step-video-enhancement.md) | 2026-02-08 | Multi-Step Video Enhancement Pipeline | Accepted |
+| [DDR-033](./DDR-033-post-grouping-ui.md) | 2026-02-08 | Post Grouping UI | Accepted |
+| [DDR-034](./DDR-034-download-zip-bundling.md) | 2026-02-08 | Download ZIP Bundling with Speed-Based Video Grouping | Accepted |
 
 ---
 
@@ -56,4 +60,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-08 (DDR-030)
+**Last Updated**: 2026-02-08 (DDR-034)

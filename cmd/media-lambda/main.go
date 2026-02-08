@@ -17,11 +17,14 @@
 //	POST /api/triage/start         — start triage from uploaded S3 files
 //	GET  /api/triage/{id}/results  — poll triage results
 //	POST /api/triage/{id}/confirm  — delete confirmed files from S3
+//	POST /api/download/start       — start ZIP bundle creation for a post group (DDR-034)
+//	GET  /api/download/{id}/results — poll download bundle status and URLs (DDR-034)
 //	GET  /api/media/thumbnail      — generate thumbnail from S3 object
 //	GET  /api/media/full           — presigned GET URL for full-resolution image
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -36,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +50,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
@@ -129,6 +135,11 @@ var allowedContentTypes = map[string]bool{
 const maxPhotoSize int64 = 50 * 1024 * 1024       // 50 MB
 const maxVideoSize int64 = 5 * 1024 * 1024 * 1024 // 5 GB
 
+// zipMethodZstd is the ZIP compression method ID for Zstandard (APPNOTE 6.3.7).
+// Registered in init() with zstd level 12 (SpeedBestCompression in klauspost/compress).
+// Requires 2+ GB Lambda memory due to zstd encoder window size at high levels.
+const zipMethodZstd uint16 = 93
+
 func isVideoContentType(ct string) bool {
 	return strings.HasPrefix(ct, "video/")
 }
@@ -143,6 +154,14 @@ var (
 
 func init() {
 	logging.Init()
+
+	// Register Zstandard (zstd) as a ZIP compressor at level 12 (DDR-034).
+	// Level 12 maps to SpeedBestCompression in klauspost/compress — the highest
+	// compression the Go library supports. This trades CPU time for smaller ZIPs.
+	// Requires Lambda memory ≥ 2 GB due to zstd encoder window size.
+	zip.RegisterCompressor(zipMethodZstd, func(w io.Writer) (io.WriteCloser, error) {
+		return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(12)))
+	})
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -1402,7 +1421,12 @@ func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, job *enhancem
 			return
 		}
 
-		geminiImageClient := chat.NewGeminiImageClient(apiKey)
+		genaiClient, err := chat.NewGeminiClient(ctx, apiKey)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create Gemini client for feedback")
+			return
+		}
+		geminiImageClient := chat.NewGeminiImageClient(genaiClient)
 
 		// Download the current enhanced image
 		enhancedKey := item.EnhancedKey
@@ -1529,7 +1553,12 @@ func runEnhancementJob(job *enhancementJob, photoKeys []string) {
 		return
 	}
 
-	geminiImageClient := chat.NewGeminiImageClient(apiKey)
+	genaiClient, err := chat.NewGeminiClient(ctx, apiKey)
+	if err != nil {
+		setEnhancementJobError(job, fmt.Sprintf("Failed to create Gemini client: %v", err))
+		return
+	}
+	geminiImageClient := chat.NewGeminiImageClient(genaiClient)
 
 	// Set up Imagen client (optional — only if Vertex AI is configured)
 	var imagenClient *chat.ImagenClient
@@ -1679,6 +1708,513 @@ func runEnhancementJob(job *enhancementJob, photoKeys []string) {
 		Int("total", job.totalCount).
 		Int("completed", job.completedCount).
 		Msg("Enhancement job complete")
+}
+
+// --- Download Job Management (DDR-034) ---
+
+// maxVideoZipBytes is the maximum size of a single video ZIP bundle.
+// Calculated as 30 seconds × 100 Mbps ÷ 8 = 375 MB.
+// Based on AT&T Internet Air typical download speed in San Jose (~100 Mbps).
+const maxVideoZipBytes int64 = 375 * 1024 * 1024
+
+type downloadJob struct {
+	mu        sync.Mutex
+	id        string
+	sessionID string
+	status    string // "pending", "processing", "complete", "error"
+	bundles   []downloadBundle
+	errMsg    string
+}
+
+type downloadBundle struct {
+	Type        string `json:"type"`                  // "images" or "videos"
+	Name        string `json:"name"`                  // display name: "images.zip" or "videos-1.zip"
+	ZipKey      string `json:"zipKey"`                // S3 key of the created ZIP
+	DownloadURL string `json:"downloadUrl,omitempty"` // presigned GET URL (populated on complete)
+	FileCount   int    `json:"fileCount"`
+	TotalSize   int64  `json:"totalSize"` // total original file size in bytes
+	ZipSize     int64  `json:"zipSize"`   // ZIP file size in bytes (populated on complete)
+	Status      string `json:"status"`    // "pending", "processing", "complete", "error"
+	Error       string `json:"error,omitempty"`
+}
+
+var (
+	dlJobsMu sync.Mutex
+	dlJobs   = make(map[string]*downloadJob)
+)
+
+func newDownloadJobID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatal().Err(err).Msg("Failed to generate random download job ID")
+	}
+	return "dl-" + hex.EncodeToString(b)
+}
+
+func newDownloadJob(sessionID string) *downloadJob {
+	dlJobsMu.Lock()
+	defer dlJobsMu.Unlock()
+	id := newDownloadJobID()
+	j := &downloadJob{
+		id:        id,
+		sessionID: sessionID,
+		status:    "pending",
+	}
+	dlJobs[id] = j
+	return j
+}
+
+func getDownloadJob(id string) *downloadJob {
+	dlJobsMu.Lock()
+	defer dlJobsMu.Unlock()
+	return dlJobs[id]
+}
+
+func setDownloadJobError(job *downloadJob, msg string) {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	job.status = "error"
+	job.errMsg = msg
+	log.Error().Str("job", job.id).Str("error", msg).Msg("Download job failed")
+}
+
+// --- Download Endpoints (DDR-034) ---
+
+// POST /api/download/start
+// Body: {"sessionId": "uuid", "keys": ["uuid/enhanced/file1.jpg", ...], "groupLabel": "Tokyo Day 1"}
+func handleDownloadStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID  string   `json:"sessionId"`
+		Keys       []string `json:"keys"`
+		GroupLabel string   `json:"groupLabel"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" {
+		httpError(w, http.StatusBadRequest, "sessionId is required")
+		return
+	}
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Keys) == 0 {
+		httpError(w, http.StatusBadRequest, "at least one key is required")
+		return
+	}
+
+	// Validate all keys belong to the session
+	for _, key := range req.Keys {
+		if err := validateS3Key(key); err != nil {
+			httpError(w, http.StatusBadRequest, fmt.Sprintf("invalid key: %s", err.Error()))
+			return
+		}
+		if !strings.HasPrefix(key, req.SessionID+"/") {
+			httpError(w, http.StatusBadRequest, "key does not belong to session")
+			return
+		}
+	}
+
+	job := newDownloadJob(req.SessionID)
+	go runDownloadJob(job, req.Keys, req.GroupLabel)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"id": job.id,
+	})
+}
+
+func handleDownloadRoutes(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/download/"), "/")
+	if len(parts) < 2 {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	jobID := parts[0]
+	if !strings.HasPrefix(jobID, "dl-") {
+		jobID = "dl-" + jobID
+	}
+	action := parts[1]
+
+	job := getDownloadJob(jobID)
+	if job == nil {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	switch action {
+	case "results":
+		handleDownloadResults(w, r, job)
+	default:
+		httpError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// GET /api/download/{id}/results?sessionId=...
+func handleDownloadResults(w http.ResponseWriter, r *http.Request, job *downloadJob) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Ownership check (DDR-028)
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" || sessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	resp := map[string]interface{}{
+		"id":      job.id,
+		"status":  job.status,
+		"bundles": job.bundles,
+	}
+	if job.errMsg != "" {
+		resp["error"] = job.errMsg
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// --- Download Processing (DDR-034) ---
+
+// fileWithSize holds an S3 key and its object size (from HeadObject).
+type fileWithSize struct {
+	key  string
+	size int64
+}
+
+// runDownloadJob creates ZIP bundles for the given media keys.
+// Strategy: 1 ZIP for all images, videos split into bundles ≤ 375 MB each.
+func runDownloadJob(job *downloadJob, keys []string, groupLabel string) {
+	job.mu.Lock()
+	job.status = "processing"
+	job.mu.Unlock()
+
+	ctx := context.Background()
+
+	// Step 1: Query file sizes via HeadObject and separate images from videos
+	var images []fileWithSize
+	var videos []fileWithSize
+
+	for _, key := range keys {
+		headResult, err := s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: &mediaBucket,
+			Key:    &key,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("HeadObject failed, skipping file")
+			continue
+		}
+
+		size := *headResult.ContentLength
+		ext := strings.ToLower(filepath.Ext(key))
+
+		if filehandler.IsVideo(ext) {
+			videos = append(videos, fileWithSize{key: key, size: size})
+		} else {
+			images = append(images, fileWithSize{key: key, size: size})
+		}
+	}
+
+	if len(images) == 0 && len(videos) == 0 {
+		setDownloadJobError(job, "No downloadable files found")
+		return
+	}
+
+	// Step 2: Plan bundles
+	var bundles []downloadBundle
+
+	// All images go into one ZIP
+	if len(images) > 0 {
+		var totalSize int64
+		for _, img := range images {
+			totalSize += img.size
+		}
+		bundles = append(bundles, downloadBundle{
+			Type:      "images",
+			Name:      sanitizeZipName(groupLabel, "images", 0),
+			FileCount: len(images),
+			TotalSize: totalSize,
+			Status:    "pending",
+		})
+	}
+
+	// Videos grouped into bundles ≤ maxVideoZipBytes (375 MB)
+	if len(videos) > 0 {
+		videoGroups := groupVideosBySize(videos, maxVideoZipBytes)
+		for i, group := range videoGroups {
+			var totalSize int64
+			for _, v := range group {
+				totalSize += v.size
+			}
+			bundles = append(bundles, downloadBundle{
+				Type:      "videos",
+				Name:      sanitizeZipName(groupLabel, "videos", i+1),
+				FileCount: len(group),
+				TotalSize: totalSize,
+				Status:    "pending",
+			})
+		}
+	}
+
+	// Store initial bundle plan
+	job.mu.Lock()
+	job.bundles = bundles
+	job.mu.Unlock()
+
+	log.Info().
+		Int("images", len(images)).
+		Int("videos", len(videos)).
+		Int("bundles", len(bundles)).
+		Str("job", job.id).
+		Msg("Download bundle plan created")
+
+	// Step 3: Create each ZIP bundle
+	// Track which video group index we're on
+	videoGroupIdx := 0
+	videoGroups := groupVideosBySize(videos, maxVideoZipBytes)
+
+	for i := range bundles {
+		job.mu.Lock()
+		job.bundles[i].Status = "processing"
+		job.mu.Unlock()
+
+		var filesToZip []fileWithSize
+		if bundles[i].Type == "images" {
+			filesToZip = images
+		} else {
+			filesToZip = videoGroups[videoGroupIdx]
+			videoGroupIdx++
+		}
+
+		zipKey := fmt.Sprintf("%s/downloads/%s/%s", job.sessionID, job.id, bundles[i].Name)
+
+		zipSize, err := createZipBundle(ctx, filesToZip, zipKey)
+		if err != nil {
+			job.mu.Lock()
+			job.bundles[i].Status = "error"
+			job.bundles[i].Error = err.Error()
+			job.mu.Unlock()
+			log.Error().Err(err).Str("bundle", bundles[i].Name).Msg("Failed to create ZIP bundle")
+			continue
+		}
+
+		// Generate presigned download URL (1 hour expiry)
+		downloadResult, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+			Bucket:                     &mediaBucket,
+			Key:                        &zipKey,
+			ResponseContentDisposition: aws.String(fmt.Sprintf(`attachment; filename="%s"`, bundles[i].Name)),
+		}, s3.WithPresignExpires(1*time.Hour))
+		if err != nil {
+			job.mu.Lock()
+			job.bundles[i].Status = "error"
+			job.bundles[i].Error = "failed to generate download URL"
+			job.mu.Unlock()
+			log.Error().Err(err).Str("key", zipKey).Msg("Failed to generate presigned GET URL for ZIP")
+			continue
+		}
+
+		job.mu.Lock()
+		job.bundles[i].ZipKey = zipKey
+		job.bundles[i].ZipSize = zipSize
+		job.bundles[i].DownloadURL = downloadResult.URL
+		job.bundles[i].Status = "complete"
+		job.mu.Unlock()
+
+		log.Info().
+			Str("bundle", bundles[i].Name).
+			Int64("zipSize", zipSize).
+			Int("files", len(filesToZip)).
+			Msg("ZIP bundle created")
+	}
+
+	// Mark job complete
+	job.mu.Lock()
+	allComplete := true
+	for _, b := range job.bundles {
+		if b.Status != "complete" && b.Status != "error" {
+			allComplete = false
+			break
+		}
+	}
+	if allComplete {
+		job.status = "complete"
+	}
+	job.mu.Unlock()
+
+	log.Info().
+		Str("job", job.id).
+		Int("bundles", len(bundles)).
+		Msg("Download job complete")
+}
+
+// groupVideosBySize groups videos into bundles where each bundle's total size ≤ maxBytes.
+// Videos larger than maxBytes get their own bundle.
+// Uses a first-fit-decreasing bin packing heuristic for better packing.
+func groupVideosBySize(videos []fileWithSize, maxBytes int64) [][]fileWithSize {
+	if len(videos) == 0 {
+		return nil
+	}
+
+	// Sort videos by size descending (first-fit-decreasing)
+	sorted := make([]fileWithSize, len(videos))
+	copy(sorted, videos)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].size > sorted[j].size
+	})
+
+	var groups [][]fileWithSize
+	groupSizes := []int64{}
+
+	for _, video := range sorted {
+		placed := false
+
+		// If the video itself exceeds maxBytes, it gets its own group
+		if video.size > maxBytes {
+			groups = append(groups, []fileWithSize{video})
+			groupSizes = append(groupSizes, video.size)
+			continue
+		}
+
+		// Try to fit into an existing group
+		for i, currentSize := range groupSizes {
+			if currentSize+video.size <= maxBytes {
+				groups[i] = append(groups[i], video)
+				groupSizes[i] += video.size
+				placed = true
+				break
+			}
+		}
+
+		// If it doesn't fit anywhere, create a new group
+		if !placed {
+			groups = append(groups, []fileWithSize{video})
+			groupSizes = append(groupSizes, video.size)
+		}
+	}
+
+	return groups
+}
+
+// createZipBundle downloads files from S3, creates a zstd-compressed ZIP in /tmp,
+// and uploads it to S3. Uses Zstandard level 12 compression (DDR-034).
+// Returns the size of the created ZIP file.
+func createZipBundle(ctx context.Context, files []fileWithSize, zipKey string) (int64, error) {
+	// Create temp file for the ZIP
+	tmpFile, err := os.CreateTemp("", "download-*.zip")
+	if err != nil {
+		return 0, fmt.Errorf("create temp ZIP: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Create ZIP writer
+	zipWriter := zip.NewWriter(tmpFile)
+
+	for _, file := range files {
+		filename := filepath.Base(file.key)
+
+		// Download file from S3
+		getResult, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: &mediaBucket,
+			Key:    &file.key,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("key", file.key).Msg("Failed to download file for ZIP, skipping")
+			continue
+		}
+
+		// Create ZIP entry
+		header := &zip.FileHeader{
+			Name:   filename,
+			Method: zipMethodZstd, // Zstandard level 12 compression (DDR-034)
+		}
+		header.SetModTime(time.Now())
+
+		writer, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			getResult.Body.Close()
+			return 0, fmt.Errorf("create ZIP entry for %s: %w", filename, err)
+		}
+
+		// Stream from S3 response directly into ZIP
+		if _, err := io.Copy(writer, getResult.Body); err != nil {
+			getResult.Body.Close()
+			return 0, fmt.Errorf("write to ZIP for %s: %w", filename, err)
+		}
+		getResult.Body.Close()
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		tmpFile.Close()
+		return 0, fmt.Errorf("close ZIP writer: %w", err)
+	}
+	tmpFile.Close()
+
+	// Get ZIP file size
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		return 0, fmt.Errorf("stat ZIP file: %w", err)
+	}
+	zipSize := info.Size()
+
+	// Upload ZIP to S3
+	zipFile, err := os.Open(tmpPath)
+	if err != nil {
+		return 0, fmt.Errorf("open ZIP for upload: %w", err)
+	}
+	defer zipFile.Close()
+
+	contentType := "application/zip"
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &mediaBucket,
+		Key:         &zipKey,
+		Body:        zipFile,
+		ContentType: &contentType,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("upload ZIP to S3: %w", err)
+	}
+
+	return zipSize, nil
+}
+
+// sanitizeZipName creates a ZIP filename from the group label and bundle type.
+func sanitizeZipName(groupLabel, bundleType string, index int) string {
+	// Clean the group label for use in filenames
+	name := groupLabel
+	if name == "" {
+		name = "media"
+	}
+
+	// Replace unsafe characters
+	name = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == ' ' {
+			return r
+		}
+		return '-'
+	}, name)
+	name = strings.TrimSpace(name)
+
+	// Truncate to reasonable length
+	if len(name) > 50 {
+		name = name[:50]
+	}
+
+	if bundleType == "images" {
+		return fmt.Sprintf("%s-images.zip", name)
+	}
+	return fmt.Sprintf("%s-videos-%d.zip", name, index)
 }
 
 // generateThumbnailFromBytes creates a thumbnail from raw image bytes.

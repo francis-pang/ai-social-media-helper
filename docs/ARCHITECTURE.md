@@ -307,6 +307,8 @@ Phase 2 migrates the application from a local tool to a remotely hosted service.
 │  │  /api/triage/start          │ │
 │  │  /api/triage/{id}/results   │ │
 │  │  /api/triage/{id}/confirm   │ │
+│  │  /api/download/start        │ │
+│  │  /api/download/{id}/results │ │
 │  │  /api/media/thumbnail       │ │
 │  │  /api/media/full            │ │
 │  └──────────┬──────────────────┘ │
@@ -463,12 +465,37 @@ After upload, the user clicks "Continue to Selection" to trigger AI analysis.
 
 See [DDR-030](./design-decisions/DDR-030-cloud-selection-backend.md) for the full decision record.
 
+### Step 7: Download (DDR-034)
+
+After grouping media into post groups, the user can download each group's media as ZIP bundles.
+
+**Download bundling strategy:**
+
+1. **All images** in a post group are bundled into **one ZIP** (photos are typically small enough combined)
+2. **Videos** are split into **ZIP bundles of ≤ 375 MB each** — based on a 30-second download time at AT&T Internet Air's typical 100 Mbps speed in San Jose
+
+**Flow:**
+
+1. User clicks "Prepare Download" on a post group
+2. Backend queries each file's size via S3 `HeadObject`
+3. Backend groups files into bundles: 1 image ZIP + N video ZIPs (≤ 375 MB each)
+4. Backend creates each ZIP by downloading from S3, writing to `/tmp`, and uploading the ZIP back to S3
+5. Frontend polls for progress and displays download links as bundles complete
+6. Each download link is a presigned S3 GET URL (1-hour expiry) with `Content-Disposition: attachment`
+
+**API endpoints:**
+
+| Method | Path | Action |
+|--------|------|--------|
+| `POST` | `/api/download/start` | Start ZIP bundle creation for a post group |
+| `GET` | `/api/download/{id}/results` | Poll bundle creation status and download URLs |
+
+**Video grouping algorithm:** First-fit-decreasing bin packing — sorts videos by size (largest first), then fits each into the first bundle with remaining capacity ≤ 375 MB. Videos larger than 375 MB get their own bundle.
+
+See [DDR-034](./design-decisions/DDR-034-download-zip-bundling.md) for the full decision record.
+
 ### Planned Steps (Not Yet Implemented)
 
-4. **Enhancement** — AI-powered photo editing and video adjustment
-5. **Review Enhanced** — Side-by-side comparison with feedback loop
-6. **Group into Posts** — Drag-and-drop media into post groups (max 20 per post)
-7. **Publish or Download** — Instagram carousel publishing or file download
 8. **Post Description** — AI-generated Instagram captions with iterative feedback
 
 ### Backend: Multi-Lambda + Step Functions Architecture (Planned)
@@ -499,6 +526,7 @@ CloudFront ──► API Gateway ──► API Lambda ──► DynamoDB
 | Selection Lambda | Gemini AI media selection (all thumbnails + metadata) | 2-4 GB | 15 min |
 | Enhancement Lambda | Per-photo Gemini image editing | 1-2 GB | 5 min |
 | Video Processing Lambda | Per-video ffmpeg enhancement (optional) | 4+ GB | 15 min |
+| ZIP Lambda | Per-bundle ZIP creation for downloads (DDR-034) | 1-2 GB | 10 min |
 
 **Step Functions state machines (planned):**
 
@@ -506,6 +534,7 @@ CloudFront ──► API Gateway ──► API Lambda ──► DynamoDB
 |---------------|---------|------|
 | `SelectionPipeline` | `POST /api/selection/start` | List S3 files -> Map: generate thumbnails (parallel) -> Selection Lambda (Gemini) -> Write to DynamoDB |
 | `EnhancementPipeline` | `POST /api/enhance/start` | Split photos/videos -> Parallel: Map enhance photos + Map process videos -> Aggregate -> Write to DynamoDB |
+| `DownloadPipeline` | `POST /api/download/start` | Calculate bundles -> Map: create ZIPs (parallel, MaxConcurrency 5) -> Generate presigned URLs -> Write to DynamoDB (DDR-034) |
 
 Step Functions provides built-in parallel execution, per-item retry with backoff, concurrency throttling (`MaxConcurrency`), fan-in (wait for all), and visual execution monitoring. Cost is ~$0.002 per session (~$0.60/month at 10 sessions/day).
 
@@ -527,6 +556,9 @@ Step Functions provides built-in parallel execution, per-item retry with backoff
 | `FileUploader.tsx` | Cloud (triage) | Drag-and-drop S3 upload for triage flow |
 | `MediaUploader.tsx` | Cloud (selection) | File System Access API pickers, thumbnails, trip context (DDR-029) |
 | `SelectionView.tsx` | Cloud (selection) | AI selection processing + review with override (DDR-030) |
+| `EnhancementView.tsx` | Cloud (selection) | Photo enhancement with feedback loop (DDR-031) |
+| `PostGrouper.tsx` | Cloud (selection) | Drag-and-drop media grouping into posts (DDR-033) |
+| `DownloadView.tsx` | Cloud (selection) | ZIP bundle download with speed-based video grouping (DDR-034) |
 | `LoginForm.tsx` | Cloud | Cognito authentication UI (DDR-028) |
 | `SelectedFiles.tsx` | Both | File selection confirmation |
 | `TriageView.tsx` | Both | Triage results and deletion interface |
@@ -544,5 +576,5 @@ Step Functions provides built-in parallel execution, per-item retry with backoff
 ---
 
 **Last Updated**: 2026-02-08
-**Updated for**: DDR-030 (Cloud Selection Backend Architecture)
+**Updated for**: DDR-034 (Download ZIP Bundling with Speed-Based Video Grouping)
 
