@@ -46,6 +46,9 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-032](./DDR-032-multi-step-video-enhancement.md) | 2026-02-08 | Multi-Step Video Enhancement Pipeline | Accepted |
 | [DDR-033](./DDR-033-post-grouping-ui.md) | 2026-02-08 | Post Grouping UI | Accepted |
 | [DDR-034](./DDR-034-download-zip-bundling.md) | 2026-02-08 | Download ZIP Bundling with Speed-Based Video Grouping | Accepted |
+| [DDR-035](./DDR-035-multi-lambda-deployment.md) | 2026-02-08 | Multi-Lambda Deployment Architecture | Implementing |
+| [DDR-036](./DDR-036-ai-post-description.md) | 2026-02-08 | AI Post Description Generation with Full Media Context | Accepted |
+| [DDR-037](./DDR-037-step-navigation-and-state-invalidation.md) | 2026-02-08 | Step Navigation UI and Downstream State Invalidation | Accepted |
 
 ---
 
@@ -60,4 +63,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-08 (DDR-034)
+**Last Updated**: 2026-02-08 (DDR-037)

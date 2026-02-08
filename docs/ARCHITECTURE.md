@@ -343,13 +343,18 @@ Phase 2 migrates the application from a local tool to a remotely hosted service.
 | S3 (frontend) | Stores Preact SPA static assets |
 | CloudFront | Serves frontend + proxies `/api/*` to API Gateway |
 | API Gateway HTTP API | Routes requests to Lambda (JWT authorizer) |
-| Lambda (`provided.al2023`) | Go binary handling API requests |
+| Lambda x5 (`provided.al2023`) | API handler, Thumbnail, Selection, Enhancement, Video (DDR-035) |
+| Step Functions x2 | SelectionPipeline, EnhancementPipeline (DDR-035) |
+| DynamoDB | Session state with single-table design and TTL (DDR-035) |
+| ECR x2 | Light + Heavy container image repos with layer sharing (DDR-035) |
 | Cognito User Pool | Authentication (DDR-028) |
-| SSM Parameter Store | Gemini API key (SecureString) |
-| CodePipeline | CI/CD: GitHub source -> Go + Node builds -> S3 + Lambda deploy |
+| SSM Parameter Store | Gemini API key, Instagram credentials (SecureString) |
+| CodePipeline x2 | Frontend pipeline + Backend pipeline (DDR-035) |
 
 See [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md) for the full decision record.
 See [DDR-028](./design-decisions/DDR-028-security-hardening.md) for the security hardening decision record.
+See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) for the multi-Lambda deployment decision record.
+See [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) for the Docker image strategy.
 See [PHASE2-REMOTE-HOSTING.md](./PHASE2-REMOTE-HOSTING.md) for the hosting platform evaluation.
 
 ---
@@ -494,11 +499,38 @@ After grouping media into post groups, the user can download each group's media 
 
 See [DDR-034](./design-decisions/DDR-034-download-zip-bundling.md) for the full decision record.
 
-### Planned Steps (Not Yet Implemented)
+### Step 8: Post Description (DDR-036)
 
-8. **Post Description** — AI-generated Instagram captions with iterative feedback
+AI-generated Instagram carousel captions with full media context and iterative feedback.
 
-### Backend: Multi-Lambda + Step Functions Architecture (Planned)
+**Flow:**
+
+1. After downloading, user clicks "Generate Captions" to proceed to the description step
+2. For each post group: backend sends thumbnails + compressed videos + post group label + trip context to Gemini
+3. Gemini returns a structured JSON caption with: caption text, 15-20 hashtags, and a suggested location tag
+4. User reviews the caption in an editable text area, can remove individual hashtags
+5. User can provide feedback (e.g., "make it shorter", "more casual") to regenerate with multi-turn conversation context
+6. User accepts the caption and proceeds to the next group (or finishes)
+
+**Key design choices:**
+
+- **Full media context**: Actual thumbnails and video frames are sent to Gemini, not just text metadata. This allows Gemini to reference specific visual details in the caption.
+- **Group label as primary context**: The descriptive label the user entered in Step 6 is the most important input for caption generation — it describes the user's intent for the post.
+- **Inline processing**: Runs within the API Lambda's 30-second timeout (thumbnails are small, Gemini responds in 5-15 seconds). No Step Functions needed.
+- **Structured JSON output**: Caption, hashtags, and location tag are returned as separate fields for rich frontend editing.
+- **Consistent brand voice**: `description-system.txt` prompt defines Francis's persona, tone, caption structure, and hashtag strategy.
+
+**API endpoints:**
+
+| Method | Path | Action |
+|--------|------|--------|
+| `POST` | `/api/description/generate` | Generate AI caption for a post group |
+| `GET` | `/api/description/{id}/results` | Poll caption generation results |
+| `POST` | `/api/description/{id}/feedback` | Regenerate caption with user feedback |
+
+See [DDR-036](./design-decisions/DDR-036-ai-post-description.md) for the full decision record.
+
+### Backend: Multi-Lambda + Step Functions Architecture (DDR-035)
 
 Steps 2+ require long-running parallel processing that cannot fit within API Gateway's 30-second timeout. The architecture splits into two orchestration patterns:
 
@@ -517,34 +549,46 @@ CloudFront ──► API Gateway ──► API Lambda ──► DynamoDB
                                             └── Map: Video Lambda (per video, MaxConcurrency 5)
 ```
 
-**Lambda functions (planned):**
+**Lambda functions:**
 
-| Lambda | Purpose | Memory | Timeout |
-|--------|---------|--------|---------|
-| API Lambda (existing) | HTTP API, DynamoDB R/W, presigned URLs, start Step Functions | 256 MB | 30s |
-| Thumbnail Lambda | Per-file thumbnail generation (image resize / video frame) | 512 MB | 2 min |
-| Selection Lambda | Gemini AI media selection (all thumbnails + metadata) | 2-4 GB | 15 min |
-| Enhancement Lambda | Per-photo Gemini image editing | 1-2 GB | 5 min |
-| Video Processing Lambda | Per-video ffmpeg enhancement (optional) | 4+ GB | 15 min |
-| ZIP Lambda | Per-bundle zstd-compressed ZIP creation for downloads (DDR-034) | 2 GB | 10 min |
+| Lambda | Purpose | Memory | Timeout | Container |
+|--------|---------|--------|---------|-----------|
+| API Lambda | HTTP API, DynamoDB R/W, presigned URLs, start Step Functions | 256 MB | 30s | Light |
+| Thumbnail Lambda | Per-file thumbnail generation (image resize / video frame) | 512 MB | 2 min | Heavy |
+| Selection Lambda | Gemini AI media selection (all thumbnails + metadata) | 4 GB | 15 min | Heavy |
+| Enhancement Lambda | Per-photo Gemini image editing | 2 GB | 5 min | Light |
+| Video Processing Lambda | Per-video ffmpeg enhancement | 4 GB | 15 min | Heavy |
 
-**Step Functions state machines (planned):**
+Each Lambda is deployed as its own container image with exactly one Go binary. "Light" images (no ffmpeg, ~55 MB) are used for API and Enhancement. "Heavy" images (with ffmpeg, ~175 MB) are used for Thumbnail, Selection, and Video. See [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) for the image strategy and layer sharing.
+
+**Step Functions state machines:**
 
 | State Machine | Trigger | Flow |
 |---------------|---------|------|
-| `SelectionPipeline` | `POST /api/selection/start` | List S3 files -> Map: generate thumbnails (parallel) -> Selection Lambda (Gemini) -> Write to DynamoDB |
-| `EnhancementPipeline` | `POST /api/enhance/start` | Split photos/videos -> Parallel: Map enhance photos + Map process videos -> Aggregate -> Write to DynamoDB |
-| `DownloadPipeline` | `POST /api/download/start` | Calculate bundles -> Map: create ZIPs (parallel, MaxConcurrency 5) -> Generate presigned URLs -> Write to DynamoDB (DDR-034) |
+| `SelectionPipeline` | `POST /api/selection/start` | Map: generate thumbnails (parallel, MaxConcurrency 20) -> Selection Lambda (Gemini) |
+| `EnhancementPipeline` | `POST /api/enhance/start` | Parallel: Map enhance photos (MaxConcurrency 10) + Map process videos (MaxConcurrency 5) |
 
 Step Functions provides built-in parallel execution, per-item retry with backoff, concurrency throttling (`MaxConcurrency`), fan-in (wait for all), and visual execution monitoring. Cost is ~$0.002 per session (~$0.60/month at 10 sessions/day).
 
-**Infrastructure (planned):**
+**Infrastructure:**
 
 | Resource | Purpose |
 |----------|---------|
-| DynamoDB (`media-selection-sessions`) | Single-table session state with TTL auto-cleanup |
+| DynamoDB (`media-selection-sessions`) | Single-table session state with PK/SK, TTL auto-cleanup after 24h |
 | Step Functions (2 state machines) | Orchestrate parallel thumbnail generation and enhancement |
+| ECR (2 repositories) | Light images (no ffmpeg) and heavy images (with ffmpeg), with Docker layer deduplication |
 | SSM Parameter Store (new keys) | Instagram access token and user ID |
+
+**CI/CD (DDR-035):**
+
+Two independent CodePipelines:
+
+| Pipeline | Trigger | Flow |
+|----------|---------|------|
+| Frontend Pipeline | GitHub main branch | Preact SPA build -> S3 sync + CloudFront invalidation |
+| Backend Pipeline | GitHub main branch | 5 Docker builds (2 light + 3 heavy) -> 5 Lambda function updates |
+
+See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) for the full decision record.
 
 ---
 
@@ -576,5 +620,5 @@ Step Functions provides built-in parallel execution, per-item retry with backoff
 ---
 
 **Last Updated**: 2026-02-08
-**Updated for**: DDR-034 (Download ZIP Bundling with Speed-Based Video Grouping)
+**Updated for**: DDR-035 (Multi-Lambda Deployment Architecture)
 

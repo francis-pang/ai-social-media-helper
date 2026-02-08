@@ -33,6 +33,19 @@ const dragOverTarget = signal<string | null>(null);
 /** Counter for generating unique group IDs. */
 let groupIdCounter = 0;
 
+/**
+ * Reset all post grouping state to initial values (DDR-037).
+ * Called by the invalidation cascade when a previous step changes.
+ */
+export function resetPostGrouperState() {
+  postGroups.value = [];
+  groupableMedia.value = [];
+  selectedGroupId.value = null;
+  dragItem.value = null;
+  dragOverTarget.value = null;
+  groupIdCounter = 0;
+}
+
 // --- Computed ---
 
 /** Set of keys currently assigned to any group. */

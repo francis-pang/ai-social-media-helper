@@ -1,5 +1,5 @@
 import { signal, computed } from "@preact/signals";
-import { navigateBack, uploadSessionId } from "../app";
+import { navigateBack, navigateToStep, uploadSessionId } from "../app";
 import { startDownload, getDownloadResults, thumbnailUrl } from "../api/client";
 import { postGroups } from "./PostGrouper";
 import type {
@@ -23,6 +23,15 @@ const downloadStates = signal<Record<string, GroupDownloadState>>({});
 
 /** Which group is currently expanded. */
 const expandedGroupId = signal<string | null>(null);
+
+/**
+ * Reset all download state to initial values (DDR-037).
+ * Called by the invalidation cascade when a previous step changes.
+ */
+export function resetDownloadState() {
+  downloadStates.value = {};
+  expandedGroupId.value = null;
+}
 
 // --- Helpers ---
 
@@ -630,9 +639,18 @@ export function DownloadView() {
             </>
           )}
         </span>
-        <button class="outline" onClick={() => navigateBack()}>
-          Back to Grouping
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button class="outline" onClick={() => navigateBack()}>
+            Back to Grouping
+          </button>
+          <button
+            class="primary"
+            onClick={() => navigateToStep("description")}
+            style={{ fontSize: "0.8125rem" }}
+          >
+            Generate Captions
+          </button>
+        </div>
       </div>
     </div>
   );

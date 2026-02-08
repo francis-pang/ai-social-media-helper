@@ -230,7 +230,11 @@ ai-social-media-helper/
 │   ├── media-select/        # Media selection CLI (Instagram carousel)
 │   ├── media-triage/        # Media triage CLI (identify unsaveable files)
 │   ├── media-web/           # Local web server (JSON API + embedded SPA, Phase 1)
-│   └── media-lambda/        # AWS Lambda function (S3-based triage, Phase 2)
+│   └── media-lambda/        # AWS Lambda entry points + Dockerfiles (Phase 2)
+│       ├── main.go          # API Lambda handler
+│       ├── Dockerfile       # Original single-image build (DDR-027)
+│       ├── Dockerfile.light # Parameterized: Go binary only (DDR-035)
+│       └── Dockerfile.heavy # Parameterized: Go binary + ffmpeg (DDR-035)
 ├── web/
 │   └── frontend/            # Preact SPA (TypeScript + Vite, dual-mode)
 │       └── src/
@@ -244,13 +248,14 @@ ai-social-media-helper/
 │           └── types/api.ts           # Shared TypeScript types
 ├── internal/                # Shared Go packages (used by all binaries)
 │   ├── auth/               # API key retrieval & validation
-│   ├── chat/               # Gemini API interaction (selection, triage)
+│   ├── chat/               # Gemini API interaction (selection, triage, enhancement)
 │   ├── filehandler/        # Media file loading, EXIF, thumbnails, compression
 │   ├── logging/            # Structured logging
 │   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
 ├── docs/                    # Design documentation
-│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-029)
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-035)
+│   ├── DOCKER-IMAGES.md    # Docker image strategy and ECR layer sharing (DDR-035)
 │   └── ...                 # See docs/index.md
 ├── Makefile                 # Build orchestration
 ├── go.mod                   # Go module definition
@@ -265,6 +270,7 @@ ai-social-media-helper/
 | Implementation Roadmap | [plan.md](./plan.md) |
 | All Design Docs | [docs/index.md](./docs/index.md) |
 | Architecture | [docs/architecture.md](./docs/architecture.md) |
+| Docker Image Strategy | [docs/DOCKER-IMAGES.md](./docs/DOCKER-IMAGES.md) |
 | Design Decisions | [docs/design-decisions/](./docs/design-decisions/) |
 | Media Analysis | [docs/media_analysis.md](./docs/media_analysis.md) |
 
@@ -326,10 +332,11 @@ go test -cover ./...
 - [x] Media selection Step 1: File System Access API upload with thumbnails and trip context (DDR-029)
 - [x] Media selection Step 2: AI-powered selection with structured JSON output and thumbnail pre-generation (DDR-030)
 - [x] Media selection Step 3: Review selection with override, scene groups, and exclusion reasons (DDR-030)
+- [x] Multi-Lambda deployment: 5 Lambdas, 2 Step Functions, DynamoDB, 2 ECR repos, split pipelines (DDR-035)
 - [ ] Media selection Step 4-5: AI-powered media enhancement with feedback loops
-- [ ] Media selection Step 6-8: Post grouping, publishing, description
-- [ ] DynamoDB session state store
-- [ ] Step Functions orchestration (SelectionPipeline, EnhancementPipeline)
+- [ ] Media selection Step 6-7: Post grouping, publishing/download
+- [x] Media selection Step 8: AI post description with full media context and iterative feedback (DDR-036)
+- [ ] DynamoDB session state store (Go implementation: `internal/store/`)
 - [ ] Video triage in Lambda (requires FFmpeg Lambda layer)
 - [ ] Custom domain with ACM certificate
 - [ ] Session management

@@ -1,0 +1,40 @@
+# Parameterized Dockerfile for Lambda functions that NEED ffmpeg (DDR-035).
+#
+# Builds a single Go binary specified by CMD_TARGET and packages it with
+# static ffmpeg/ffprobe into the AWS Lambda provided:al2023 base image.
+# Each Lambda gets its own container image with exactly one binary.
+#
+# Usage:
+#   docker build --build-arg CMD_TARGET=thumbnail-lambda -f Dockerfile.heavy .
+#   docker build --build-arg CMD_TARGET=selection-lambda -f Dockerfile.heavy .
+#   docker build --build-arg CMD_TARGET=video-lambda -f Dockerfile.heavy .
+#
+# Used by: Thumbnail Lambda, Selection Lambda, Video Processing Lambda
+# See also: Dockerfile.light (no ffmpeg)
+# See also: docs/DOCKER-IMAGES.md for layer sharing strategy
+
+ARG CMD_TARGET=thumbnail-lambda
+
+# Stage 1: Build the Go binary
+FROM golang:1.24 AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG CMD_TARGET
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o /handler ./cmd/${CMD_TARGET}
+
+# Stage 2: Runtime — AL2023 base + ffmpeg + Go binary
+# AWS base image is proactively cached on Lambda workers for faster cold starts.
+# Static ffmpeg includes libsvtav1 (AV1) and libopus (Opus) codecs (DDR-018).
+#
+# Layer order matters for ECR deduplication and Lambda caching:
+#   1. Base image (shared by ALL Lambda images in this repo)
+#   2. ffmpeg binaries (shared by ALL Lambda images in this repo)
+#   3. Go binary (unique per Lambda — last layer for optimal caching)
+FROM public.ecr.aws/lambda/provided:al2023
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/
+COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/
+COPY --from=builder /handler /var/runtime/bootstrap
+ENTRYPOINT ["/var/runtime/bootstrap"]

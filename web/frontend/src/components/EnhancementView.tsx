@@ -4,6 +4,7 @@ import {
   currentStep,
   navigateBack,
   navigateToStep,
+  invalidateDownstream,
   uploadSessionId,
 } from "../app";
 import {
@@ -34,6 +35,20 @@ const feedbackLoading = signal(false);
 /** Enhancement keys to process (carried from selection step). */
 export const enhancementKeys = signal<string[]>([]);
 
+/**
+ * Reset all enhancement state to initial values (DDR-037).
+ * Called by the invalidation cascade when a previous step changes.
+ */
+export function resetEnhancementState() {
+  enhancementJobId.value = null;
+  results.value = null;
+  error.value = null;
+  selectedItemKey.value = null;
+  feedbackText.value = "";
+  feedbackLoading.value = false;
+  enhancementKeys.value = [];
+}
+
 // --- Polling ---
 
 function startEnhancementJob() {
@@ -48,6 +63,10 @@ function startEnhancementJob() {
     error.value = "No photos selected for enhancement.";
     return;
   }
+
+  // Invalidate all downstream state (grouping, download, description)
+  // when re-running enhancement (DDR-037).
+  invalidateDownstream("grouping");
 
   error.value = null;
   startEnhancement({ sessionId, keys })

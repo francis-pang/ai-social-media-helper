@@ -58,6 +58,12 @@ var VideoEnhancementSystemPrompt string
 //go:embed prompts/video-enhancement-analysis.txt
 var VideoEnhancementAnalysisPrompt string
 
+// DescriptionSystemPrompt provides instructions for AI-generated Instagram carousel captions.
+// See DDR-036: AI Post Description Generation with Full Media Context.
+//
+//go:embed prompts/description-system.txt
+var DescriptionSystemPrompt string
+
 // --- Dynamic prompt templates (require metadata context) ---
 
 //go:embed prompts/social-media-image.txt

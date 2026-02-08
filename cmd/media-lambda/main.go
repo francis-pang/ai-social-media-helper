@@ -19,6 +19,10 @@
 //	POST /api/triage/{id}/confirm  — delete confirmed files from S3
 //	POST /api/download/start       — start ZIP bundle creation for a post group (DDR-034)
 //	GET  /api/download/{id}/results — poll download bundle status and URLs (DDR-034)
+//	POST /api/description/generate — generate AI Instagram caption for a post group (DDR-036)
+//	GET  /api/description/{id}/results — poll caption generation results (DDR-036)
+//	POST /api/description/{id}/feedback — regenerate caption with user feedback (DDR-036)
+//	POST /api/session/invalidate   — invalidate downstream state on back-navigation (DDR-037)
 //	GET  /api/media/thumbnail      — generate thumbnail from S3 object
 //	GET  /api/media/full           — presigned GET URL for full-resolution image
 package main
@@ -229,6 +233,11 @@ func main() {
 	mux.HandleFunc("/api/selection/", handleSelectionRoutes)
 	mux.HandleFunc("/api/enhance/start", handleEnhanceStart)
 	mux.HandleFunc("/api/enhance/", handleEnhanceRoutes)
+	mux.HandleFunc("/api/download/start", handleDownloadStart)
+	mux.HandleFunc("/api/download/", handleDownloadRoutes)
+	mux.HandleFunc("/api/description/generate", handleDescriptionGenerate)
+	mux.HandleFunc("/api/description/", handleDescriptionRoutes)
+	mux.HandleFunc("/api/session/invalidate", handleSessionInvalidate) // DDR-037
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)
 
@@ -2243,6 +2252,425 @@ func generateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension 
 	return filehandler.GenerateThumbnail(mf, maxDimension)
 }
 
+// --- Description Endpoints (DDR-036) ---
+
+type descriptionJob struct {
+	mu        sync.Mutex
+	id        string
+	sessionID string
+	status    string // "pending", "processing", "complete", "error"
+	result    *chat.DescriptionResult
+	// rawResponse stores the raw JSON response for multi-turn history
+	rawResponse string
+	history     []chat.DescriptionConversationEntry
+	// groupLabel and tripContext are stored for regeneration
+	groupLabel  string
+	tripContext string
+	// mediaItems are stored for regeneration (thumbnails only — small)
+	mediaItems []chat.DescriptionMediaItem
+	errMsg     string
+}
+
+var (
+	descJobsMu sync.Mutex
+	descJobs   = make(map[string]*descriptionJob)
+)
+
+func newDescriptionJobID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatal().Err(err).Msg("Failed to generate random description job ID")
+	}
+	return "desc-" + hex.EncodeToString(b)
+}
+
+func newDescriptionJob(sessionID string) *descriptionJob {
+	descJobsMu.Lock()
+	defer descJobsMu.Unlock()
+	id := newDescriptionJobID()
+	j := &descriptionJob{
+		id:        id,
+		sessionID: sessionID,
+		status:    "pending",
+	}
+	descJobs[id] = j
+	return j
+}
+
+func getDescriptionJob(id string) *descriptionJob {
+	descJobsMu.Lock()
+	defer descJobsMu.Unlock()
+	return descJobs[id]
+}
+
+// POST /api/description/generate
+// Body: {"sessionId": "uuid", "keys": ["uuid/enhanced/file1.jpg", ...], "groupLabel": "...", "tripContext": "..."}
+func handleDescriptionGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID   string   `json:"sessionId"`
+		Keys        []string `json:"keys"`
+		GroupLabel  string   `json:"groupLabel"`
+		TripContext string   `json:"tripContext"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Keys) == 0 {
+		httpError(w, http.StatusBadRequest, "keys are required")
+		return
+	}
+	for _, key := range req.Keys {
+		if err := validateS3Key(key); err != nil {
+			httpError(w, http.StatusBadRequest, fmt.Sprintf("invalid key: %s", key))
+			return
+		}
+	}
+
+	job := newDescriptionJob(req.SessionID)
+	job.groupLabel = req.GroupLabel
+	job.tripContext = req.TripContext
+
+	go runDescriptionJob(job, req.Keys)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"id": job.id,
+	})
+}
+
+func handleDescriptionRoutes(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/description/"), "/")
+	if len(parts) < 2 {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	jobID := parts[0]
+	if !strings.HasPrefix(jobID, "desc-") {
+		jobID = "desc-" + jobID
+	}
+	action := parts[1]
+
+	job := getDescriptionJob(jobID)
+	if job == nil {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	switch action {
+	case "results":
+		handleDescriptionResults(w, r, job)
+	case "feedback":
+		handleDescriptionFeedback(w, r, job)
+	default:
+		httpError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// GET /api/description/{id}/results?sessionId=...
+func handleDescriptionResults(w http.ResponseWriter, r *http.Request, job *descriptionJob) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Ownership check (DDR-028)
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" || sessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	resp := map[string]interface{}{
+		"id":            job.id,
+		"status":        job.status,
+		"feedbackRound": len(job.history),
+	}
+	if job.result != nil {
+		resp["caption"] = job.result.Caption
+		resp["hashtags"] = job.result.Hashtags
+		resp["locationTag"] = job.result.LocationTag
+	}
+	if job.errMsg != "" {
+		resp["error"] = job.errMsg
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/description/{id}/feedback
+// Body: {"sessionId": "uuid", "feedback": "make it shorter"}
+func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, job *descriptionJob) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"sessionId"`
+		Feedback  string `json:"feedback"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Ownership check (DDR-028)
+	if req.SessionID == "" || req.SessionID != job.sessionID {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if req.Feedback == "" {
+		httpError(w, http.StatusBadRequest, "feedback is required")
+		return
+	}
+
+	// Mark as processing
+	job.mu.Lock()
+	if job.status != "complete" {
+		job.mu.Unlock()
+		httpError(w, http.StatusBadRequest, "description must be complete before providing feedback")
+		return
+	}
+	// Record the current response in history before regenerating
+	job.history = append(job.history, chat.DescriptionConversationEntry{
+		UserFeedback:  req.Feedback,
+		ModelResponse: job.rawResponse,
+	})
+	job.status = "processing"
+	job.mu.Unlock()
+
+	go runDescriptionFeedback(job, req.Feedback)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"status": "processing",
+	})
+}
+
+// runDescriptionJob generates the initial caption for a post group.
+func runDescriptionJob(job *descriptionJob, keys []string) {
+	job.mu.Lock()
+	job.status = "processing"
+	job.mu.Unlock()
+
+	ctx := context.Background()
+
+	// Initialize Gemini client
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		setDescriptionJobError(job, "API key not configured")
+		return
+	}
+
+	genaiClient, err := chat.NewGeminiClient(ctx, apiKey)
+	if err != nil {
+		setDescriptionJobError(job, "failed to initialize AI client")
+		return
+	}
+
+	// Build media items from S3 keys
+	mediaItems, err := buildDescriptionMediaItems(ctx, keys)
+	if err != nil {
+		setDescriptionJobError(job, "failed to prepare media")
+		return
+	}
+
+	// Store media items for potential regeneration
+	job.mu.Lock()
+	job.mediaItems = mediaItems
+	job.mu.Unlock()
+
+	// Generate description
+	result, rawResponse, err := chat.GenerateDescription(
+		ctx, genaiClient,
+		job.groupLabel, job.tripContext,
+		mediaItems,
+	)
+	if err != nil {
+		log.Error().Err(err).Msg("Description generation failed")
+		setDescriptionJobError(job, "caption generation failed")
+		return
+	}
+
+	job.mu.Lock()
+	job.result = result
+	job.rawResponse = rawResponse
+	job.status = "complete"
+	job.mu.Unlock()
+
+	log.Info().
+		Str("job", job.id).
+		Int("caption_length", len(result.Caption)).
+		Msg("Description generation complete")
+}
+
+// runDescriptionFeedback regenerates a caption with user feedback.
+func runDescriptionFeedback(job *descriptionJob, feedback string) {
+	ctx := context.Background()
+
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		setDescriptionJobError(job, "API key not configured")
+		return
+	}
+
+	genaiClient, err := chat.NewGeminiClient(ctx, apiKey)
+	if err != nil {
+		setDescriptionJobError(job, "failed to initialize AI client")
+		return
+	}
+
+	job.mu.Lock()
+	mediaItems := job.mediaItems
+	history := make([]chat.DescriptionConversationEntry, len(job.history))
+	copy(history, job.history)
+	groupLabel := job.groupLabel
+	tripContext := job.tripContext
+	job.mu.Unlock()
+
+	result, rawResponse, err := chat.RegenerateDescription(
+		ctx, genaiClient,
+		groupLabel, tripContext,
+		mediaItems,
+		feedback, history,
+	)
+	if err != nil {
+		log.Error().Err(err).Msg("Description regeneration failed")
+		setDescriptionJobError(job, "caption regeneration failed")
+		return
+	}
+
+	job.mu.Lock()
+	job.result = result
+	job.rawResponse = rawResponse
+	job.status = "complete"
+	job.mu.Unlock()
+
+	log.Info().
+		Str("job", job.id).
+		Int("caption_length", len(result.Caption)).
+		Int("feedback_round", len(history)).
+		Msg("Description regeneration complete")
+}
+
+// buildDescriptionMediaItems downloads thumbnails from S3 and builds
+// DescriptionMediaItem structs for the caption generation prompt.
+func buildDescriptionMediaItems(ctx context.Context, keys []string) ([]chat.DescriptionMediaItem, error) {
+	var items []chat.DescriptionMediaItem
+
+	for _, key := range keys {
+		filename := filepath.Base(key)
+		ext := strings.ToLower(filepath.Ext(key))
+
+		item := chat.DescriptionMediaItem{
+			Filename: filename,
+		}
+
+		if filehandler.IsImage(ext) {
+			item.Type = "Photo"
+
+			// Try to get the pre-generated thumbnail from S3
+			// Thumbnails are at {sessionId}/thumbnails/{filename}.jpg
+			parts := strings.SplitN(key, "/", 2)
+			thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", parts[0], strings.TrimSuffix(filename, ext))
+
+			tmpPath, cleanup, err := downloadFromS3(ctx, thumbKey)
+			if err != nil {
+				// Fall back: download the original and generate a thumbnail in-memory
+				log.Debug().Str("key", thumbKey).Msg("Pre-generated thumbnail not found, downloading original")
+				origPath, origCleanup, origErr := downloadFromS3(ctx, key)
+				if origErr != nil {
+					log.Warn().Err(origErr).Str("key", key).Msg("Failed to download media for description, skipping")
+					continue
+				}
+				defer origCleanup()
+
+				origData, readErr := os.ReadFile(origPath)
+				if readErr != nil {
+					log.Warn().Err(readErr).Str("key", key).Msg("Failed to read original for description, skipping")
+					continue
+				}
+
+				mime := "image/jpeg"
+				if m, ok := filehandler.SupportedImageExtensions[ext]; ok {
+					mime = m
+				}
+
+				thumbData, thumbMIME, thumbErr := generateThumbnailFromBytes(origData, mime, filehandler.DefaultThumbnailMaxDimension)
+				if thumbErr != nil {
+					log.Warn().Err(thumbErr).Str("key", key).Msg("Failed to generate thumbnail for description, skipping")
+					continue
+				}
+				item.ThumbnailData = thumbData
+				item.ThumbnailMIMEType = thumbMIME
+			} else {
+				defer cleanup()
+				thumbData, err := os.ReadFile(tmpPath)
+				if err != nil {
+					log.Warn().Err(err).Str("key", thumbKey).Msg("Failed to read thumbnail")
+					continue
+				}
+				item.ThumbnailData = thumbData
+				item.ThumbnailMIMEType = "image/jpeg"
+			}
+		} else if filehandler.IsVideo(ext) {
+			item.Type = "Video"
+
+			// Try to get the pre-generated video thumbnail from S3
+			parts := strings.SplitN(key, "/", 2)
+			thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", parts[0], strings.TrimSuffix(filename, ext))
+
+			tmpPath, cleanup, err := downloadFromS3(ctx, thumbKey)
+			if err != nil {
+				log.Debug().Str("key", thumbKey).Msg("Video thumbnail not found, skipping video media")
+				// Videos without thumbnails: send as photo thumbnail if available
+				continue
+			}
+			defer cleanup()
+
+			// For videos, send the thumbnail frame as a photo (not a full video upload)
+			// This keeps the description request fast and within API Gateway timeout.
+			thumbData, err := os.ReadFile(tmpPath)
+			if err != nil {
+				log.Warn().Err(err).Str("key", thumbKey).Msg("Failed to read video thumbnail")
+				continue
+			}
+			item.ThumbnailData = thumbData
+			item.ThumbnailMIMEType = "image/jpeg"
+		} else {
+			continue // skip unknown media types
+		}
+
+		items = append(items, item)
+	}
+
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no media items could be prepared for description")
+	}
+
+	return items, nil
+}
+
+func setDescriptionJobError(job *descriptionJob, msg string) {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	job.status = "error"
+	job.errMsg = msg
+	log.Error().Str("job", job.id).Str("error", msg).Msg("Description job failed")
+}
+
 // --- S3 Helpers ---
 
 // downloadFromS3 downloads an S3 object to a temp file and returns its path
@@ -2317,6 +2745,156 @@ func setJobError(job *triageJob, msg string) {
 	job.status = "error"
 	job.errMsg = msg
 	log.Error().Str("job", job.id).Str("error", msg).Msg("Triage job failed")
+}
+
+// --- Session Invalidation (DDR-037) ---
+
+// POST /api/session/invalidate
+// Body: {"sessionId": "uuid", "fromStep": "selection"|"enhancement"|"grouping"|"download"|"description"}
+//
+// Invalidates all downstream in-memory job state from the given step onward.
+// Called by the frontend when a user navigates back and re-triggers processing,
+// ensuring stale job results are not returned on subsequent polls.
+func handleSessionInvalidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"sessionId"`
+		FromStep  string `json:"fromStep"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Determine which job types to invalidate based on the cascade.
+	// Order: selection -> enhancement -> grouping (no backend state) -> download -> description
+	// "fromStep" means: invalidate this step and everything after it.
+	type stepDef struct {
+		name string
+		// index in the cascade (lower = earlier)
+	}
+	stepOrder := []string{"selection", "enhancement", "grouping", "download", "description"}
+	fromIndex := -1
+	for i, s := range stepOrder {
+		if s == req.FromStep {
+			fromIndex = i
+			break
+		}
+	}
+	if fromIndex < 0 {
+		httpError(w, http.StatusBadRequest, "invalid fromStep: must be one of selection, enhancement, grouping, download, description")
+		return
+	}
+
+	invalidated := []string{}
+
+	// Invalidate steps from fromIndex onward
+	for _, step := range stepOrder[fromIndex:] {
+		switch step {
+		case "selection":
+			selJobsMu.Lock()
+			for id, job := range selJobs {
+				if job.sessionID == req.SessionID {
+					delete(selJobs, id)
+					invalidated = append(invalidated, "selection:"+id)
+				}
+			}
+			selJobsMu.Unlock()
+
+		case "enhancement":
+			enhJobsMu.Lock()
+			for id, job := range enhJobs {
+				if job.sessionID == req.SessionID {
+					delete(enhJobs, id)
+					invalidated = append(invalidated, "enhancement:"+id)
+				}
+			}
+			enhJobsMu.Unlock()
+
+			// Best-effort: delete S3 enhanced/ and thumbnails/ artifacts
+			go cleanupS3Prefix(req.SessionID, "enhanced/")
+			go cleanupS3Prefix(req.SessionID, "thumbnails/")
+
+		case "download":
+			dlJobsMu.Lock()
+			for id, job := range dlJobs {
+				if job.sessionID == req.SessionID {
+					delete(dlJobs, id)
+					invalidated = append(invalidated, "download:"+id)
+				}
+			}
+			dlJobsMu.Unlock()
+
+		case "description":
+			descJobsMu.Lock()
+			for id, job := range descJobs {
+				if job.sessionID == req.SessionID {
+					delete(descJobs, id)
+					invalidated = append(invalidated, "description:"+id)
+				}
+			}
+			descJobsMu.Unlock()
+
+		case "grouping":
+			// Grouping is client-side only — no backend state to invalidate.
+			invalidated = append(invalidated, "grouping:client-only")
+		}
+	}
+
+	log.Info().
+		Str("sessionId", req.SessionID).
+		Str("fromStep", req.FromStep).
+		Int("count", len(invalidated)).
+		Msg("Session state invalidated")
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"invalidated": invalidated,
+	})
+}
+
+// cleanupS3Prefix deletes all objects under {sessionId}/{prefix} in the media bucket.
+// Best-effort — errors are logged but do not affect the invalidation response.
+// Orphaned files are cleaned by the bucket's 24-hour lifecycle policy (DDR-035).
+func cleanupS3Prefix(sessionID, prefix string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fullPrefix := sessionID + "/" + prefix
+	input := &s3.ListObjectsV2Input{
+		Bucket: aws.String(mediaBucket),
+		Prefix: aws.String(fullPrefix),
+	}
+
+	result, err := s3Client.ListObjectsV2(ctx, input)
+	if err != nil {
+		log.Warn().Err(err).Str("prefix", fullPrefix).Msg("Failed to list S3 objects for cleanup")
+		return
+	}
+
+	deleted := 0
+	for _, obj := range result.Contents {
+		_, delErr := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(mediaBucket),
+			Key:    obj.Key,
+		})
+		if delErr != nil {
+			log.Warn().Err(delErr).Str("key", *obj.Key).Msg("Failed to delete S3 object during cleanup")
+			continue
+		}
+		deleted++
+	}
+
+	if deleted > 0 {
+		log.Info().Str("prefix", fullPrefix).Int("deleted", deleted).Msg("S3 cleanup completed")
+	}
 }
 
 // --- JSON Helpers ---

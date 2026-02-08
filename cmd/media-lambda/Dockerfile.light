@@ -1,0 +1,32 @@
+# Parameterized Dockerfile for Lambda functions that do NOT need ffmpeg (DDR-035).
+#
+# Builds a single Go binary specified by CMD_TARGET and packages it into the
+# AWS Lambda provided:al2023 base image. Each Lambda gets its own container
+# image with exactly one binary — no unused code shipped.
+#
+# Usage:
+#   docker build --build-arg CMD_TARGET=media-lambda -f Dockerfile.light .
+#   docker build --build-arg CMD_TARGET=enhance-lambda -f Dockerfile.light .
+#
+# Used by: API Lambda, Enhancement Lambda
+# See also: Dockerfile.heavy (adds ffmpeg/ffprobe)
+# See also: docs/DOCKER-IMAGES.md for layer sharing strategy
+
+ARG CMD_TARGET=media-lambda
+
+# Stage 1: Build the Go binary
+FROM golang:1.24 AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG CMD_TARGET
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o /handler ./cmd/${CMD_TARGET}
+
+# Stage 2: Runtime — minimal AL2023 base image
+# AWS base image is proactively cached on Lambda workers for faster cold starts.
+# Layer order: base image (shared) -> Go binary (unique per Lambda)
+FROM public.ecr.aws/lambda/provided:al2023
+COPY --from=builder /handler /var/runtime/bootstrap
+ENTRYPOINT ["/var/runtime/bootstrap"]

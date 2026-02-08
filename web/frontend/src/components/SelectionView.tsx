@@ -4,6 +4,7 @@ import {
   currentStep,
   navigateBack,
   navigateToStep,
+  invalidateDownstream,
   uploadSessionId,
   tripContext,
 } from "../app";
@@ -37,6 +38,20 @@ const excludedExpanded = signal(false);
 /** Whether the scene groups section is expanded. */
 const scenesExpanded = signal(false);
 
+/**
+ * Reset all selection state to initial values (DDR-037).
+ * Called by the invalidation cascade when a previous step changes.
+ */
+export function resetSelectionState() {
+  selectionJobId.value = null;
+  results.value = null;
+  error.value = null;
+  addedToSelection.value = new Set();
+  removedFromSelection.value = new Set();
+  excludedExpanded.value = false;
+  scenesExpanded.value = false;
+}
+
 // --- Polling ---
 
 function startSelectionJob() {
@@ -45,6 +60,10 @@ function startSelectionJob() {
     error.value = "No upload session found. Please upload media first.";
     return;
   }
+
+  // Invalidate all downstream state (enhancement, grouping, download, description)
+  // when re-running selection (DDR-037).
+  invalidateDownstream("enhancement");
 
   error.value = null;
   startSelection({

@@ -20,6 +20,11 @@ import type {
   DownloadStartRequest,
   DownloadStartResponse,
   DownloadResults,
+  DescriptionGenerateRequest,
+  DescriptionGenerateResponse,
+  DescriptionResults,
+  DescriptionFeedbackRequest,
+  DescriptionFeedbackResponse,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -253,4 +258,67 @@ export function getDownloadResults(
   return fetchJSON<DownloadResults>(
     `/api/download/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
   );
+}
+
+// --- Description APIs (DDR-036) ---
+
+/** Generate an AI Instagram caption for a post group. */
+export function generateDescription(
+  req: DescriptionGenerateRequest,
+): Promise<DescriptionGenerateResponse> {
+  return fetchJSON<DescriptionGenerateResponse>("/api/description/generate", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Get description generation results (poll until status is "complete" or "error"). */
+export function getDescriptionResults(
+  id: string,
+  sessionId: string,
+): Promise<DescriptionResults> {
+  return fetchJSON<DescriptionResults>(
+    `/api/description/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
+/** Submit feedback to regenerate a caption. */
+export function submitDescriptionFeedback(
+  id: string,
+  req: DescriptionFeedbackRequest,
+): Promise<DescriptionFeedbackResponse> {
+  return fetchJSON<DescriptionFeedbackResponse>(
+    `/api/description/${id}/feedback`,
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+  );
+}
+
+// --- Session Invalidation API (DDR-037) ---
+
+/** Request body for POST /api/session/invalidate. */
+export interface InvalidateRequest {
+  sessionId: string;
+  /** The step from which to invalidate (all downstream state is cleared). */
+  fromStep: "selection" | "enhancement" | "grouping" | "download" | "description";
+}
+
+/** Response from POST /api/session/invalidate. */
+export interface InvalidateResponse {
+  invalidated: string[];
+}
+
+/**
+ * Invalidate downstream state when a user navigates back and re-processes.
+ * Clears in-memory jobs and optionally S3 artifacts for steps after fromStep.
+ */
+export function invalidateSession(
+  req: InvalidateRequest,
+): Promise<InvalidateResponse> {
+  return fetchJSON<InvalidateResponse>("/api/session/invalidate", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }

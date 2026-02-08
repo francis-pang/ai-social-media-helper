@@ -278,6 +278,43 @@ export interface DownloadResults {
   error?: string;
 }
 
+// --- Description types (DDR-036) ---
+
+/** Request body for POST /api/description/generate. */
+export interface DescriptionGenerateRequest {
+  sessionId: string;
+  keys: string[];
+  groupLabel: string;
+  tripContext: string;
+}
+
+/** Response from POST /api/description/generate. */
+export interface DescriptionGenerateResponse {
+  id: string;
+}
+
+/** Response from GET /api/description/{id}/results. */
+export interface DescriptionResults {
+  id: string;
+  status: "pending" | "processing" | "complete" | "error";
+  caption?: string;
+  hashtags?: string[];
+  locationTag?: string;
+  feedbackRound: number;
+  error?: string;
+}
+
+/** Request body for POST /api/description/{id}/feedback. */
+export interface DescriptionFeedbackRequest {
+  sessionId: string;
+  feedback: string;
+}
+
+/** Response from POST /api/description/{id}/feedback. */
+export interface DescriptionFeedbackResponse {
+  status: string;
+}
+
 // --- Post Grouping types (DDR-033) ---
 
 /** A post group — a collection of media items destined for one Instagram carousel or download bundle. */
