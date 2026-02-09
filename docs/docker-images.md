@@ -257,7 +257,7 @@ cmd/media-lambda/
 - [DDR-027](design-decisions/DDR-027-container-image-lambda-local-commands.md): Original container image Lambda deployment
 - [DDR-035](design-decisions/DDR-035-multi-lambda-deployment.md): Multi-Lambda deployment architecture decision
 - [DDR-041](design-decisions/DDR-041-container-registry-strategy.md): Container registry strategy (ECR Private + ECR Public)
-- [ARCHITECTURE.md](ARCHITECTURE.md): Overall system architecture
+- [architecture.md](architecture.md): Overall system architecture
 
 ---
 

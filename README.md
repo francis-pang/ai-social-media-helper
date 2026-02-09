@@ -88,15 +88,15 @@ export GEMINI_API_KEY="your-api-key-here"
 | `GEMINI_MODEL` | No | `gemini-3-flash` | Model to use |
 | `GEMINI_LOG_LEVEL` | No | `info` | Log level: debug, info, warn, error |
 
-See [docs/AUTHENTICATION.md](./docs/AUTHENTICATION.md) for GPG-encrypted credential storage and cloud authentication (Cognito).
+See [docs/authentication.md](./docs/authentication.md) for GPG-encrypted credential storage and cloud authentication (Cognito).
 
 ## Documentation
 
 All design documentation lives in [docs/](./docs/index.md):
 
-- **Architecture** — [ARCHITECTURE.md](./docs/ARCHITECTURE.md) — system components, local + cloud deployment
-- **Workflows** — [MEDIA-TRIAGE.md](./docs/MEDIA-TRIAGE.md), [MEDIA-SELECTION.md](./docs/MEDIA-SELECTION.md)
-- **Media processing** — [IMAGE-PROCESSING.md](./docs/IMAGE-PROCESSING.md), [VIDEO-PROCESSING.md](./docs/VIDEO-PROCESSING.md)
+- **Architecture** — [architecture.md](./docs/architecture.md) — system components, local + cloud deployment
+- **Workflows** — [media-triage.md](./docs/media-triage.md), [media-selection.md](./docs/media-selection.md)
+- **Media processing** — [image-processing.md](./docs/image-processing.md), [video-processing.md](./docs/video-processing.md)
 - **Design decisions** — [42 DDRs](./docs/design-decisions/) documenting every architectural choice
 
 ## Roadmap

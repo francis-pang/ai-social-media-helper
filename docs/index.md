@@ -4,38 +4,38 @@
 
 | Document | Description |
 |----------|-------------|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | System architecture — components, local + cloud deployment, security, CI/CD |
+| [architecture.md](./architecture.md) | System architecture — components, local + cloud deployment, security, CI/CD |
 
 ## Workflows
 
 | Document | Description |
 |----------|-------------|
-| [MEDIA-TRIAGE.md](./MEDIA-TRIAGE.md) | Media triage workflow — AI identification of unsaveable media |
-| [MEDIA-SELECTION.md](./MEDIA-SELECTION.md) | Media selection workflow — AI-powered selection for Instagram carousels |
+| [media-triage.md](./media-triage.md) | Media triage workflow — AI identification of unsaveable media |
+| [media-selection.md](./media-selection.md) | Media selection workflow — AI-powered selection for Instagram carousels |
 
 ## Media Processing
 
 | Document | Description |
 |----------|-------------|
-| [IMAGE-PROCESSING.md](./IMAGE-PROCESSING.md) | Image processing — formats, EXIF metadata, thumbnails, enhancement pipeline |
-| [VIDEO-PROCESSING.md](./VIDEO-PROCESSING.md) | Video processing — formats, compression, frame-based enhancement pipeline |
+| [image-processing.md](./image-processing.md) | Image processing — formats, EXIF metadata, thumbnails, enhancement pipeline |
+| [video-processing.md](./video-processing.md) | Video processing — formats, compression, frame-based enhancement pipeline |
 
 ## Authentication
 
 | Document | Description |
 |----------|-------------|
-| [AUTHENTICATION.md](./AUTHENTICATION.md) | API key storage, validation, GPG encryption, Cognito cloud auth |
+| [authentication.md](./authentication.md) | API key storage, validation, GPG encryption, Cognito cloud auth |
 
 ## Operations and Reference
 
 | Document | Description |
 |----------|-------------|
-| [CONFIGURATION.md](./CONFIGURATION.md) | Configuration options and environment variables |
-| [CLI_UX.md](./CLI_UX.md) | CLI user experience design |
-| [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) | Docker image strategy, ECR layer sharing |
-| [OPERATIONS.md](./OPERATIONS.md) | Logging, observability, and error handling |
-| [OFFLINE_LATENCY.md](./OFFLINE_LATENCY.md) | Offline mode and latency considerations |
-| [TESTING.md](./TESTING.md) | Testing strategy and coverage goals |
+| [configuration.md](./configuration.md) | Configuration options and environment variables |
+| [cli_ux.md](./cli_ux.md) | CLI user experience design |
+| [docker-images.md](./docker-images.md) | Docker image strategy, ECR layer sharing |
+| [operations.md](./operations.md) | Logging, observability, and error handling |
+| [offline_latency.md](./offline_latency.md) | Offline mode and latency considerations |
+| [testing.md](./testing.md) | Testing strategy and coverage goals |
 
 ## Design Decisions
 

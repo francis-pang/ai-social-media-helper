@@ -192,7 +192,7 @@ Embedding via `embed.FS` produces a single self-contained binary — the same de
 | File | Changes |
 |------|---------|
 | `.gitignore` | Add `web/frontend/node_modules/`, `web/frontend/dist/` |
-| `docs/ARCHITECTURE.md` | Add web UI component, Phase 1/2 architecture diagram |
+| `docs/architecture.md` | Add web UI component, Phase 1/2 architecture diagram |
 | `docs/index.md` | Add links to new documents |
 | `docs/design-decisions/index.md` | Add DDR-022 entry |
 | `PLAN.md` | Add web UI phases, update directory structure |

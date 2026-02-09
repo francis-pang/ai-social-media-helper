@@ -51,7 +51,7 @@ Adding a new Lambda requires no Dockerfile changes — just a new `--build-arg` 
 
 Total ECR storage: ~235 MB unique layers x 5 image versions = ~1.2 GB = **~$0.12/month**
 
-See [DOCKER-IMAGES.md](../DOCKER-IMAGES.md) for the full Docker image strategy documentation.
+See [docker-images.md](../docker-images.md) for the full Docker image strategy documentation.
 
 ### 3. Two Step Functions State Machines
 
@@ -175,8 +175,8 @@ The API Lambda only does: DynamoDB reads/writes, presigned URL generation, Step 
 | `cmd/media-lambda/Dockerfile.light` | New: Parameterized Dockerfile for Lambdas without ffmpeg |
 | `cmd/media-lambda/Dockerfile.heavy` | New: Parameterized Dockerfile for Lambdas with ffmpeg |
 | `cmd/media-lambda/Dockerfile` | Kept as-is for backward compatibility until pipelines switch over |
-| `docs/DOCKER-IMAGES.md` | New: Docker image strategy documentation |
-| `docs/ARCHITECTURE.md` | Update cloud architecture section with multi-Lambda diagram |
+| `docs/docker-images.md` | New: Docker image strategy documentation |
+| `docs/architecture.md` | Update cloud architecture section with multi-Lambda diagram |
 | `README.md` | Update project structure and roadmap |
 
 ## Related Decisions

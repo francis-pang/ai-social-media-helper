@@ -187,7 +187,7 @@ Structured JSON output (`{"caption": "...", "hashtags": [...], "locationTag": ".
 | `web/frontend/src/types/api.ts` | Add `DescriptionGenerateRequest`, `DescriptionResults`, `DescriptionFeedbackRequest` types |
 | `web/frontend/src/app.tsx` | Wire `DescriptionEditor` component to the `"description"` step |
 | `docs/design-decisions/index.md` | Add DDR-036 entry |
-| `docs/ARCHITECTURE.md` | Move Step 8 from "Planned" to implemented; add endpoint table |
+| `docs/architecture.md` | Move Step 8 from "Planned" to implemented; add endpoint table |
 
 ## Related Documents
 

@@ -150,7 +150,7 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Enhancement | Per-photo Gemini image editing | Light | 2 GB | 5 min |
 | Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min |
 
-"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [DOCKER-IMAGES.md](./DOCKER-IMAGES.md).
+"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [docker-images.md](./docker-images.md).
 
 ## Security Architecture
 
@@ -199,12 +199,12 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 
 ## Related Documents
 
-- [MEDIA-TRIAGE.md](./MEDIA-TRIAGE.md) — Triage workflow
-- [MEDIA-SELECTION.md](./MEDIA-SELECTION.md) — Selection workflow
-- [IMAGE-PROCESSING.md](./IMAGE-PROCESSING.md) — Image technical details
-- [VIDEO-PROCESSING.md](./VIDEO-PROCESSING.md) — Video technical details
-- [AUTHENTICATION.md](./AUTHENTICATION.md) — Credential management and Cognito auth
-- [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) — Docker image strategy and ECR layer sharing
+- [media-triage.md](./media-triage.md) — Triage workflow
+- [media-selection.md](./media-selection.md) — Selection workflow
+- [image-processing.md](./image-processing.md) — Image technical details
+- [video-processing.md](./video-processing.md) — Video technical details
+- [authentication.md](./authentication.md) — Credential management and Cognito auth
+- [docker-images.md](./docker-images.md) — Docker image strategy and ECR layer sharing
 
 ---
 

@@ -97,4 +97,4 @@ ECR Public (free, 50GB):
 
 - [DDR-035: Multi-Lambda Deployment Architecture](./DDR-035-multi-lambda-deployment.md) — defines the 5 Lambda functions and 2 ECR repos
 - [DDR-027: Container Image Lambda](./DDR-027-container-image-lambda-local-commands.md) — original container image deployment
-- [docs/DOCKER-IMAGES.md](../DOCKER-IMAGES.md) — Docker image strategy, layer structure, and build pipeline
+- [docs/docker-images.md](../docker-images.md) — Docker image strategy, layer structure, and build pipeline
