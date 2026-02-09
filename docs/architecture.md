@@ -240,6 +240,13 @@ Operations monitoring is split into two stacks for faster deploys:
 - **OperationsAlertStack**: alarms, SNS, X-Ray (changes often, deploys in ~1-2 min)
 - **OperationsMonitoringStack**: dashboard, metric filters, Firehose, Glue (changes rarely)
 
+## Cost Tracking
+
+All AWS resources across all 9 stacks are tagged with `Project = ai-social-media-helper` (DDR-049). This tag is applied at the CDK app level and automatically inherited by every resource. To view system costs:
+
+1. Activate the `Project` tag in **AWS Billing** > **Cost Allocation Tags**
+2. Filter by `Project = ai-social-media-helper` in **AWS Cost Explorer**
+
 ## Related Documents
 
 - [media-triage.md](./media-triage.md) — Triage workflow
@@ -250,6 +257,7 @@ Operations monitoring is split into two stacks for faster deploys:
 - [docker-images.md](./docker-images.md) — Docker image strategy and ECR layer sharing
 - [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md) — Centralized RegistryStack for ECR repositories
 - [DDR-047](./design-decisions/DDR-047-cdk-deploy-optimization.md) — CDK deploy optimization
+- [DDR-049](./design-decisions/DDR-049-aws-resource-tagging.md) — AWS resource tagging for cost tracking
 
 ---
 
