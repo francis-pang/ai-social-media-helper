@@ -208,7 +208,9 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 | Pipeline | Flow |
 |----------|------|
 | Frontend | Preact build -> S3 sync -> CloudFront invalidation |
-| Backend | 5 Docker builds (2 light + 3 heavy) -> 5 Lambda function updates |
+| Backend | 6 Docker builds (3 light + 3 heavy) -> 6 Lambda function updates |
+
+ECR repositories are owned by a dedicated RegistryStack (DDR-046), deployed before any application stack. This breaks the chicken-and-egg dependency where `DockerImageFunction` requires an image that the pipeline hasn't pushed yet. See [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md).
 
 ## Related Documents
 
@@ -218,6 +220,7 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 - [video-processing.md](./video-processing.md) — Video technical details
 - [authentication.md](./authentication.md) — Credential management and Cognito auth
 - [docker-images.md](./docker-images.md) — Docker image strategy and ECR layer sharing
+- [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md) — Centralized RegistryStack for ECR repositories
 
 ---
 

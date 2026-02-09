@@ -56,6 +56,9 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-041](./DDR-041-container-registry-strategy.md) | 2026-02-09 | Container Registry Strategy — ECR Private + ECR Public | Accepted |
 | [DDR-042](./DDR-042-landing-page-workflow-switcher.md) | 2026-02-09 | Landing Page Workflow Switcher | Accepted |
 | [DDR-043](./DDR-043-step-functions-lambda-entrypoints.md) | 2026-02-09 | Step Functions Lambda Entrypoints | Accepted |
+| [DDR-044](./DDR-044-instagram-webhook-integration.md) | 2026-02-09 | Instagram Webhook Integration — Dedicated Stack | Accepted |
+| [DDR-045](./DDR-045-stateful-stateless-stack-split.md) | 2026-02-09 | Stateful/Stateless Stack Split | Accepted |
+| [DDR-046](./DDR-046-centralized-registry-stack.md) | 2026-02-09 | Centralized RegistryStack for ECR Repositories | Accepted |
 
 ---
 
@@ -70,4 +73,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-000, DDR-043)
+**Last Updated**: 2026-02-09 (DDR-000, DDR-046)
