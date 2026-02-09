@@ -254,8 +254,8 @@ ai-social-media-helper/
 │   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
 ├── docs/                    # Design documentation
-│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-035)
-│   ├── DOCKER-IMAGES.md    # Docker image strategy and ECR layer sharing (DDR-035)
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-041)
+│   ├── DOCKER-IMAGES.md    # Docker image strategy, ECR layer sharing, and registry strategy (DDR-035, DDR-041)
 │   └── ...                 # See docs/index.md
 ├── Makefile                 # Build orchestration
 ├── go.mod                   # Go module definition
@@ -333,6 +333,7 @@ go test -cover ./...
 - [x] Media selection Step 2: AI-powered selection with structured JSON output and thumbnail pre-generation (DDR-030)
 - [x] Media selection Step 3: Review selection with override, scene groups, and exclusion reasons (DDR-030)
 - [x] Multi-Lambda deployment: 5 Lambdas, 2 Step Functions, DynamoDB, 2 ECR repos, split pipelines (DDR-035)
+- [x] Container registry strategy: ECR Private for proprietary code, ECR Public for generic images (DDR-041)
 - [ ] Media selection Step 4-5: AI-powered media enhancement with feedback loops
 - [ ] Media selection Step 6-7: Post grouping, publishing/download
 - [x] Media selection Step 8: AI post description with full media context and iterative feedback (DDR-036)

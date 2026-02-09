@@ -51,6 +51,8 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-037](./DDR-037-step-navigation-and-state-invalidation.md) | 2026-02-08 | Step Navigation UI and Downstream State Invalidation | Accepted |
 | [DDR-038](./DDR-038-overlay-media-player.md) | 2026-02-08 | Overlay Media Player for Inline Previews | Accepted |
 | [DDR-039](./DDR-039-dynamodb-session-store.md) | 2026-02-09 | DynamoDB SessionStore for Persistent Multi-Step State | Implementing |
+| [DDR-040](./DDR-040-instagram-publishing-client.md) | 2026-02-09 | Instagram Publishing Client | Accepted |
+| [DDR-041](./DDR-041-container-registry-strategy.md) | 2026-02-09 | Container Registry Strategy — ECR Private + ECR Public | Accepted |
 
 ---
 
@@ -65,4 +67,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-039)
+**Last Updated**: 2026-02-09 (DDR-041)

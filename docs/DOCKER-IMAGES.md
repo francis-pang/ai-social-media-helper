@@ -110,31 +110,54 @@ This means:
 - Lambda's image caching reuses the unchanged base + ffmpeg layers
 - Cold starts are faster because most of the image is already cached on Lambda workers
 
-## ECR Repositories and Tagging
+## Container Registry Strategy (DDR-041)
 
-### Two Repositories
+Images are split across **ECR Private** (proprietary code) and **ECR Public** (generic utilities) to minimize cost while protecting sensitive business logic.
 
-| Repository | Images stored | Shared layers |
+### ECR Private — Proprietary images ($0.10/GB/month)
+
+| Repository | Images stored | Why private |
 |---|---|---|
-| `ai-social-media-lambda-light` | API, Enhancement | AL2023 base |
-| `ai-social-media-lambda-heavy` | Thumbnail, Selection, Video | AL2023 base + ffmpeg |
+| `ai-social-media-lambda-light` | API | Auth, session management, prompt orchestration |
+| `ai-social-media-lambda-heavy` | Selection | Proprietary AI selection algorithms and prompts |
+
+### ECR Public — Generic images (free, 50 GB)
+
+| Repository | Images stored | Why public |
+|---|---|---|
+| `public.ecr.aws/<alias>/lambda-light` | Enhancement | Generic Gemini API passthrough, no proprietary prompts |
+| `public.ecr.aws/<alias>/lambda-heavy` | Thumbnail, Video | Generic ffmpeg processing, no business logic |
+
+### Authentication
+
+CI/CD requires two login commands:
+
+```bash
+# ECR Private (same region as deployment)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
+
+# ECR Public (always us-east-1, regardless of deployment region)
+aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+```
 
 ### Tagging Convention
 
 Each image is tagged with both the Lambda name and commit hash:
 
 ```
+# Private
 ai-social-media-lambda-light:api-abc1234
 ai-social-media-lambda-light:api-latest
-ai-social-media-lambda-light:enhance-abc1234
-ai-social-media-lambda-light:enhance-latest
-
-ai-social-media-lambda-heavy:thumb-abc1234
-ai-social-media-lambda-heavy:thumb-latest
 ai-social-media-lambda-heavy:select-abc1234
 ai-social-media-lambda-heavy:select-latest
-ai-social-media-lambda-heavy:video-abc1234
-ai-social-media-lambda-heavy:video-latest
+
+# Public
+public.ecr.aws/<alias>/lambda-light:enhance-abc1234
+public.ecr.aws/<alias>/lambda-light:enhance-latest
+public.ecr.aws/<alias>/lambda-heavy:thumb-abc1234
+public.ecr.aws/<alias>/lambda-heavy:thumb-latest
+public.ecr.aws/<alias>/lambda-heavy:video-abc1234
+public.ecr.aws/<alias>/lambda-heavy:video-latest
 ```
 
 The `{name}-latest` tag is what Lambda functions reference. The `{name}-{commit}` tag provides traceability. ECR lifecycle rules keep only the last 5 images per tag pattern.
@@ -155,7 +178,29 @@ With 5 image versions retained per tag (ECR lifecycle rule):
 | Video binary | 15 MB | 5 | 75 MB |
 | **Total** | | | **~590 MB** |
 
-ECR pricing: **$0.10/GB/month** -> ~**$0.06/month**
+### Private storage (paid)
+
+| Component | Size | Versions | Storage |
+|---|---|---|---|
+| AL2023 base (light repo) | 40 MB | 1 (deduplicated) | 40 MB |
+| API binary | 15 MB | 5 | 75 MB |
+| AL2023 base (heavy repo) | 40 MB | 1 (deduplicated) | 40 MB |
+| ffmpeg layer | 120 MB | 1 (deduplicated) | 120 MB |
+| Selection binary | 18 MB | 5 | 90 MB |
+| **Total private** | | | **~365 MB** |
+
+### Public storage (free)
+
+| Component | Size | Versions | Storage |
+|---|---|---|---|
+| Enhancement binary | 15 MB | 5 | 75 MB |
+| Thumbnail binary | 15 MB | 5 | 75 MB |
+| Video binary | 15 MB | 5 | 75 MB |
+| Shared base + ffmpeg layers | ~160 MB | 1 | 160 MB |
+| **Total public** | | | **~385 MB** (free) |
+
+ECR Private pricing: **$0.10/GB/month** -> ~**$0.04/month** (down from ~$0.06/month with all-private)  
+ECR Public pricing: **free** up to 50 GB storage
 
 ## Build Pipeline
 
@@ -211,9 +256,10 @@ cmd/media-lambda/
 
 - [DDR-027](design-decisions/DDR-027-container-image-lambda-local-commands.md): Original container image Lambda deployment
 - [DDR-035](design-decisions/DDR-035-multi-lambda-deployment.md): Multi-Lambda deployment architecture decision
+- [DDR-041](design-decisions/DDR-041-container-registry-strategy.md): Container registry strategy (ECR Private + ECR Public)
 - [ARCHITECTURE.md](ARCHITECTURE.md): Overall system architecture
 
 ---
 
-**Last Updated**: 2026-02-08  
-**Updated for**: DDR-035 (Multi-Lambda Deployment Architecture)
+**Last Updated**: 2026-02-09  
+**Updated for**: DDR-041 (Container Registry Strategy — ECR Private + ECR Public)
