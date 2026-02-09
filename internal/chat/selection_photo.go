@@ -81,10 +81,19 @@ func AskPhotoSelection(ctx context.Context, client *genai.Client, files []*fileh
 		Msg("Sending thumbnails to Gemini for quality-agnostic selection...")
 
 	// Generate content
+	modelName := GetModelName()
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
 	geminiStart := time.Now()
-	resp, err := client.Models.GenerateContent(ctx, GetModelName(), contents, config)
+	log.Debug().
+		Str("model", modelName).
+		Int("part_count", len(parts)).
+		Msg("Starting Gemini API call for photo selection")
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	geminiElapsed := time.Since(geminiStart)
+	log.Debug().
+		Int("response_length", len(resp.Text())).
+		Dur("duration", geminiElapsed).
+		Msg("Gemini API response received for photo selection")
 
 	// Emit Gemini API metrics
 	m := metrics.New("AiSocialMedia").

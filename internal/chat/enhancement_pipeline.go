@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/rs/zerolog/log"
@@ -15,12 +16,21 @@ import (
 // RunFullEnhancement executes the complete three-phase enhancement pipeline for one photo.
 // Returns the final enhanced image data, MIME type, and the enhancement state.
 func RunFullEnhancement(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, imageWidth, imageHeight int) (*EnhancementState, error) {
+	pipelineStart := time.Now()
+	log.Info().
+		Int("image_bytes", len(imageData)).
+		Str("mime", imageMIME).
+		Int("width", imageWidth).
+		Int("height", imageHeight).
+		Msg("Starting full enhancement pipeline")
+
 	state := &EnhancementState{
 		Phase:       PhaseOne,
 		CurrentMIME: imageMIME,
 	}
 
 	// Phase 1: Gemini 3 Pro Image global enhancement
+	phase1Start := time.Now()
 	enhancedData, enhancedMIME, changeText, err := RunPhaseOne(ctx, geminiClient, imageData, imageMIME)
 	if err != nil {
 		state.Phase = PhaseError
@@ -30,9 +40,13 @@ func RunFullEnhancement(ctx context.Context, geminiClient *GeminiImageClient, im
 	state.CurrentData = enhancedData
 	state.CurrentMIME = enhancedMIME
 	state.Phase1Text = changeText
+	log.Info().
+		Dur("phase_duration", time.Since(phase1Start)).
+		Msg("Phase 1 completed")
 
 	// Phase 2: Analysis
 	state.Phase = PhaseTwo
+	phase2Start := time.Now()
 	analysis, err := RunPhaseTwo(ctx, geminiClient, enhancedData, enhancedMIME)
 	if err != nil {
 		state.Phase = PhaseError
@@ -40,6 +54,9 @@ func RunFullEnhancement(ctx context.Context, geminiClient *GeminiImageClient, im
 		return state, err
 	}
 	state.Analysis = analysis
+	log.Info().
+		Dur("phase_duration", time.Since(phase2Start)).
+		Msg("Phase 2 completed")
 
 	// Check if no further edits needed
 	if analysis.NoFurtherEditsNeeded || analysis.ProfessionalScore >= ProfessionalScoreThreshold {
@@ -78,6 +95,7 @@ func RunFullEnhancement(ctx context.Context, geminiClient *GeminiImageClient, im
 
 	// Phase 3: Imagen 3 surgical edits
 	state.Phase = PhaseThree
+	phase3Start := time.Now()
 	finalData, editsApplied, err := RunPhaseThree(ctx, imagenClient, state.CurrentData, analysis, imageWidth, imageHeight)
 	if err != nil {
 		log.Warn().Err(err).Msg("Phase 3 failed, using Phase 1/2 result")
@@ -85,17 +103,27 @@ func RunFullEnhancement(ctx context.Context, geminiClient *GeminiImageClient, im
 		state.CurrentData = finalData
 		state.ImagenEdits = editsApplied
 	}
+	log.Info().
+		Dur("phase_duration", time.Since(phase3Start)).
+		Int("edits_applied", editsApplied).
+		Msg("Phase 3 completed")
 
 	state.Phase = PhaseComplete
+	totalDuration := time.Since(pipelineStart)
+	log.Info().
+		Dur("total_duration", totalDuration).
+		Msg("Full enhancement pipeline completed")
+
 	return state, nil
 }
 
 // ProcessFeedback handles user feedback by first trying Gemini 3 Pro Image,
 // then falling back to Imagen 3 if needed. Returns updated image and state.
 func ProcessFeedback(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, feedback string, history []FeedbackEntry, imageWidth, imageHeight int) ([]byte, string, *FeedbackEntry, error) {
-	log.Info().
+	log.Debug().
+		Int("feedback_length", len(feedback)).
+		Int("history_length", len(history)).
 		Str("feedback", truncateString(feedback, 200)).
-		Int("history_len", len(history)).
 		Msg("Processing enhancement feedback")
 
 	entry := &FeedbackEntry{
@@ -130,7 +158,8 @@ func ProcessFeedback(ctx context.Context, geminiClient *GeminiImageClient, image
 		entry.Success = true
 		log.Info().
 			Int("result_bytes", len(result.ImageData)).
-			Msg("Feedback: Gemini 3 Pro Image edit successful")
+			Str("method", "gemini").
+			Msg("Feedback processing successful")
 		return result.ImageData, result.ImageMIMEType, entry, nil
 	}
 
@@ -177,7 +206,10 @@ Respond with ONLY JSON matching the analysis schema in your system instruction.`
 			entry.Method = "imagen"
 			entry.ModelResponse = fmt.Sprintf("Applied %d surgical edit(s) via Imagen 3", editsApplied)
 			entry.Success = true
-			log.Info().Int("edits", editsApplied).Msg("Feedback: Imagen 3 edits applied")
+			log.Info().
+				Int("edits", editsApplied).
+				Str("method", "imagen").
+				Msg("Feedback processing successful")
 			return finalData, imageMIME, entry, nil
 		}
 	}

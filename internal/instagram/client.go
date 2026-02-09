@@ -93,6 +93,7 @@ type containerStatusResponse struct {
 // imageURL must be a publicly accessible URL (e.g., presigned S3 GET URL).
 // If isCarousel is true, the container is created as a carousel child item.
 func (c *Client) CreateImageContainer(ctx context.Context, imageURL string, isCarousel bool) (string, error) {
+	log.Debug().Bool("isCarousel", isCarousel).Msg("Creating image container")
 	params := url.Values{
 		"image_url":    {imageURL},
 		"access_token": {c.accessToken},
@@ -105,6 +106,7 @@ func (c *Client) CreateImageContainer(ctx context.Context, imageURL string, isCa
 	if err != nil {
 		return "", fmt.Errorf("create image container: %w", err)
 	}
+	log.Info().Str("containerId", resp.ID).Str("type", "image").Msg("Image container created")
 	return resp.ID, nil
 }
 
@@ -191,6 +193,7 @@ func (c *Client) CreateSingleReelPost(ctx context.Context, videoURL, caption str
 // Publish publishes a media container (carousel or single).
 // Returns the Instagram media ID of the published post.
 func (c *Client) Publish(ctx context.Context, containerID string) (string, error) {
+	log.Debug().Str("containerId", containerID).Msg("Publishing container")
 	params := url.Values{
 		"creation_id":  {containerID},
 		"access_token": {c.accessToken},
@@ -200,6 +203,7 @@ func (c *Client) Publish(ctx context.Context, containerID string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("publish container %s: %w", containerID, err)
 	}
+	log.Info().Str("containerId", containerID).Str("postId", resp.ID).Msg("Container published successfully")
 	return resp.ID, nil
 }
 
@@ -291,6 +295,16 @@ func (c *Client) WaitForContainer(ctx context.Context, containerID string, timeo
 
 // postForm sends a POST request with form-encoded parameters to the Instagram API.
 func (c *Client) postForm(ctx context.Context, endpoint string, params url.Values) (*apiResponse, error) {
+	startTime := time.Now()
+	
+	// Log form parameter names (not values) at Trace level
+	paramNames := make([]string, 0, len(params))
+	for key := range params {
+		paramNames = append(paramNames, key)
+	}
+	log.Trace().Strs("formParams", paramNames).Msg("Form parameters")
+
+	log.Debug().Str("method", http.MethodPost).Str("path", endpoint).Msg("Instagram API request")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+endpoint,
 		strings.NewReader(params.Encode()))
 	if err != nil {
@@ -299,10 +313,14 @@ func (c *Client) postForm(ctx context.Context, endpoint string, params url.Value
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	httpResp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
 	if err != nil {
+		log.Debug().Int("statusCode", 0).Dur("duration", duration).Err(err).Msg("Instagram API response")
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
+
+	log.Debug().Int("statusCode", httpResp.StatusCode).Dur("duration", duration).Msg("Instagram API response")
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
@@ -315,6 +333,7 @@ func (c *Client) postForm(ctx context.Context, endpoint string, params url.Value
 	}
 
 	if resp.Error != nil {
+		log.Error().Str("errorMessage", resp.Error.Message).Str("errorType", resp.Error.Type).Int("errorCode", resp.Error.Code).Msg("Instagram API error")
 		return nil, fmt.Errorf("Instagram API error: %s (type: %s, code: %d)",
 			resp.Error.Message, resp.Error.Type, resp.Error.Code)
 	}

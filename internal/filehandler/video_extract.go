@@ -75,6 +75,10 @@ func ExtractVideoMetadata(filePath string) (*VideoMetadata, error) {
 		"-show_streams",
 		filePath,
 	)
+	log.Debug().
+		Str("ffprobe_path", ffprobePath).
+		Str("file_path", filePath).
+		Msg("Executing ffprobe command for metadata extraction")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe failed: %w", err)
@@ -172,7 +176,7 @@ func ExtractVideoMetadata(filePath string) (*VideoMetadata, error) {
 		}
 	}
 
-	log.Info().
+	log.Debug().
 		Bool("has_gps", metadata.HasGPS).
 		Float64("latitude", metadata.Latitude).
 		Float64("longitude", metadata.Longitude).
@@ -184,7 +188,7 @@ func ExtractVideoMetadata(filePath string) (*VideoMetadata, error) {
 		Float64("frame_rate", metadata.FrameRate).
 		Str("codec", metadata.Codec).
 		Str("device", metadata.DeviceMake+" "+metadata.DeviceModel).
-		Msg("Video metadata extracted via ffprobe")
+		Msg("Video metadata extraction completed")
 
 	return metadata, nil
 }

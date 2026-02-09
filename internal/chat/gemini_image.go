@@ -47,7 +47,26 @@ type GeminiImageResult struct {
 //   - instruction: natural language editing instruction
 //   - systemInstruction: optional system-level instruction for context
 func (c *GeminiImageClient) EditImage(ctx context.Context, imageData []byte, imageMIMEType string, instruction string, systemInstruction string) (*GeminiImageResult, error) {
-	return c.EditImageMultiTurn(ctx, imageData, imageMIMEType, instruction, systemInstruction, nil)
+	log.Debug().
+		Int("instruction_length", len(instruction)).
+		Int("image_bytes", len(imageData)).
+		Str("image_mime", imageMIMEType).
+		Msg("EditImage: Starting Gemini API call")
+
+	startTime := time.Now()
+	result, err := c.EditImageMultiTurn(ctx, imageData, imageMIMEType, instruction, systemInstruction, nil)
+	duration := time.Since(startTime)
+
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debug().
+		Int("result_bytes", len(result.ImageData)).
+		Dur("duration", duration).
+		Msg("EditImage: Gemini API call completed")
+
+	return result, nil
 }
 
 // ConversationTurn represents one turn in a multi-turn image editing conversation.
@@ -62,12 +81,12 @@ type ConversationTurn struct {
 // for multi-turn editing (feedback loops). Each turn preserves context.
 func (c *GeminiImageClient) EditImageMultiTurn(ctx context.Context, imageData []byte, imageMIMEType string, instruction string, systemInstruction string, history []ConversationTurn) (*GeminiImageResult, error) {
 	startTime := time.Now()
-	log.Info().
+	log.Debug().
 		Str("model", c.model).
 		Int("image_bytes", len(imageData)).
 		Str("image_mime", imageMIMEType).
-		Int("history_turns", len(history)).
-		Msg("Sending image to Gemini for editing")
+		Int("history_length", len(history)).
+		Msg("EditImageMultiTurn: Starting Gemini API call")
 
 	// Build generation config with image output modality
 	config := &genai.GenerateContentConfig{
@@ -146,11 +165,11 @@ func (c *GeminiImageClient) EditImageMultiTurn(ctx context.Context, imageData []
 		return nil, fmt.Errorf("no image returned in response (text: %s)", truncateString(result.Text, 200))
 	}
 
-	log.Info().
+	log.Debug().
 		Int("output_bytes", len(result.ImageData)).
 		Str("output_mime", result.ImageMIMEType).
 		Dur("duration", time.Since(startTime)).
-		Msg("Gemini image editing complete")
+		Msg("EditImageMultiTurn: Gemini API call completed")
 
 	return result, nil
 }
@@ -159,10 +178,11 @@ func (c *GeminiImageClient) EditImageMultiTurn(ctx context.Context, imageData []
 // Used in Phase 2 to determine what further enhancements are needed.
 func (c *GeminiImageClient) AnalyzeImage(ctx context.Context, imageData []byte, imageMIMEType string, analysisPrompt string, systemInstruction string) (string, error) {
 	startTime := time.Now()
-	log.Info().
+	log.Debug().
 		Str("model", ModelGemini3ProPreview).
 		Int("image_bytes", len(imageData)).
-		Msg("Sending image to Gemini for analysis")
+		Int("prompt_length", len(analysisPrompt)).
+		Msg("AnalyzeImage: Starting Gemini API call")
 
 	// Build generation config — text only for analysis
 	config := &genai.GenerateContentConfig{
@@ -196,11 +216,12 @@ func (c *GeminiImageClient) AnalyzeImage(ctx context.Context, imageData []byte, 
 	}
 
 	text := resp.Text()
+	duration := time.Since(startTime)
 
-	log.Info().
+	log.Debug().
 		Int("response_length", len(text)).
-		Dur("duration", time.Since(startTime)).
-		Msg("Gemini image analysis complete")
+		Dur("duration", duration).
+		Msg("AnalyzeImage: Gemini API call completed")
 
 	return text, nil
 }

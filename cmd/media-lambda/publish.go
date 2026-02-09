@@ -17,15 +17,20 @@ import (
 // POST /api/publish/start
 // Body: {"sessionId": "uuid", "groupId": "group-1", "keys": [...], "caption": "...", "hashtags": [...]}
 func handlePublishStart(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handlePublishStart")
+
 	if r.Method != http.MethodPost {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	if igClient == nil {
+		log.Debug().Msg("Instagram client not configured")
 		httpError(w, http.StatusServiceUnavailable, "Instagram publishing is not configured — set INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID")
 		return
 	}
+	log.Debug().Msg("Instagram client check passed")
 
 	var req struct {
 		SessionID string   `json:"sessionId"`
@@ -35,28 +40,39 @@ func handlePublishStart(w http.ResponseWriter, r *http.Request) {
 		Hashtags  []string `json:"hashtags"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Debug().Err(err).Msg("Request body decoding failed")
+		log.Warn().Str("param", "body").Msg("Invalid request body")
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Str("groupId", req.GroupID).Int("keyCount", len(req.Keys)).Msg("Request body decoded successfully")
 
 	if err := validateSessionID(req.SessionID); err != nil {
+		log.Debug().Err(err).Str("sessionId", req.SessionID).Msg("SessionId validation failed")
+		log.Warn().Str("param", "sessionId").Msg("SessionId validation failed")
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Msg("SessionId validation passed")
 	if req.GroupID == "" {
+		log.Warn().Str("param", "groupId").Msg("GroupId is required")
 		httpError(w, http.StatusBadRequest, "groupId is required")
 		return
 	}
 	if len(req.Keys) == 0 {
+		log.Warn().Str("param", "keys").Msg("Keys are required")
 		httpError(w, http.StatusBadRequest, "keys are required")
 		return
 	}
 	for _, key := range req.Keys {
 		if err := validateS3Key(key); err != nil {
+			log.Debug().Err(err).Str("key", key).Msg("S3 key validation failed")
+			log.Warn().Str("param", "keys").Str("key", key).Msg("Invalid S3 key")
 			httpError(w, http.StatusBadRequest, fmt.Sprintf("invalid key: %s", key))
 			return
 		}
 	}
+	log.Debug().Int("keyCount", len(req.Keys)).Msg("All keys validated successfully")
 
 	// Assemble full caption with hashtags
 	fullCaption := req.Caption
@@ -91,14 +107,21 @@ func handlePublishStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dispatch to Worker Lambda asynchronously (DDR-050).
-	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+	payload := map[string]interface{}{
 		"type":      "publish",
 		"sessionId": req.SessionID,
 		"jobId":     jobID,
 		"groupId":   req.GroupID,
 		"keys":      req.Keys,
 		"caption":   fullCaption,
-	}); err != nil {
+	}
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Str("groupId", req.GroupID).
+		Int("keyCount", len(req.Keys)).
+		Msg("Job dispatched")
+	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
 		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for publish")
 		if sessionStore != nil {
 			errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: "failed to start processing"}
@@ -130,13 +153,17 @@ func handlePublishRoutes(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/publish/{id}/status?sessionId=...
 func handlePublishStatus(w http.ResponseWriter, r *http.Request, jobID string) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("jobId", jobID).Msg("Handler entry: handlePublishStatus")
+
 	if r.Method != http.MethodGet {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
+		log.Warn().Str("param", "sessionId").Msg("SessionId is required")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -153,9 +180,11 @@ func handlePublishStatus(w http.ResponseWriter, r *http.Request, jobID string) {
 		return
 	}
 	if job == nil {
+		log.Debug().Str("jobId", jobID).Str("sessionId", sessionID).Msg("Publish job not found in DynamoDB")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
+	log.Debug().Str("jobId", jobID).Str("status", job.Status).Str("phase", job.Phase).Msg("Publish job found in DynamoDB")
 
 	resp := map[string]interface{}{
 		"id":     job.ID,

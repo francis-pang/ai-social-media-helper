@@ -106,6 +106,8 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 // GET /api/media/full?key=sessionId/filename.jpg
 // Returns a presigned GET URL for the full-resolution image.
 func handleFullImage(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleFullImage")
+
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -116,6 +118,8 @@ func handleFullImage(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "key is required")
 		return
 	}
+
+	log.Debug().Str("key", key).Msg("Full image request received")
 
 	// Validate S3 key format (DDR-028 Problem 5)
 	if err := validateS3Key(key); err != nil {
@@ -131,6 +135,8 @@ func handleFullImage(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "failed to generate download URL")
 		return
 	}
+
+	log.Debug().Str("key", key).Msg("Presigned GET URL generated for full image")
 
 	respondJSON(w, http.StatusOK, map[string]string{
 		"url": result.URL,

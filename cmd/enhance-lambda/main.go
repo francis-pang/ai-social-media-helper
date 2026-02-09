@@ -23,7 +23,9 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -49,13 +51,17 @@ var (
 	mediaBucket  string
 )
 
+var coldStart = true
+
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
 	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
@@ -78,6 +84,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/gemini-api-key"
 		}
+		ssmStart := time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -86,8 +93,16 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-		log.Info().Msg("Gemini API key loaded from SSM Parameter Store")
+		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
+
+	log.Info().
+		Str("function", "enhance-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Str("table", tableName).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("Enhance Lambda init complete")
 }
 
 // EnhanceEvent is the input payload from Step Functions.
@@ -112,6 +127,11 @@ type EnhanceResult struct {
 }
 
 func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
+	handlerStart := time.Now()
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "enhance-lambda").Msg("Cold start — first invocation")
+	}
 	bucket := mediaBucket
 	if event.Bucket != "" {
 		bucket = event.Bucket
@@ -165,6 +185,7 @@ func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
 	if m, ok := filehandler.SupportedImageExtensions[ext]; ok {
 		mime = m
 	}
+	logger.Debug().Str("mimeType", mime).Str("extension", ext).Msg("MIME type determined")
 
 	// Get image dimensions for mask generation.
 	imgConfig, _, configErr := image.DecodeConfig(bytes.NewReader(imageData))
@@ -174,6 +195,7 @@ func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
 		imageWidth = imgConfig.Width
 		imageHeight = imgConfig.Height
 	}
+	logger.Debug().Int("width", imageWidth).Int("height", imageHeight).Bool("decoded", configErr == nil).Msg("Image dimensions")
 
 	// Initialize Gemini client.
 	apiKey := os.Getenv("GEMINI_API_KEY")
@@ -197,6 +219,7 @@ func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
 	if vertexProject != "" && vertexRegion != "" && vertexToken != "" {
 		imagenClient = chat.NewImagenClient(vertexProject, vertexRegion, vertexToken)
 	}
+	logger.Debug().Bool("imagenConfigured", imagenClient != nil).Msg("Imagen client status")
 
 	// Run the full enhancement pipeline.
 	state, err := chat.RunFullEnhancement(ctx, geminiImageClient, imagenClient, imageData, mime, imageWidth, imageHeight)
@@ -220,6 +243,7 @@ func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
 	if contentType == "" {
 		contentType = mime
 	}
+	logger.Debug().Str("enhancedKey", enhancedKey).Int("size", len(state.CurrentData)).Msg("Uploading enhanced image to S3")
 	_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &bucket,
 		Key:         &enhancedKey,
@@ -257,6 +281,7 @@ func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
 		Str("enhancedKey", enhancedKey).
 		Str("phase", state.Phase).
 		Int("imagenEdits", state.ImagenEdits).
+		Dur("duration", time.Since(handlerStart)).
 		Msg("Photo enhancement complete")
 
 	return EnhanceResult{

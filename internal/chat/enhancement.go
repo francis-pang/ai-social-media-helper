@@ -11,6 +11,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/jsonutil"
@@ -83,7 +84,7 @@ type FeedbackEntry struct {
 // RunPhaseOne performs the initial global enhancement using Gemini 3 Pro Image.
 // Returns the enhanced image data and a text description of changes.
 func RunPhaseOne(ctx context.Context, geminiClient *GeminiImageClient, imageData []byte, imageMIME string) ([]byte, string, string, error) {
-	log.Info().
+	log.Debug().
 		Int("image_bytes", len(imageData)).
 		Str("mime", imageMIME).
 		Msg("Phase 1: Starting Gemini 3 Pro Image global enhancement")
@@ -103,10 +104,17 @@ Apply all necessary improvements:
 Make it look like a professionally shot and edited photo.
 Describe what changes you made.`
 
+	startTime := time.Now()
 	result, err := geminiClient.EditImage(ctx, imageData, imageMIME, instruction, assets.EnhancementSystemPrompt)
+	duration := time.Since(startTime)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("phase 1 failed: %w", err)
 	}
+
+	log.Debug().
+		Int("response_bytes", len(result.ImageData)).
+		Dur("duration", duration).
+		Msg("Phase 1: Gemini API call completed")
 
 	log.Info().
 		Int("enhanced_bytes", len(result.ImageData)).
@@ -120,13 +128,15 @@ Describe what changes you made.`
 
 // RunPhaseTwo analyzes the enhanced image and returns structured recommendations.
 func RunPhaseTwo(ctx context.Context, geminiClient *GeminiImageClient, imageData []byte, imageMIME string) (*AnalysisResult, error) {
-	log.Info().
+	log.Debug().
 		Int("image_bytes", len(imageData)).
 		Msg("Phase 2: Analyzing enhanced image for remaining improvements")
 
 	analysisPrompt := "Analyze this photo that has been enhanced once. Identify what further improvements would bring it to professional publication quality. Follow the response format in the system instruction exactly."
 
+	startTime := time.Now()
 	responseText, err := geminiClient.AnalyzeImage(ctx, imageData, imageMIME, analysisPrompt, assets.EnhancementAnalysisPrompt)
+	duration := time.Since(startTime)
 	if err != nil {
 		return nil, fmt.Errorf("phase 2 analysis failed: %w", err)
 	}
@@ -147,6 +157,11 @@ func RunPhaseTwo(ctx context.Context, geminiClient *GeminiImageClient, imageData
 		}, nil
 	}
 
+	log.Debug().
+		Float64("score", analysis.ProfessionalScore).
+		Dur("duration", duration).
+		Msg("Phase 2: Analysis parsed successfully")
+
 	log.Info().
 		Float64("score", analysis.ProfessionalScore).
 		Int("improvements", len(analysis.RemainingImprovements)).
@@ -158,10 +173,20 @@ func RunPhaseTwo(ctx context.Context, geminiClient *GeminiImageClient, imageData
 
 // parseAnalysisResponse extracts and parses the JSON from Gemini's analysis response.
 func parseAnalysisResponse(response string) (*AnalysisResult, error) {
+	log.Debug().
+		Int("response_length", len(response)).
+		Msg("Parsing analysis response")
+
 	result, err := jsonutil.ParseJSON[AnalysisResult](response)
 	if err != nil {
 		return nil, fmt.Errorf("analysis response: %w", err)
 	}
+
+	log.Debug().
+		Float64("score", result.ProfessionalScore).
+		Int("improvements_count", len(result.RemainingImprovements)).
+		Msg("Analysis response parsed successfully")
+
 	return &result, nil
 }
 
@@ -189,8 +214,8 @@ func RunPhaseThree(ctx context.Context, imagenClient *ImagenClient, imageData []
 		return imageData, 0, nil
 	}
 
-	log.Info().
-		Int("edits_count", len(imagenEdits)).
+	log.Debug().
+		Int("improvements_count", len(imagenEdits)).
 		Msg("Phase 3: Starting Imagen 3 surgical edits")
 
 	currentImage := imageData
@@ -205,12 +230,13 @@ func RunPhaseThree(ctx context.Context, imagenClient *ImagenClient, imageData []
 			break
 		}
 
-		log.Info().
+		log.Debug().
 			Int("iteration", i+1).
 			Str("type", edit.Type).
 			Str("region", edit.Region).
 			Str("description", edit.Description).
-			Msg("Phase 3: Applying Imagen edit")
+			Str("instruction", truncateString(edit.EditInstruction, 100)).
+			Msg("Phase 3: Attempting Imagen edit")
 
 		// Generate mask for the target region
 		maskData, err := GenerateRegionMask(imageWidth, imageHeight, edit.Region)

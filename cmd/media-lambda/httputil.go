@@ -12,7 +12,10 @@ import (
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Error().Err(err).Int("status", status).Msg("Failed to encode JSON response")
+	}
+	log.Trace().Int("status", status).Msg("JSON response sent")
 }
 
 // httpError sends a JSON error response. The clientMsg is returned to the caller.

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -80,8 +79,30 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 	cleanup func(),
 	err error,
 ) {
+	// Get input file size for logging
+	var inputSize int64
+	if inputInfo, err := os.Stat(inputPath); err == nil {
+		inputSize = inputInfo.Size()
+	}
+
+	var targetResolution int = MaxResolution
+	var targetFPS float64 = MaxFrameRate
+	if metadata != nil {
+		if metadata.Width > 0 && metadata.Height > 0 {
+			targetResolution = minInt(MaxResolution, maxInt(metadata.Width, metadata.Height))
+		}
+		if metadata.FrameRate > 0 {
+			targetFPS = minFloat(MaxFrameRate, metadata.FrameRate)
+		}
+	}
+
 	log.Info().
-		Str("input", inputPath).
+		Str("input_path", inputPath).
+		Int64("input_size_bytes", inputSize).
+		Int("target_resolution", targetResolution).
+		Float64("target_fps", targetFPS).
+		Int("target_crf", VideoCRF).
+		Str("target_audio_bitrate", AudioBitrate).
 		Msg("Starting video compression for Gemini optimization")
 
 	// Check if ffmpeg is available
@@ -121,6 +142,12 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 	ffmpegElapsed := time.Since(ffmpegStart)
 	if err != nil {
 		cleanup() // Clean up temp file on error
+		log.Warn().
+			Err(err).
+			Str("input_path", inputPath).
+			Str("ffmpeg_output", string(output)).
+			Dur("duration", ffmpegElapsed).
+			Msg("FFmpeg compression failed, falling back to defaults")
 		metrics.New("AiSocialMedia").
 			Metric("VideoCompressionMs", float64(ffmpegElapsed.Milliseconds()), metrics.UnitMilliseconds).
 			Count("VideoCompressionErrors").
@@ -136,15 +163,15 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 	}
 	outputSize = info.Size()
 
-	// Log compression results
-	var inputSize int64
-	if inputInfo, err := os.Stat(inputPath); err == nil {
-		inputSize = inputInfo.Size()
-	}
-
 	compressionRatio := float64(0)
 	if outputSize > 0 {
 		compressionRatio = float64(inputSize) / float64(outputSize)
+	}
+
+	// Get video duration for logging
+	var duration time.Duration
+	if metadata != nil && metadata.Duration > 0 {
+		duration = metadata.Duration
 	}
 
 	// Emit video compression metrics
@@ -156,10 +183,12 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 		Flush()
 
 	log.Info().
-		Str("input", filepath.Base(inputPath)).
-		Str("output", filepath.Base(outputPath)).
-		Int64("input_size_mb", inputSize/(1024*1024)).
-		Int64("output_size_mb", outputSize/(1024*1024)).
+		Str("input_path", inputPath).
+		Str("output_path", outputPath).
+		Int64("input_size_bytes", inputSize).
+		Int64("output_size_bytes", outputSize).
+		Dur("duration", duration).
+		Dur("compression_time", ffmpegElapsed).
 		Float64("compression_ratio", compressionRatio).
 		Msg("Video compression complete")
 
@@ -238,6 +267,14 @@ func minFloat(a, b float64) float64 {
 // minInt returns the smaller of two int values.
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+// maxInt returns the larger of two int values.
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

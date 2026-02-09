@@ -101,6 +101,11 @@ func ValidateAPIKey(ctx context.Context, client *genai.Client) error {
 		Count("ApiKeyValidationResult").
 		Flush()
 
+	log.Debug().
+		Str("result", result).
+		Dur("duration", elapsed).
+		Msg("API key validation result")
+
 	log.Info().Msg("API key validated successfully")
 	return nil
 }

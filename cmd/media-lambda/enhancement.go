@@ -21,7 +21,10 @@ import (
 // POST /api/enhance/start
 // Body: {"sessionId": "uuid", "keys": ["uuid/file1.jpg", ...]}
 func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleEnhanceStart")
+
 	if r.Method != http.MethodPost {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -31,18 +34,27 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 		Keys      []string `json:"keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Debug().Err(err).Msg("Request body decoding failed")
+		log.Warn().Str("param", "body").Msg("Invalid request body")
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Int("keyCount", len(req.Keys)).Msg("Request body decoded successfully")
+
 	if req.SessionID == "" {
+		log.Warn().Str("param", "sessionId").Msg("SessionId is required")
 		httpError(w, http.StatusBadRequest, "sessionId is required")
 		return
 	}
 	if err := validateSessionID(req.SessionID); err != nil {
+		log.Debug().Err(err).Str("sessionId", req.SessionID).Msg("SessionId validation failed")
+		log.Warn().Str("param", "sessionId").Msg("SessionId validation failed")
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Msg("SessionId validation passed")
 	if len(req.Keys) == 0 {
+		log.Warn().Str("param", "keys").Msg("At least one key is required")
 		httpError(w, http.StatusBadRequest, "at least one key is required")
 		return
 	}
@@ -50,14 +62,19 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 	// Validate all keys belong to the session
 	for _, key := range req.Keys {
 		if err := validateS3Key(key); err != nil {
+			log.Debug().Err(err).Str("key", key).Msg("S3 key validation failed")
+			log.Warn().Str("param", "keys").Str("key", key).Msg("Invalid S3 key")
 			httpError(w, http.StatusBadRequest, fmt.Sprintf("invalid key: %s", err.Error()))
 			return
 		}
 		if !strings.HasPrefix(key, req.SessionID+"/") {
+			log.Debug().Str("key", key).Str("sessionId", req.SessionID).Msg("Key does not belong to session")
+			log.Warn().Str("param", "keys").Str("key", key).Msg("Key does not belong to session")
 			httpError(w, http.StatusBadRequest, "key does not belong to session")
 			return
 		}
 	}
+	log.Debug().Int("keyCount", len(req.Keys)).Msg("All keys validated successfully")
 
 	// Separate photos and videos for the enhancement pipeline
 	var photoKeys []string
@@ -70,8 +87,10 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 			videoKeys = append(videoKeys, key)
 		}
 	}
+	log.Debug().Int("photoCount", len(photoKeys)).Int("videoCount", len(videoKeys)).Msg("Media separated into photos and videos")
 
 	if len(photoKeys) == 0 && len(videoKeys) == 0 {
+		log.Warn().Str("param", "keys").Msg("No media files in the provided keys")
 		httpError(w, http.StatusBadRequest, "no media files in the provided keys")
 		return
 	}
@@ -100,6 +119,13 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 			"photos":    photoKeys,
 			"videos":    videoKeys,
 		})
+		log.Info().
+			Str("jobId", jobID).
+			Str("sessionId", req.SessionID).
+			Int("photos", len(photoKeys)).
+			Int("videos", len(videoKeys)).
+			Str("sfnArn", enhancementSfnArn).
+			Msg("Job dispatched")
 		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
 			StateMachineArn: aws.String(enhancementSfnArn),
 			Input:           aws.String(string(sfnInput)),
@@ -114,14 +140,6 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, "failed to start processing")
 			return
 		}
-
-		log.Info().
-			Str("jobId", jobID).
-			Str("sessionId", req.SessionID).
-			Int("photos", len(photoKeys)).
-			Int("videos", len(videoKeys)).
-			Str("sfnArn", enhancementSfnArn).
-			Msg("Enhancement pipeline started via Step Functions")
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
@@ -148,13 +166,17 @@ func handleEnhanceRoutes(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/enhance/{id}/results?sessionId=...
 func handleEnhanceResults(w http.ResponseWriter, r *http.Request, jobID string) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("jobId", jobID).Msg("Handler entry: handleEnhanceResults")
+
 	if r.Method != http.MethodGet {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
+		log.Warn().Str("param", "sessionId").Msg("SessionId is required")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -171,9 +193,11 @@ func handleEnhanceResults(w http.ResponseWriter, r *http.Request, jobID string) 
 		return
 	}
 	if job == nil {
+		log.Debug().Str("jobId", jobID).Str("sessionId", sessionID).Msg("Enhancement job not found in DynamoDB")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
+	log.Debug().Str("jobId", jobID).Str("status", job.Status).Msg("Enhancement job found in DynamoDB")
 
 	resp := map[string]interface{}{
 		"id":             job.ID,
@@ -191,7 +215,10 @@ func handleEnhanceResults(w http.ResponseWriter, r *http.Request, jobID string) 
 // POST /api/enhance/{id}/feedback
 // Body: {"sessionId": "uuid", "key": "uuid/file.jpg", "feedback": "make it brighter"}
 func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, jobID string) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("jobId", jobID).Msg("Handler entry: handleEnhanceFeedback")
+
 	if r.Method != http.MethodPost {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -202,23 +229,33 @@ func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, jobID string)
 		Feedback  string `json:"feedback"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Debug().Err(err).Msg("Request body decoding failed")
+		log.Warn().Str("param", "body").Msg("Invalid request body")
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Str("key", req.Key).Int("feedbackLength", len(req.Feedback)).Msg("Request body decoded successfully")
 
 	if req.SessionID == "" || req.Key == "" || req.Feedback == "" {
+		log.Warn().Str("param", "sessionId/key/feedback").Msg("SessionId, key, and feedback are required")
 		httpError(w, http.StatusBadRequest, "sessionId, key, and feedback are required")
 		return
 	}
 
 	// Dispatch enhancement feedback to Worker Lambda (DDR-050).
-	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+	payload := map[string]interface{}{
 		"type":      "enhancement-feedback",
 		"sessionId": req.SessionID,
 		"jobId":     jobID,
 		"key":       req.Key,
 		"feedback":  req.Feedback,
-	}); err != nil {
+	}
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Str("key", req.Key).
+		Msg("Job dispatched")
+	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
 		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for enhancement feedback")
 		httpError(w, http.StatusInternalServerError, "failed to start feedback processing")
 		return

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -44,16 +46,21 @@ var (
 	userIDParam string
 )
 
+var coldStart = true
+
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	ssmClient = ssm.NewFromConfig(cfg)
 
+	var ssmStart time.Time
 	// Load Instagram App ID from SSM.
 	appID = os.Getenv("INSTAGRAM_APP_ID")
 	if appID == "" {
@@ -61,6 +68,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/instagram-app-id"
 		}
+		ssmStart = time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(false),
@@ -69,7 +77,7 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read Instagram app ID from SSM")
 		}
 		appID = *result.Parameter.Value
-		log.Info().Msg("Instagram app ID loaded from SSM")
+		log.Debug().Dur("elapsed", time.Since(ssmStart)).Msg("Instagram app ID loaded from SSM")
 	}
 
 	// Load Instagram App Secret from SSM.
@@ -79,6 +87,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/instagram-app-secret"
 		}
+		ssmStart = time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -87,7 +96,7 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read app secret from SSM")
 		}
 		appSecret = *result.Parameter.Value
-		log.Info().Msg("Instagram app secret loaded from SSM")
+		log.Debug().Dur("elapsed", time.Since(ssmStart)).Msg("Instagram app secret loaded from SSM")
 	}
 
 	// Load OAuth redirect URI from SSM.
@@ -97,6 +106,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/instagram-oauth-redirect-uri"
 		}
+		ssmStart = time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(false),
@@ -105,7 +115,7 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read OAuth redirect URI from SSM")
 		}
 		redirectURI = *result.Parameter.Value
-		log.Info().Str("redirectUri", redirectURI).Msg("OAuth redirect URI loaded from SSM")
+		log.Debug().Str("redirectUri", redirectURI).Dur("elapsed", time.Since(ssmStart)).Msg("OAuth redirect URI loaded from SSM")
 	}
 
 	// SSM parameter paths for writing tokens.
@@ -118,7 +128,12 @@ func init() {
 		userIDParam = "/ai-social-media/prod/instagram-user-id"
 	}
 
-	log.Info().Msg("OAuth Lambda initialized")
+	log.Info().
+		Str("function", "oauth-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("OAuth Lambda init complete")
 }
 
 func main() {
@@ -133,7 +148,15 @@ func main() {
 // Meta redirects the user's browser here with ?code=AUTH_CODE (success)
 // or ?error=ERROR&error_reason=REASON&error_description=DESC (denied).
 func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "oauth-lambda").Msg("Cold start — first invocation")
+	}
+
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Msg("OAuth callback received")
+
 	if r.Method != http.MethodGet {
+		log.Warn().Str("method", r.Method).Msg("Method not allowed")
 		respondHTML(w, http.StatusMethodNotAllowed, "Error", "Method not allowed.")
 		return
 	}
@@ -178,6 +201,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 3: Store long-lived token in SSM (SecureString, overwrite).
+	log.Debug().Str("param", tokenParam).Msg("Storing access token in SSM")
 	_, err = ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
 		Name:      &tokenParam,
 		Value:     &longResult.AccessToken,
@@ -193,6 +217,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	log.Info().Str("param", tokenParam).Msg("Long-lived access token stored in SSM")
 
 	// Step 4: Store user ID in SSM (String, overwrite).
+	log.Debug().Str("param", userIDParam).Msg("Storing user ID in SSM")
 	_, err = ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
 		Name:      &userIDParam,
 		Value:     &shortResult.UserID,
@@ -209,6 +234,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Success — render confirmation page.
 	days := longResult.ExpiresIn / 86400
+	log.Debug().Int("days", int(days)).Int64("expiresIn", longResult.ExpiresIn).Msg("Token expiry calculated")
 	respondHTML(w, http.StatusOK, "Instagram Connected",
 		fmt.Sprintf("Your Instagram account (user ID: %s) has been connected successfully.<br><br>"+
 			"Long-lived token stored — expires in %d days.<br><br>"+

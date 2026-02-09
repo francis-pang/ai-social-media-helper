@@ -107,19 +107,15 @@ func LoadMediaFile(filePath string) (*MediaFile, error) {
 		Size:     info.Size(),
 	}
 
-	log.Info().
-		Str("path", filePath).
-		Str("mime_type", mimeType).
-		Int64("size_bytes", info.Size()).
-		Msg("Media file loaded successfully")
-
 	// Extract metadata based on file type (Split-Provider Model)
+	hasMetadata := false
 	if IsImage(ext) {
 		imgMeta, err := ExtractImageMetadata(filePath)
 		if err != nil {
 			log.Warn().Err(err).Msg("Failed to extract image metadata, continuing without it")
 		} else {
 			mediaFile.Metadata = imgMeta
+			hasMetadata = true
 		}
 	} else if IsVideo(ext) {
 		vidMeta, err := ExtractVideoMetadata(filePath)
@@ -127,8 +123,16 @@ func LoadMediaFile(filePath string) (*MediaFile, error) {
 			log.Warn().Err(err).Msg("Failed to extract video metadata, continuing without it")
 		} else {
 			mediaFile.Metadata = vidMeta
+			hasMetadata = true
 		}
 	}
+
+	log.Debug().
+		Str("path", filePath).
+		Str("mime_type", mimeType).
+		Int64("size_bytes", info.Size()).
+		Bool("metadata_found", hasMetadata).
+		Msg("Media file loaded")
 
 	return mediaFile, nil
 }
@@ -138,10 +142,18 @@ func GetMIMEType(ext string) (string, error) {
 	ext = strings.ToLower(ext)
 
 	if mimeType, ok := SupportedImageExtensions[ext]; ok {
+		log.Trace().
+			Str("extension", ext).
+			Str("mime_type", mimeType).
+			Msg("Resolved MIME type")
 		return mimeType, nil
 	}
 
 	if mimeType, ok := SupportedVideoExtensions[ext]; ok {
+		log.Trace().
+			Str("extension", ext).
+			Str("mime_type", mimeType).
+			Msg("Resolved MIME type")
 		return mimeType, nil
 	}
 

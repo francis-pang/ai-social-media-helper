@@ -63,6 +63,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-048](./DDR-048-instagram-oauth-lambda.md) | 2026-02-09 | Instagram OAuth Lambda — Automated Token Exchange | Accepted |
 | [DDR-049](./DDR-049-aws-resource-tagging.md) | 2026-02-09 | AWS Resource Tagging for Cost Tracking | Accepted |
 | [DDR-050](./DDR-050-replace-goroutines-with-async-dispatch.md) | 2026-02-09 | Replace Goroutines with DynamoDB + Step Functions / Async Lambda | Accepted |
+| [DDR-051](./DDR-051-comprehensive-logging-overhaul.md) | 2026-02-09 | Comprehensive Logging Overhaul for Production Troubleshooting | Accepted |
 
 ---
 
@@ -77,4 +78,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-000, DDR-048)
+**Last Updated**: 2026-02-09 (DDR-051)

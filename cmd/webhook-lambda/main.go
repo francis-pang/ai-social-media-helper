@@ -17,6 +17,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -30,17 +32,21 @@ import (
 )
 
 var webhookHandler *webhook.Handler
+var coldStart = true
 
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	ssmClient := ssm.NewFromConfig(cfg)
 
+	var ssmStart time.Time
 	// Load webhook verify token from SSM.
 	verifyToken := os.Getenv("WEBHOOK_VERIFY_TOKEN")
 	if verifyToken == "" {
@@ -48,6 +54,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/instagram-webhook-verify-token"
 		}
+		ssmStart = time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -56,7 +63,7 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read webhook verify token from SSM")
 		}
 		verifyToken = *result.Parameter.Value
-		log.Info().Msg("Webhook verify token loaded from SSM")
+		log.Debug().Dur("elapsed", time.Since(ssmStart)).Msg("Webhook verify token loaded from SSM")
 	}
 
 	// Load app secret from SSM.
@@ -66,6 +73,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/instagram-app-secret"
 		}
+		ssmStart = time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -74,11 +82,16 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read app secret from SSM")
 		}
 		appSecret = *result.Parameter.Value
-		log.Info().Msg("Instagram app secret loaded from SSM")
+		log.Debug().Dur("elapsed", time.Since(ssmStart)).Msg("Instagram app secret loaded from SSM")
 	}
 
 	webhookHandler = webhook.NewHandler(verifyToken, appSecret)
-	log.Info().Msg("Webhook handler initialized")
+	log.Info().
+		Str("function", "webhook-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("Webhook Lambda init complete")
 }
 
 func main() {

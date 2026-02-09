@@ -18,6 +18,8 @@ import (
 // downloadFromS3 downloads an S3 object to a temp file and returns its path
 // and a cleanup function. Caller must defer cleanup().
 func downloadFromS3(ctx context.Context, key string) (string, func(), error) {
+	log.Debug().Str("key", key).Msg("Starting S3 download")
+
 	tmpFile, err := os.CreateTemp("", "media-*"+filepath.Ext(key))
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp file: %w", err)
@@ -41,12 +43,21 @@ func downloadFromS3(ctx context.Context, key string) (string, func(), error) {
 	}
 	tmpFile.Close()
 
+	fileInfo, _ := os.Stat(tmpFile.Name())
+	fileSize := int64(0)
+	if fileInfo != nil {
+		fileSize = fileInfo.Size()
+	}
+	log.Debug().Str("key", key).Int64("fileSize", fileSize).Msg("S3 download completed")
+
 	cleanup := func() { os.Remove(tmpFile.Name()) }
 	return tmpFile.Name(), cleanup, nil
 }
 
 // downloadToFile downloads an S3 object to a specific local path.
 func downloadToFile(ctx context.Context, key, localPath string) error {
+	log.Debug().Str("key", key).Str("localPath", localPath).Msg("Starting S3 download to file")
+
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &mediaBucket,
 		Key:    &key,
@@ -65,6 +76,8 @@ func downloadToFile(ctx context.Context, key, localPath string) error {
 	if _, err := io.Copy(f, result.Body); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
+
+	log.Debug().Str("key", key).Str("localPath", localPath).Msg("S3 download to file completed")
 	return nil
 }
 
@@ -89,6 +102,7 @@ func cleanupS3Prefix(sessionID, prefix string) {
 
 	deleted := 0
 	for _, obj := range result.Contents {
+		log.Debug().Str("key", *obj.Key).Msg("Found S3 object during cleanup listing")
 		_, delErr := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(mediaBucket),
 			Key:    obj.Key,

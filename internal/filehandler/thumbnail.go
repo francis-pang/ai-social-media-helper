@@ -31,31 +31,52 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 
 	log.Debug().
 		Str("path", mediaFile.Path).
-		Str("ext", ext).
-		Int("max_dim", maxDimension).
+		Str("mime_type", mediaFile.MIMEType).
+		Int("max_dimension", maxDimension).
 		Msg("Generating thumbnail")
+
+	var data []byte
+	var mimeType string
+	var err error
+	method := ""
 
 	switch ext {
 	case ".jpg", ".jpeg", ".png":
-		return generateThumbnailPureGo(mediaFile.Path, ext, maxDimension)
+		data, mimeType, err = generateThumbnailPureGo(mediaFile.Path, ext, maxDimension)
+		method = "pure-go"
 
 	case ".heic", ".heif":
-		return generateThumbnailHEIC(mediaFile.Path, maxDimension)
+		data, mimeType, err = generateThumbnailHEIC(mediaFile.Path, maxDimension)
+		method = "ffmpeg-heic"
 
 	case ".gif", ".webp":
 		// Return original file for small formats
-		data, err := os.ReadFile(mediaFile.Path)
+		data, err = os.ReadFile(mediaFile.Path)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to read file: %w", err)
 		}
-		return data, mediaFile.MIMEType, nil
+		mimeType = mediaFile.MIMEType
+		method = "original"
 
 	case ".mp4", ".mov", ".avi", ".webm", ".mkv":
-		return GenerateVideoThumbnail(mediaFile.Path, maxDimension)
+		data, mimeType, err = GenerateVideoThumbnail(mediaFile.Path, maxDimension)
+		method = "ffmpeg-video"
 
 	default:
 		return nil, "", fmt.Errorf("unsupported format for thumbnail: %s", ext)
 	}
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	log.Debug().
+		Str("path", mediaFile.Path).
+		Int("output_size", len(data)).
+		Str("method", method).
+		Msg("Thumbnail generation complete")
+
+	return data, mimeType, nil
 }
 
 // GenerateVideoThumbnail extracts a frame from a video at the 1-second mark
@@ -63,6 +84,11 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 // Falls back to a frame at 0s if the video is shorter than 1 second.
 // See DDR-030: Cloud Selection Backend Architecture.
 func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string, error) {
+	log.Debug().
+		Str("path", videoPath).
+		Int("max_dimension", maxDimension).
+		Msg("Generating video thumbnail")
+
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return nil, "", fmt.Errorf("ffmpeg not found: video thumbnail generation requires ffmpeg")
@@ -116,16 +142,21 @@ func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string,
 	}
 
 	log.Debug().
-		Str("video", filepath.Base(videoPath)).
-		Int("thumb_size", len(data)).
-		Int("max_dim", maxDimension).
-		Msg("Video thumbnail generated (ffmpeg frame extraction)")
+		Str("path", videoPath).
+		Int("output_size", len(data)).
+		Msg("Video thumbnail generation complete")
 
 	return data, "image/jpeg", nil
 }
 
 // generateThumbnailPureGo resizes JPEG/PNG images using pure Go.
 func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, string, error) {
+	log.Debug().
+		Str("path", filePath).
+		Str("format", ext).
+		Int("max_dimension", maxDimension).
+		Msg("Generating thumbnail using pure Go")
+
 	// Open the file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -180,11 +211,12 @@ func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, st
 	}
 
 	log.Debug().
+		Str("path", filePath).
 		Int("orig_width", origWidth).
 		Int("orig_height", origHeight).
 		Int("new_width", newWidth).
 		Int("new_height", newHeight).
-		Int("thumb_size", buf.Len()).
+		Int("output_size", buf.Len()).
 		Msg("Thumbnail generated (pure Go)")
 
 	return buf.Bytes(), "image/jpeg", nil
@@ -195,6 +227,11 @@ func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, st
 // locally (if ffmpeg is installed) and in Lambda (ffmpeg bundled in container image).
 // Falls back to returning the original HEIC file if ffmpeg is unavailable.
 func generateThumbnailHEIC(filePath string, maxDimension int) ([]byte, string, error) {
+	log.Debug().
+		Str("path", filePath).
+		Int("max_dimension", maxDimension).
+		Msg("Generating HEIC thumbnail")
+
 	// Check if ffmpeg is available
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {

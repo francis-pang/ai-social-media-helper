@@ -33,6 +33,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -50,13 +52,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var coldStart = true
+
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
 	presigner = s3.NewPresignClient(s3Client)
@@ -102,6 +108,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/gemini-api-key"
 		}
+		ssmStart := time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -110,7 +117,7 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-		log.Info().Msg("Gemini API key loaded from SSM Parameter Store")
+		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
 
 	// Load Instagram credentials from SSM Parameter Store (DDR-040).
@@ -127,6 +134,7 @@ func init() {
 			userIDParam = "/ai-social-media/prod/instagram-user-id"
 		}
 
+		ssmStart := time.Now()
 		tokenResult, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &tokenParam,
 			WithDecryption: aws.Bool(true),
@@ -135,8 +143,10 @@ func init() {
 			log.Warn().Err(err).Str("param", tokenParam).Msg("Instagram access token not found in SSM — publishing disabled")
 		} else {
 			igAccessToken = *tokenResult.Parameter.Value
+			log.Debug().Str("param", tokenParam).Dur("elapsed", time.Since(ssmStart)).Msg("Instagram token loaded from SSM")
 		}
 
+		ssmStart = time.Now()
 		userIDResult, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &userIDParam,
 			WithDecryption: aws.Bool(false),
@@ -145,6 +155,7 @@ func init() {
 			log.Warn().Err(err).Str("param", userIDParam).Msg("Instagram user ID not found in SSM — publishing disabled")
 		} else {
 			igUserID = *userIDResult.Parameter.Value
+			log.Debug().Str("param", userIDParam).Dur("elapsed", time.Since(ssmStart)).Msg("Instagram user ID loaded from SSM")
 		}
 	}
 	if igAccessToken != "" && igUserID != "" {
@@ -153,6 +164,19 @@ func init() {
 	} else {
 		log.Warn().Msg("Instagram credentials not configured — publishing disabled")
 	}
+
+	log.Info().
+		Str("function", "media-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Bool("dynamoEnabled", sessionStore != nil).
+		Bool("workerEnabled", workerLambdaArn != "").
+		Bool("selectionSfnEnabled", selectionSfnArn != "").
+		Bool("enhancementSfnEnabled", enhancementSfnArn != "").
+		Bool("instagramEnabled", igClient != nil).
+		Bool("originVerifyEnabled", originVerifySecret != "").
+		Dur("initDuration", time.Since(initStart)).
+		Msg("API Lambda init complete")
 }
 
 func main() {
@@ -170,8 +194,8 @@ func main() {
 	mux.HandleFunc("/api/download/", handleDownloadRoutes)
 	mux.HandleFunc("/api/description/generate", handleDescriptionGenerate)
 	mux.HandleFunc("/api/description/", handleDescriptionRoutes)
-	mux.HandleFunc("/api/publish/start", handlePublishStart)       // DDR-040
-	mux.HandleFunc("/api/publish/", handlePublishRoutes)           // DDR-040
+	mux.HandleFunc("/api/publish/start", handlePublishStart)           // DDR-040
+	mux.HandleFunc("/api/publish/", handlePublishRoutes)               // DDR-040
 	mux.HandleFunc("/api/session/invalidate", handleSessionInvalidate) // DDR-037
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)

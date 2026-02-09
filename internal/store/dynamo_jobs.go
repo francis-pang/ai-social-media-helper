@@ -37,11 +37,13 @@ func (s *DynamoStore) GetTriageJob(ctx context.Context, sessionID, jobID string)
 		return nil, fmt.Errorf("get triage job %s/%s: %w", sessionID, jobID, err)
 	}
 	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "triage").Bool("found", false).Msg("GetTriageJob: job not found")
 		return nil, nil
 	}
 
 	job.ID = jobID
 	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "triage").Str("status", job.Status).Bool("found", true).Msg("GetTriageJob: job retrieved")
 	return &job, nil
 }
 
@@ -70,11 +72,13 @@ func (s *DynamoStore) GetSelectionJob(ctx context.Context, sessionID, jobID stri
 		return nil, fmt.Errorf("get selection job %s/%s: %w", sessionID, jobID, err)
 	}
 	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "selection").Bool("found", false).Msg("GetSelectionJob: job not found")
 		return nil, nil
 	}
 
 	job.ID = jobID
 	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "selection").Str("status", job.Status).Bool("found", true).Msg("GetSelectionJob: job retrieved")
 	return &job, nil
 }
 
@@ -103,11 +107,13 @@ func (s *DynamoStore) GetEnhancementJob(ctx context.Context, sessionID, jobID st
 		return nil, fmt.Errorf("get enhancement job %s/%s: %w", sessionID, jobID, err)
 	}
 	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "enhancement").Bool("found", false).Msg("GetEnhancementJob: job not found")
 		return nil, nil
 	}
 
 	job.ID = jobID
 	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "enhancement").Str("status", job.Status).Bool("found", true).Msg("GetEnhancementJob: job retrieved")
 	return &job, nil
 }
 
@@ -135,11 +141,13 @@ func (s *DynamoStore) GetDownloadJob(ctx context.Context, sessionID, jobID strin
 		return nil, fmt.Errorf("get download job %s/%s: %w", sessionID, jobID, err)
 	}
 	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "download").Bool("found", false).Msg("GetDownloadJob: job not found")
 		return nil, nil
 	}
 
 	job.ID = jobID
 	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "download").Str("status", job.Status).Bool("found", true).Msg("GetDownloadJob: job retrieved")
 	return &job, nil
 }
 
@@ -167,11 +175,13 @@ func (s *DynamoStore) GetDescriptionJob(ctx context.Context, sessionID, jobID st
 		return nil, fmt.Errorf("get description job %s/%s: %w", sessionID, jobID, err)
 	}
 	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "description").Bool("found", false).Msg("GetDescriptionJob: job not found")
 		return nil, nil
 	}
 
 	job.ID = jobID
 	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "description").Str("status", job.Status).Bool("found", true).Msg("GetDescriptionJob: job retrieved")
 	return &job, nil
 }
 
@@ -201,11 +211,13 @@ func (s *DynamoStore) GetPublishJob(ctx context.Context, sessionID, jobID string
 		return nil, fmt.Errorf("get publish job %s/%s: %w", sessionID, jobID, err)
 	}
 	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "publish").Bool("found", false).Msg("GetPublishJob: job not found")
 		return nil, nil
 	}
 
 	job.ID = jobID
 	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "publish").Str("status", job.Status).Bool("found", true).Msg("GetPublishJob: job retrieved")
 	return &job, nil
 }
 

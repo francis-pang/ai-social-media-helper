@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -84,9 +85,9 @@ type FrameExtractionResult struct {
 // Returns a FrameExtractionResult with paths to all extracted frames.
 // The caller MUST call Cleanup() when done with the frames.
 func ExtractFrames(ctx context.Context, videoPath string, metadata *VideoMetadata) (*FrameExtractionResult, error) {
-	log.Info().
-		Str("video", filepath.Base(videoPath)).
-		Msg("Starting frame extraction for video enhancement")
+	log.Debug().
+		Str("video_path", videoPath).
+		Msg("Starting frame extraction")
 
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -119,10 +120,11 @@ func ExtractFrames(ctx context.Context, videoPath string, metadata *VideoMetadat
 
 	extractionFPS := determineExtractionFPS(originalFPS, duration)
 
-	log.Info().
+	log.Debug().
 		Float64("original_fps", originalFPS).
 		Float64("extraction_fps", extractionFPS).
 		Float64("duration_s", duration).
+		Int("expected_frames", int(duration*extractionFPS)).
 		Msg("Frame extraction parameters")
 
 	// Build ffmpeg command for frame extraction
@@ -138,6 +140,11 @@ func ExtractFrames(ctx context.Context, videoPath string, metadata *VideoMetadat
 	}
 
 	args = append(args, "-vsync", "0", "-y", framePattern)
+
+	log.Debug().
+		Str("ffmpeg_path", ffmpegPath).
+		Strs("args", args).
+		Msg("Executing ffmpeg command for frame extraction")
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	output, err := cmd.CombinedOutput()
@@ -158,10 +165,14 @@ func ExtractFrames(ctx context.Context, videoPath string, metadata *VideoMetadat
 		return nil, fmt.Errorf("no frames extracted from video: %s", filepath.Base(videoPath))
 	}
 
+	var videoDuration time.Duration
+	if metadata != nil {
+		videoDuration = metadata.Duration
+	}
 	log.Info().
 		Int("total_frames", len(framePaths)).
 		Float64("extraction_fps", extractionFPS).
-		Str("frame_dir", frameDir).
+		Dur("duration", videoDuration).
 		Msg("Frame extraction complete")
 
 	return &FrameExtractionResult{
@@ -183,12 +194,12 @@ func ExtractFrames(ctx context.Context, videoPath string, metadata *VideoMetadat
 //   - outputPath: path for the output enhanced video
 //   - fps: frame rate for the output video (use ExtractionFPS from FrameExtractionResult)
 func ReassembleVideo(ctx context.Context, frameDir string, originalVideoPath string, outputPath string, fps float64) error {
-	log.Info().
+	log.Debug().
 		Str("frame_dir", frameDir).
-		Str("original", filepath.Base(originalVideoPath)).
-		Str("output", filepath.Base(outputPath)).
+		Str("original_video", originalVideoPath).
+		Str("output_path", outputPath).
 		Float64("fps", fps).
-		Msg("Reassembling video from enhanced frames")
+		Msg("Starting video reassembly")
 
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -218,6 +229,11 @@ func ReassembleVideo(ctx context.Context, frameDir string, originalVideoPath str
 		"-y", outputPath,
 	}
 
+	log.Debug().
+		Str("ffmpeg_path", ffmpegPath).
+		Strs("args", args).
+		Msg("Executing ffmpeg command for video reassembly")
+
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -230,9 +246,12 @@ func ReassembleVideo(ctx context.Context, frameDir string, originalVideoPath str
 		return fmt.Errorf("output video not found after reassembly: %w", err)
 	}
 
+	// Count frames from frameDir for logging
+	framePaths, _ := collectFramePaths(frameDir)
 	log.Info().
-		Str("output", filepath.Base(outputPath)).
-		Int64("size_bytes", info.Size()).
+		Int("frame_count", len(framePaths)).
+		Int64("output_size_bytes", info.Size()).
+		Str("output_path", outputPath).
 		Msg("Video reassembly complete")
 
 	return nil

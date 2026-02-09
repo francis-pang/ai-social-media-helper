@@ -20,7 +20,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -43,13 +45,17 @@ var (
 	mediaBucket  string
 )
 
+var coldStart = true
+
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
 	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
@@ -72,6 +78,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/gemini-api-key"
 		}
+		ssmStart := time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -80,8 +87,16 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-		log.Info().Msg("Gemini API key loaded from SSM Parameter Store")
+		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
+
+	log.Info().
+		Str("function", "video-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Str("table", tableName).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("Video Lambda init complete")
 }
 
 // VideoEvent is the input payload from Step Functions.
@@ -104,6 +119,11 @@ type VideoResult struct {
 }
 
 func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
+	handlerStart := time.Now()
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "video-lambda").Msg("Cold start — first invocation")
+	}
 	bucket := mediaBucket
 	if event.Bucket != "" {
 		bucket = event.Bucket
@@ -154,6 +174,8 @@ func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
 			FrameRate: 30.0,
 			Duration:  0,
 		}
+	} else {
+		logger.Debug().Float64("frameRate", metadata.FrameRate).Dur("duration", metadata.Duration).Msg("Video metadata extracted")
 	}
 
 	// Build enhancement config from environment.
@@ -166,6 +188,7 @@ func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
 		MaxAnalysisIterations:   3,
 		TargetProfessionalScore: 8.5,
 	}
+	logger.Debug().Bool("imagenConfigured", config.VertexAIProject != "").Float64("similarityThreshold", config.SimilarityThreshold).Msg("Video enhancement config")
 
 	// Run video enhancement pipeline.
 	result, err := chat.EnhanceVideo(ctx, inputPath, outputPath, metadata, config)
@@ -200,6 +223,13 @@ func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
 	if ct, ok := filehandler.SupportedVideoExtensions[ext]; ok {
 		contentType = ct
 	}
+	logger.Debug().Str("contentType", contentType).Str("extension", ext).Msg("Content type determined")
+
+	// Get enhanced file size for logging
+	enhancedFileInfo, _ := os.Stat(outputPath)
+	if enhancedFileInfo != nil {
+		logger.Debug().Int64("enhancedFileSize", enhancedFileInfo.Size()).Msg("Enhanced video file size")
+	}
 
 	_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &bucket,
@@ -225,6 +255,7 @@ func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
 		Int("groups", result.TotalGroups).
 		Int("frames", result.TotalFrames).
 		Dur("duration", result.TotalDuration).
+		Dur("handlerDuration", time.Since(handlerStart)).
 		Msg("Video enhancement complete")
 
 	return VideoResult{
@@ -286,6 +317,7 @@ func updateVideoComplete(ctx context.Context, event VideoEvent, enhancedKey stri
 
 // downloadToFile downloads an S3 object to a specific local path.
 func downloadToFile(ctx context.Context, bucket, key, localPath string) error {
+	log.Debug().Str("bucket", bucket).Str("key", key).Str("localPath", localPath).Msg("Downloading file from S3")
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &bucket,
 		Key:    &key,

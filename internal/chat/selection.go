@@ -74,14 +74,22 @@ var SelectionSystemInstruction = assets.SelectionSystemPrompt
 
 // parseSelectionResponse extracts and parses the JSON object from Gemini's response.
 func parseSelectionResponse(response string) (*SelectionResult, error) {
+	log.Debug().
+		Int("response_length", len(response)).
+		Msg("Parsing selection response JSON")
 	result, err := jsonutil.ParseJSON[SelectionResult](response)
 	if err != nil {
-		log.Error().Str("response", response).Msg("Failed to parse selection response")
+		log.Error().Err(err).Str("response", response).Msg("Failed to parse selection response")
 		return nil, fmt.Errorf("selection response: %w", err)
 	}
 	if len(result.Selected) == 0 && len(result.Excluded) == 0 {
 		return nil, fmt.Errorf("empty selection results (no items selected or excluded)")
 	}
+	log.Debug().
+		Int("selected_count", len(result.Selected)).
+		Int("excluded_count", len(result.Excluded)).
+		Int("scene_group_count", len(result.SceneGroups)).
+		Msg("Selection response parsed successfully")
 	return &result, nil
 }
 
@@ -103,7 +111,8 @@ func uploadVideoFile(ctx context.Context, client *genai.Client, filePath string)
 	log.Debug().
 		Str("path", filePath).
 		Int64("size_bytes", info.Size()).
-		Msg("Uploading video to Files API")
+		Str("mime_type", "video/webm").
+		Msg("Starting Gemini Files API upload for video")
 
 	// Upload the file
 	uploadStart := time.Now()
@@ -124,14 +133,17 @@ func uploadVideoFile(ctx context.Context, client *genai.Client, filePath string)
 	const uploadPollingInterval = 5 * time.Second
 	const uploadTimeout = 10 * time.Minute
 	deadline := time.Now().Add(uploadTimeout)
+	pollIteration := 0
 
 	for file.State == genai.FileStateProcessing {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("timeout waiting for video processing after %v", uploadTimeout)
 		}
 
+		pollIteration++
 		log.Debug().
 			Str("state", string(file.State)).
+			Int("poll_iteration", pollIteration).
 			Msg("Video still processing, waiting...")
 
 		time.Sleep(uploadPollingInterval)
@@ -152,6 +164,7 @@ func uploadVideoFile(ctx context.Context, client *genai.Client, filePath string)
 		Str("name", file.Name).
 		Str("state", string(file.State)).
 		Dur("total_time", totalUploadTime).
+		Int("poll_iterations", pollIteration).
 		Msg("Video ready for inference")
 
 	// Emit Gemini Files API upload metrics

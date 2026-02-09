@@ -78,6 +78,10 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 	// Generate content
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
 	geminiStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("part_count", len(parts)).
+		Msg("Starting Gemini API call for media selection")
 	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	geminiElapsed := time.Since(geminiStart)
 
@@ -96,14 +100,19 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 	m.Flush()
 
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to generate selection from Gemini")
+		log.Error().Err(err).Dur("duration", geminiElapsed).Msg("Failed to generate selection from Gemini")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	if resp == nil {
-		log.Warn().Msg("Received empty response from Gemini")
+		log.Warn().Dur("duration", geminiElapsed).Msg("Received empty response from Gemini")
 		return "", fmt.Errorf("received empty response from Gemini API")
 	}
+
+	log.Debug().
+		Int("response_length", len(resp.Text())).
+		Dur("duration", geminiElapsed).
+		Msg("Gemini API response received for media selection")
 
 	// Extract text from response
 	response := resp.Text()
@@ -165,6 +174,10 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	// Generate content
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
 	geminiStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("part_count", len(parts)).
+		Msg("Starting Gemini API call for JSON media selection")
 	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	geminiElapsed := time.Since(geminiStart)
 
@@ -183,12 +196,12 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	m.Flush()
 
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to generate JSON selection from Gemini")
+		log.Error().Err(err).Dur("duration", geminiElapsed).Msg("Failed to generate JSON selection from Gemini")
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	if resp == nil {
-		log.Warn().Msg("Received empty response from Gemini")
+		log.Warn().Dur("duration", geminiElapsed).Msg("Received empty response from Gemini")
 		return nil, fmt.Errorf("received empty response from Gemini API")
 	}
 
@@ -196,7 +209,8 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	responseText := resp.Text()
 	log.Debug().
 		Int("response_length", len(responseText)).
-		Msg("Received JSON selection response from Gemini")
+		Dur("duration", geminiElapsed).
+		Msg("Gemini API response received for JSON media selection")
 
 	// Parse JSON response
 	selectionResult, err := parseSelectionResponse(responseText)

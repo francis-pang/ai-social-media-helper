@@ -31,6 +31,11 @@ type internalGroupResult struct {
 // enhanceFrameGroup enhances a single frame group's representative frame
 // through all phases (Gemini enhancement → analysis → Imagen iteration).
 func enhanceFrameGroup(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, group filehandler.FrameGroup, groupIndex int, config VideoEnhancementConfig) (*internalGroupResult, error) {
+	log.Debug().
+		Int("group_index", groupIndex).
+		Int("frame_count", group.FrameCount).
+		Msg("enhanceFrameGroup: Starting group enhancement")
+
 	result := &internalGroupResult{
 		GroupEnhancementResult: GroupEnhancementResult{
 			GroupIndex: groupIndex,
@@ -150,12 +155,22 @@ func enhanceFrameGroup(ctx context.Context, geminiClient *GeminiImageClient, ima
 		result.lutContent = lutContent
 	}
 
+	log.Info().
+		Int("group_index", groupIndex).
+		Int("iterations", result.AnalysisIterations).
+		Float64("final_score", result.FinalScore).
+		Msg("enhanceFrameGroup: Group enhancement completed")
+
 	return result, nil
 }
 
 // applyVideoImprovements applies a set of improvements to an enhanced frame.
 // It first tries Gemini for global edits, then Imagen for localized mask-based edits.
 func applyVideoImprovements(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, improvements []videoAnalysisImprovement, config VideoEnhancementConfig) ([]byte, string, error) {
+	log.Debug().
+		Int("improvements_count", len(improvements)).
+		Msg("applyVideoImprovements: Starting improvement application")
+
 	currentData := imageData
 	currentMIME := imageMIME
 
@@ -196,6 +211,12 @@ func applyVideoImprovements(ctx context.Context, geminiClient *GeminiImageClient
 			break
 		}
 
+		log.Debug().
+			Str("type", edit.Type).
+			Str("region", edit.Region).
+			Str("instruction", truncateString(edit.EditInstruction, 100)).
+			Msg("applyVideoImprovements: Attempting Imagen improvement")
+
 		// Generate mask for the region — decode temporarily for dimensions
 		width, height, err := getImageDimensions(currentData)
 		if err != nil {
@@ -227,10 +248,11 @@ func applyVideoImprovements(ctx context.Context, geminiClient *GeminiImageClient
 
 		currentData = imagenResult.ImageData
 		currentMIME = imagenResult.MIMEType
-		log.Info().
+		log.Debug().
 			Str("type", edit.Type).
 			Str("region", edit.Region).
-			Msg("Localized improvement applied via Imagen 3")
+			Int("result_bytes", len(imagenResult.ImageData)).
+			Msg("applyVideoImprovements: Imagen improvement applied successfully")
 	}
 
 	return currentData, currentMIME, nil

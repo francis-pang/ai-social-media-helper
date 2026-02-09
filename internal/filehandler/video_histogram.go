@@ -62,6 +62,10 @@ type FrameGroup struct {
 // ComputeHistogram computes a normalized 3D RGB color histogram for an image file.
 // The image is loaded from disk and processed in a single pass.
 func ComputeHistogram(imagePath string) (*ColorHistogram, error) {
+	log.Trace().
+		Str("image_path", imagePath).
+		Msg("Computing color histogram")
+
 	f, err := os.Open(imagePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open image: %w", err)
@@ -181,7 +185,7 @@ func GroupFramesByHistogram(framePaths []string, threshold float64) ([]FrameGrou
 		threshold = DefaultSimilarityThreshold
 	}
 
-	log.Info().
+	log.Debug().
 		Int("total_frames", len(framePaths)).
 		Float64("threshold", threshold).
 		Msg("Grouping frames by color histogram similarity")
@@ -250,8 +254,8 @@ func GroupFramesByHistogram(framePaths []string, threshold float64) ([]FrameGrou
 		}
 	}
 
-	log.Info().
-		Int("total_groups", len(groups)).
+	log.Debug().
+		Int("group_count", len(groups)).
 		Int("total_frames", len(framePaths)).
 		Float64("avg_group_size", float64(len(framePaths))/float64(len(groups))).
 		Msg("Frame grouping complete")

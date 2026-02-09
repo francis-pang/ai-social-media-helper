@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -62,6 +63,8 @@ type longTokenResponse struct {
 // Endpoint: POST https://api.instagram.com/oauth/access_token
 // Returns the short-lived token (1 hour) and the Instagram user ID.
 func ExchangeCode(ctx context.Context, code, appID, appSecret, redirectURI string) (*ExchangeCodeResult, error) {
+	log.Debug().Msg("Exchanging authorization code for short-lived token")
+	startTime := time.Now()
 	params := url.Values{
 		"client_id":     {appID},
 		"client_secret": {appSecret},
@@ -70,8 +73,14 @@ func ExchangeCode(ctx context.Context, code, appID, appSecret, redirectURI strin
 		"code":          {code},
 	}
 
-	log.Debug().Str("redirectUri", redirectURI).Msg("Exchanging authorization code for short-lived token")
+	// Log form parameter names (not values) at Trace level
+	paramNames := make([]string, 0, len(params))
+	for key := range params {
+		paramNames = append(paramNames, key)
+	}
+	log.Trace().Strs("formParams", paramNames).Msg("Form parameters")
 
+	log.Debug().Str("method", http.MethodPost).Str("endpoint", "/oauth/access_token").Msg("OAuth HTTP request")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://api.instagram.com/oauth/access_token",
 		strings.NewReader(params.Encode()))
@@ -81,10 +90,14 @@ func ExchangeCode(ctx context.Context, code, appID, appSecret, redirectURI strin
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := http.DefaultClient.Do(req)
+	duration := time.Since(startTime)
 	if err != nil {
+		log.Debug().Int("statusCode", 0).Dur("duration", duration).Err(err).Msg("OAuth HTTP response")
 		return nil, fmt.Errorf("token exchange request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	log.Debug().Int("statusCode", resp.StatusCode).Dur("duration", duration).Msg("OAuth HTTP response")
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -95,9 +108,11 @@ func ExchangeCode(ctx context.Context, code, appID, appSecret, redirectURI strin
 		// Try to parse Instagram-specific error format.
 		var errResp shortTokenErrorResponse
 		if json.Unmarshal(body, &errResp) == nil && errResp.ErrorMessage != "" {
+			log.Error().Str("errorMessage", errResp.ErrorMessage).Str("errorType", errResp.ErrorType).Int("errorCode", errResp.Code).Msg("OAuth token exchange failed")
 			return nil, fmt.Errorf("token exchange failed: %s (type: %s, code: %d)",
 				errResp.ErrorMessage, errResp.ErrorType, errResp.Code)
 		}
+		log.Error().Int("statusCode", resp.StatusCode).Msg("OAuth token exchange failed")
 		return nil, fmt.Errorf("token exchange failed (status %d): %s",
 			resp.StatusCode, truncate(string(body), 300))
 	}
@@ -128,21 +143,26 @@ func ExchangeCode(ctx context.Context, code, appID, appSecret, redirectURI strin
 //	&client_secret={app_secret}
 //	&access_token={short_lived_token}
 func ExchangeLongLivedToken(ctx context.Context, shortToken, appSecret string) (*LongLivedTokenResult, error) {
+	log.Debug().Msg("Exchanging short-lived token for long-lived token")
+	startTime := time.Now()
 	u := fmt.Sprintf("https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=%s&access_token=%s",
 		url.QueryEscape(appSecret), url.QueryEscape(shortToken))
 
-	log.Debug().Msg("Exchanging short-lived token for long-lived token")
-
+	log.Debug().Str("method", http.MethodGet).Str("endpoint", "/access_token").Msg("OAuth HTTP request")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
+	duration := time.Since(startTime)
 	if err != nil {
+		log.Debug().Int("statusCode", 0).Dur("duration", duration).Err(err).Msg("OAuth HTTP response")
 		return nil, fmt.Errorf("long-lived token request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	log.Debug().Int("statusCode", resp.StatusCode).Dur("duration", duration).Msg("OAuth HTTP response")
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -150,6 +170,7 @@ func ExchangeLongLivedToken(ctx context.Context, shortToken, appSecret string) (
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		log.Error().Int("statusCode", resp.StatusCode).Msg("OAuth long-lived token exchange failed")
 		return nil, fmt.Errorf("long-lived token exchange failed (status %d): %s",
 			resp.StatusCode, truncate(string(body), 300))
 	}

@@ -18,7 +18,10 @@ import (
 // POST /api/triage/start
 // Body: {"sessionId": "uuid", "model": "optional-model-name"}
 func handleTriageStart(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleTriageStart")
+
 	if r.Method != http.MethodPost {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -28,17 +31,25 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 		Model     string `json:"model,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Debug().Err(err).Msg("Request body decoding failed")
+		log.Warn().Str("param", "body").Msg("Invalid request body")
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Str("model", req.Model).Msg("Request body decoded successfully")
+
 	if req.SessionID == "" {
+		log.Warn().Str("param", "sessionId").Msg("SessionId is required")
 		httpError(w, http.StatusBadRequest, "sessionId is required")
 		return
 	}
 	if err := validateSessionID(req.SessionID); err != nil {
+		log.Debug().Err(err).Str("sessionId", req.SessionID).Msg("SessionId validation failed")
+		log.Warn().Str("param", "sessionId").Msg("SessionId validation failed")
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	log.Debug().Str("sessionId", req.SessionID).Msg("SessionId validation passed")
 
 	model := chat.DefaultModelName
 	if req.Model != "" {
@@ -61,12 +72,18 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dispatch to Worker Lambda asynchronously (DDR-050).
-	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+	payload := map[string]interface{}{
 		"type":      "triage",
 		"sessionId": req.SessionID,
 		"jobId":     jobID,
 		"model":     model,
-	}); err != nil {
+	}
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Str("model", model).
+		Msg("Job dispatched")
+	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
 		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for triage")
 		if sessionStore != nil {
 			errJob := &store.TriageJob{ID: jobID, Status: "error", Error: "failed to start processing"}
@@ -75,12 +92,6 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "failed to start processing")
 		return
 	}
-
-	log.Info().
-		Str("jobId", jobID).
-		Str("sessionId", req.SessionID).
-		Str("model", model).
-		Msg("Triage job dispatched to Worker Lambda")
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
 		"id": jobID,
@@ -108,13 +119,17 @@ func handleTriageRoutes(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/triage/{id}/results?sessionId=...
 func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("jobId", jobID).Msg("Handler entry: handleTriageResults")
+
 	if r.Method != http.MethodGet {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
+		log.Warn().Str("param", "sessionId").Msg("SessionId is required")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -131,9 +146,11 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 		return
 	}
 	if job == nil {
+		log.Debug().Str("jobId", jobID).Str("sessionId", sessionID).Msg("Triage job not found in DynamoDB")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
+	log.Debug().Str("jobId", jobID).Str("status", job.Status).Msg("Triage job found in DynamoDB")
 
 	resp := map[string]interface{}{
 		"id":      job.ID,
@@ -149,7 +166,10 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 
 // POST /api/triage/{id}/confirm
 func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("jobId", jobID).Msg("Handler entry: handleTriageConfirm")
+
 	if r.Method != http.MethodPost {
+		log.Warn().Str("param", "method").Msg("Method not allowed")
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -159,10 +179,15 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
 		DeleteKeys []string `json:"deleteKeys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Debug().Err(err).Msg("Request body decoding failed")
+		log.Warn().Str("param", "body").Msg("Invalid request body")
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	log.Debug().Int("deleteKeysCount", len(req.DeleteKeys)).Msg("Request body decoded successfully")
+
 	if req.SessionID == "" {
+		log.Warn().Str("param", "sessionId").Msg("SessionId is required")
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -204,6 +229,8 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
 		deleted++
 		log.Info().Str("key", key).Msg("Deleted S3 object")
 	}
+
+	log.Info().Int("deleted", deleted).Int("totalRequested", len(req.DeleteKeys)).Msg("Triage confirm completed")
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"deleted":        deleted,

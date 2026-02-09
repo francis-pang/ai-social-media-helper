@@ -53,6 +53,12 @@ func NewHandler(verifyToken, appSecret string) *Handler {
 
 // ServeHTTP dispatches to verification (GET) or event handling (POST).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Debug().
+		Str("method", r.Method).
+		Str("path", r.URL.Path).
+		Str("remote_addr", r.RemoteAddr).
+		Msg("Incoming webhook request")
+
 	switch r.Method {
 	case http.MethodGet:
 		h.handleVerification(w, r)
@@ -75,6 +81,12 @@ func (h *Handler) handleVerification(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("hub.mode")
 	token := r.URL.Query().Get("hub.verify_token")
 	challenge := r.URL.Query().Get("hub.challenge")
+
+	log.Debug().
+		Str("mode", mode).
+		Bool("has_token", token != "").
+		Bool("has_challenge", challenge != "").
+		Msg("Webhook verification parameters received")
 
 	if mode == "" || challenge == "" {
 		log.Warn().
@@ -134,16 +146,27 @@ func (h *Handler) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Debug().
+		Str("signature_header", signature).
+		Int("body_size", len(body)).
+		Msg("Validating webhook signature")
+
 	if !h.verifySignature(body, signature) {
 		log.Warn().Msg("Webhook event: invalid signature")
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}
 
+	log.Debug().Msg("Webhook signature validation successful")
+
 	// Log the event payload for future processing.
 	// Using RawJSON avoids re-serialization overhead.
-	log.Info().
+	log.Trace().
 		RawJSON("payload", body).
+		Int("bodySize", len(body)).
+		Msg("Webhook event payload details")
+
+	log.Info().
 		Int("bodySize", len(body)).
 		Msg("Webhook event received")
 

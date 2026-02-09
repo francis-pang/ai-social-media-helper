@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -47,6 +48,8 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/metrics"
 	"github.com/fpang/gemini-media-cli/internal/store"
 )
+
+var coldStart = true
 
 // AWS clients initialized at cold start.
 var (
@@ -79,12 +82,14 @@ const zipMethodZstd uint16 = 93
 const maxVideoZipBytes int64 = 375 * 1024 * 1024
 
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
 	presigner = s3.NewPresignClient(s3Client)
@@ -108,6 +113,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/gemini-api-key"
 		}
+		ssmStart := time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -116,7 +122,7 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-		log.Info().Msg("Gemini API key loaded from SSM Parameter Store")
+		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
 
 	// Load Instagram credentials (optional — non-fatal).
@@ -131,19 +137,27 @@ func init() {
 		if userIDParam == "" {
 			userIDParam = "/ai-social-media/prod/instagram-user-id"
 		}
+		ssmStart := time.Now()
 		tokenResult, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &tokenParam,
 			WithDecryption: aws.Bool(true),
 		})
 		if err == nil {
 			igAccessToken = *tokenResult.Parameter.Value
+			log.Debug().Str("param", tokenParam).Dur("elapsed", time.Since(ssmStart)).Msg("Instagram token loaded from SSM")
+		} else {
+			log.Warn().Err(err).Str("param", tokenParam).Msg("Instagram access token not found in SSM — publishing disabled")
 		}
+		ssmStart = time.Now()
 		userIDResult, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &userIDParam,
 			WithDecryption: aws.Bool(false),
 		})
 		if err == nil {
 			igUserID = *userIDResult.Parameter.Value
+			log.Debug().Str("param", userIDParam).Dur("elapsed", time.Since(ssmStart)).Msg("Instagram user ID loaded from SSM")
+		} else {
+			log.Warn().Err(err).Str("param", userIDParam).Msg("Instagram user ID not found in SSM — publishing disabled")
 		}
 	}
 	if igAccessToken != "" && igUserID != "" {
@@ -155,6 +169,15 @@ func init() {
 	zip.RegisterCompressor(zipMethodZstd, func(w io.Writer) (io.WriteCloser, error) {
 		return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(12)))
 	})
+
+	log.Info().
+		Str("function", "worker-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Str("table", dynamoTableName).
+		Bool("instagramEnabled", igClient != nil).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("Worker Lambda init complete")
 }
 
 func main() {
@@ -162,10 +185,15 @@ func main() {
 }
 
 func handler(ctx context.Context, event WorkerEvent) error {
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "worker-lambda").Msg("Cold start — first invocation")
+	}
 	log.Info().
 		Str("type", event.Type).
 		Str("sessionId", event.SessionID).
 		Str("jobId", event.JobID).
+		Int("keyCount", len(event.Keys)).
 		Msg("Worker Lambda invoked")
 
 	switch event.Type {
@@ -214,6 +242,7 @@ func handleTriage(ctx context.Context, event WorkerEvent) error {
 	if err != nil {
 		return setTriageError(ctx, event, fmt.Sprintf("Failed to list S3 objects: %v", err))
 	}
+	log.Debug().Int("objectCount", len(listResult.Contents)).Str("sessionId", event.SessionID).Msg("S3 ListObjectsV2 completed")
 	if len(listResult.Contents) == 0 {
 		return setTriageError(ctx, event, "No files found for session")
 	}
@@ -232,6 +261,7 @@ func handleTriage(ctx context.Context, event WorkerEvent) error {
 		ext := strings.ToLower(filepath.Ext(filename))
 
 		if !filehandler.IsSupported(ext) {
+			log.Debug().Str("key", key).Str("ext", ext).Str("sessionId", event.SessionID).Msg("Skipping file with unsupported extension")
 			continue
 		}
 
@@ -243,10 +273,11 @@ func handleTriage(ctx context.Context, event WorkerEvent) error {
 
 		mf, err := filehandler.LoadMediaFile(localPath)
 		if err != nil {
-			log.Warn().Err(err).Str("key", key).Msg("Failed to load media file")
+			log.Warn().Err(err).Str("key", key).Str("sessionId", event.SessionID).Msg("Failed to load media file")
 			continue
 		}
 
+		log.Debug().Str("key", key).Str("mimeType", mf.MIMEType).Int64("size", mf.Size).Str("sessionId", event.SessionID).Msg("Successfully loaded media file")
 		allMediaFiles = append(allMediaFiles, mf)
 		s3Keys = append(s3Keys, key)
 	}
@@ -260,6 +291,7 @@ func handleTriage(ctx context.Context, event WorkerEvent) error {
 		model = chat.DefaultModelName
 	}
 
+	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Str("sessionId", event.SessionID).Msg("Calling AskMediaTriage")
 	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model)
 	if err != nil {
 		return setTriageError(ctx, event, fmt.Sprintf("Triage failed: %v", err))
@@ -292,7 +324,7 @@ func handleTriage(ctx context.Context, event WorkerEvent) error {
 		ID: event.JobID, Status: "complete", Keep: keep, Discard: discard,
 	})
 
-	log.Info().Int("keep", len(keep)).Int("discard", len(discard)).Msg("Triage complete")
+	log.Info().Int("keep", len(keep)).Int("discard", len(discard)).Dur("duration", time.Since(jobStart)).Str("sessionId", event.SessionID).Msg("Triage complete")
 
 	metrics.New("AiSocialMedia").
 		Dimension("JobType", "triage").
@@ -307,7 +339,7 @@ func handleTriage(ctx context.Context, event WorkerEvent) error {
 }
 
 func setTriageError(ctx context.Context, event WorkerEvent, msg string) error {
-	log.Error().Str("job", event.JobID).Str("error", msg).Msg("Triage job failed")
+	log.Error().Str("job", event.JobID).Str("error", msg).Str("sessionId", event.SessionID).Msg("Triage job failed")
 	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
 		ID: event.JobID, Status: "error", Error: msg,
 	})
@@ -317,10 +349,12 @@ func setTriageError(ctx context.Context, event WorkerEvent, msg string) error {
 // ===== Description Processing =====
 
 func handleDescription(ctx context.Context, event WorkerEvent) error {
+	jobStart := time.Now()
 	sessionStore.PutDescriptionJob(ctx, event.SessionID, &store.DescriptionJob{
 		ID: event.JobID, Status: "processing", GroupLabel: event.GroupLabel,
 		TripContext: event.TripContext, MediaKeys: event.Keys,
 	})
+	log.Debug().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("status", "processing").Msg("DynamoDB status updated to processing")
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -331,11 +365,13 @@ func handleDescription(ctx context.Context, event WorkerEvent) error {
 	if err != nil {
 		return setDescError(ctx, event, "failed to initialize AI client")
 	}
+	log.Debug().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Gemini client created")
 
 	mediaItems, err := buildDescriptionMediaItems(ctx, event.Keys)
 	if err != nil {
 		return setDescError(ctx, event, "failed to prepare media")
 	}
+	log.Debug().Int("mediaItemCount", len(mediaItems)).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Media items prepared for description")
 
 	result, rawResponse, err := chat.GenerateDescription(
 		ctx, genaiClient, event.GroupLabel, event.TripContext, mediaItems,
@@ -351,16 +387,19 @@ func handleDescription(ctx context.Context, event WorkerEvent) error {
 		LocationTag: result.LocationTag, RawResponse: rawResponse,
 	})
 
-	log.Info().Str("job", event.JobID).Int("caption_length", len(result.Caption)).Msg("Description generation complete")
+	log.Info().Str("job", event.JobID).Int("caption_length", len(result.Caption)).Dur("duration", time.Since(jobStart)).Str("sessionId", event.SessionID).Msg("Description generation complete")
+	log.Debug().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Int("captionLength", len(result.Caption)).Msg("Description job completion details")
 	return nil
 }
 
 func handleDescriptionFeedback(ctx context.Context, event WorkerEvent) error {
+	jobStart := time.Now()
 	// Read current job from DynamoDB.
 	job, err := sessionStore.GetDescriptionJob(ctx, event.SessionID, event.JobID)
 	if err != nil || job == nil {
 		return setDescError(ctx, event, "job not found")
 	}
+	log.Debug().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Description job retrieved for feedback")
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -392,6 +431,8 @@ func handleDescriptionFeedback(ctx context.Context, event WorkerEvent) error {
 		ModelResponse: job.RawResponse,
 	})
 
+	log.Debug().Int("historyLength", len(history)).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Conversation history prepared for regeneration")
+	log.Debug().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Calling RegenerateDescription")
 	result, rawResponse, err := chat.RegenerateDescription(
 		ctx, genaiClient, job.GroupLabel, job.TripContext, mediaItems,
 		event.Feedback, history,
@@ -417,7 +458,7 @@ func handleDescriptionFeedback(ctx context.Context, event WorkerEvent) error {
 		History: storeHistory,
 	})
 
-	log.Info().Str("job", event.JobID).Int("round", len(storeHistory)).Msg("Description regeneration complete")
+	log.Info().Str("job", event.JobID).Int("round", len(storeHistory)).Dur("duration", time.Since(jobStart)).Str("sessionId", event.SessionID).Msg("Description regeneration complete")
 	return nil
 }
 
@@ -432,9 +473,11 @@ func setDescError(ctx context.Context, event WorkerEvent, msg string) error {
 // ===== Download Processing =====
 
 func handleDownload(ctx context.Context, event WorkerEvent) error {
+	jobStart := time.Now()
 	sessionStore.PutDownloadJob(ctx, event.SessionID, &store.DownloadJob{
 		ID: event.JobID, Status: "processing",
 	})
+	log.Debug().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("status", "processing").Msg("DynamoDB status updated to processing")
 
 	// Step 1: Query file sizes and separate images from videos.
 	var images, videos []dlFile
@@ -444,21 +487,30 @@ func handleDownload(ctx context.Context, event WorkerEvent) error {
 			Bucket: &mediaBucket, Key: &key,
 		})
 		if err != nil {
-			log.Warn().Err(err).Str("key", key).Msg("HeadObject failed, skipping file")
+			log.Warn().Err(err).Str("key", key).Str("sessionId", event.SessionID).Msg("HeadObject failed, skipping file")
 			continue
 		}
 		size := *headResult.ContentLength
+		contentType := ""
+		if headResult.ContentType != nil {
+			contentType = *headResult.ContentType
+		}
 		ext := strings.ToLower(filepath.Ext(key))
+		fileType := "image"
 		if filehandler.IsVideo(ext) {
 			videos = append(videos, dlFile{key: key, size: size})
+			fileType = "video"
 		} else {
 			images = append(images, dlFile{key: key, size: size})
 		}
+		log.Debug().Str("key", key).Int64("size", size).Str("type", fileType).Str("contentType", contentType).Str("sessionId", event.SessionID).Msg("HeadObject result")
 	}
 
 	if len(images) == 0 && len(videos) == 0 {
 		return setDownloadError(ctx, event, "No downloadable files found")
 	}
+
+	log.Debug().Int("images", len(images)).Int("videos", len(videos)).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Bundle planning: file counts")
 
 	// Step 2: Plan bundles.
 	var bundles []store.DownloadBundle
@@ -494,6 +546,7 @@ func handleDownload(ctx context.Context, event WorkerEvent) error {
 
 	for i := range bundles {
 		bundles[i].Status = "processing"
+		log.Debug().Str("bundleName", bundles[i].Name).Str("bundleType", bundles[i].Type).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Starting bundle creation")
 
 		var filesToZip []dlFile
 		if bundles[i].Type == "images" {
@@ -510,6 +563,7 @@ func handleDownload(ctx context.Context, event WorkerEvent) error {
 			bundles[i].Error = err.Error()
 			continue
 		}
+		log.Debug().Str("bundleName", bundles[i].Name).Int64("zipSize", zipSize).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Bundle ZIP created")
 
 		downloadResult, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 			Bucket:                     &mediaBucket,
@@ -521,23 +575,25 @@ func handleDownload(ctx context.Context, event WorkerEvent) error {
 			bundles[i].Error = "failed to generate download URL"
 			continue
 		}
+		log.Debug().Str("bundleName", bundles[i].Name).Str("zipKey", zipKey).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Presigned URL generated")
 
 		bundles[i].ZipKey = zipKey
 		bundles[i].ZipSize = zipSize
 		bundles[i].DownloadURL = downloadResult.URL
 		bundles[i].Status = "complete"
+		log.Debug().Str("bundleName", bundles[i].Name).Int64("zipSize", zipSize).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Bundle creation complete")
 	}
 
 	sessionStore.PutDownloadJob(ctx, event.SessionID, &store.DownloadJob{
 		ID: event.JobID, Status: "complete", Bundles: bundles,
 	})
 
-	log.Info().Str("job", event.JobID).Int("bundles", len(bundles)).Msg("Download job complete")
+	log.Info().Str("job", event.JobID).Int("bundles", len(bundles)).Dur("duration", time.Since(jobStart)).Str("sessionId", event.SessionID).Msg("Download job complete")
 	return nil
 }
 
 func setDownloadError(ctx context.Context, event WorkerEvent, msg string) error {
-	log.Error().Str("job", event.JobID).Str("error", msg).Msg("Download job failed")
+	log.Error().Str("job", event.JobID).Str("error", msg).Str("sessionId", event.SessionID).Msg("Download job failed")
 	sessionStore.PutDownloadJob(ctx, event.SessionID, &store.DownloadJob{
 		ID: event.JobID, Status: "error", Error: msg,
 	})
@@ -547,6 +603,7 @@ func setDownloadError(ctx context.Context, event WorkerEvent, msg string) error 
 // ===== Publish Processing =====
 
 func handlePublish(ctx context.Context, event WorkerEvent) error {
+	jobStart := time.Now()
 	if igClient == nil {
 		return setPublishError(ctx, event, "Instagram client not configured")
 	}
@@ -555,6 +612,7 @@ func handlePublish(ctx context.Context, event WorkerEvent) error {
 		ID: event.JobID, GroupID: event.GroupID, Status: "creating_containers",
 		Phase: "creating_containers", TotalItems: len(event.Keys),
 	})
+	log.Info().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("phase", "creating_containers").Int("totalItems", len(event.Keys)).Msg("Publish job phase transition")
 
 	// Step 1: Create media containers.
 	containerIDs := make([]string, 0, len(event.Keys))
@@ -590,6 +648,7 @@ func handlePublish(ctx context.Context, event WorkerEvent) error {
 			return setPublishError(ctx, event, fmt.Sprintf("failed to create container for item %d: %v", i+1, err))
 		}
 
+		log.Debug().Str("containerId", containerID).Int("itemIndex", i+1).Str("key", key).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Container created")
 		containerIDs = append(containerIDs, containerID)
 		if isVideo {
 			videoContainerIDs = append(videoContainerIDs, containerID)
@@ -610,7 +669,9 @@ func handlePublish(ctx context.Context, event WorkerEvent) error {
 			Phase: "processing_videos", TotalItems: len(event.Keys),
 			CompletedItems: len(event.Keys), ContainerIDs: containerIDs,
 		})
+		log.Info().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("phase", "processing_videos").Int("videoCount", len(videoContainerIDs)).Msg("Publish job phase transition")
 
+		log.Debug().Int("videoCount", len(videoContainerIDs)).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Starting video wait polling")
 		for _, vid := range videoContainerIDs {
 			if err := igClient.WaitForContainer(ctx, vid, 5*time.Minute); err != nil {
 				return setPublishError(ctx, event, fmt.Sprintf("video processing failed: %v", err))
@@ -626,6 +687,7 @@ func handlePublish(ctx context.Context, event WorkerEvent) error {
 			Phase: "creating_carousel", TotalItems: len(event.Keys),
 			CompletedItems: len(event.Keys), ContainerIDs: containerIDs,
 		})
+		log.Info().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("phase", "creating_carousel").Msg("Publish job phase transition")
 
 		var err error
 		publishContainerID, err = igClient.CreateCarouselContainer(ctx, containerIDs, event.Caption)
@@ -642,6 +704,7 @@ func handlePublish(ctx context.Context, event WorkerEvent) error {
 		Phase: "publishing", TotalItems: len(event.Keys),
 		CompletedItems: len(event.Keys), ContainerIDs: containerIDs,
 	})
+	log.Info().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("phase", "publishing").Msg("Publish job phase transition")
 
 	instagramPostID, err := igClient.Publish(ctx, publishContainerID)
 	if err != nil {
@@ -655,12 +718,12 @@ func handlePublish(ctx context.Context, event WorkerEvent) error {
 		InstagramPostID: instagramPostID,
 	})
 
-	log.Info().Str("instagramPostId", instagramPostID).Int("items", len(event.Keys)).Msg("Published to Instagram")
+	log.Info().Str("instagramPostId", instagramPostID).Int("items", len(event.Keys)).Dur("duration", time.Since(jobStart)).Str("sessionId", event.SessionID).Msg("Published to Instagram")
 	return nil
 }
 
 func setPublishError(ctx context.Context, event WorkerEvent, msg string) error {
-	log.Error().Str("job", event.JobID).Str("error", msg).Msg("Publish job failed")
+	log.Error().Str("job", event.JobID).Str("error", msg).Str("sessionId", event.SessionID).Msg("Publish job failed")
 	sessionStore.PutPublishJob(ctx, event.SessionID, &store.PublishJob{
 		ID: event.JobID, GroupID: event.GroupID, Status: "error",
 		Phase: "error", Error: msg,
@@ -671,9 +734,10 @@ func setPublishError(ctx context.Context, event WorkerEvent, msg string) error {
 // ===== Enhancement Feedback Processing =====
 
 func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
+	jobStart := time.Now()
 	job, err := sessionStore.GetEnhancementJob(ctx, event.SessionID, event.JobID)
 	if err != nil || job == nil {
-		log.Error().Err(err).Str("jobId", event.JobID).Msg("Enhancement job not found for feedback")
+		log.Error().Err(err).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Enhancement job not found for feedback")
 		return nil
 	}
 
@@ -685,20 +749,22 @@ func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
 			break
 		}
 	}
+	log.Debug().Int("targetIdx", targetIdx).Str("key", event.Key).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Target item lookup result")
 	if targetIdx == -1 {
-		log.Error().Str("key", event.Key).Msg("Item not found in enhancement job")
+		log.Error().Str("key", event.Key).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Item not found in enhancement job")
 		return nil
 	}
 	item := job.Items[targetIdx]
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
+		log.Error().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("GEMINI_API_KEY not configured for enhancement feedback")
 		return nil
 	}
 
 	genaiClient, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create Gemini client for feedback")
+		log.Error().Err(err).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Failed to create Gemini client for feedback")
 		return nil
 	}
 	geminiImageClient := chat.NewGeminiImageClient(genaiClient)
@@ -710,13 +776,14 @@ func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
 
 	tmpPath, cleanup, err := downloadFromS3(ctx, enhancedKey)
 	if err != nil {
-		log.Error().Err(err).Str("key", enhancedKey).Msg("Failed to download enhanced image for feedback")
+		log.Error().Err(err).Str("key", enhancedKey).Str("sessionId", event.SessionID).Msg("Failed to download enhanced image for feedback")
 		return nil
 	}
 	defer cleanup()
 
 	imageData, err := os.ReadFile(tmpPath)
 	if err != nil {
+		log.Error().Err(err).Str("key", enhancedKey).Str("sessionId", event.SessionID).Msg("Failed to read downloaded file for feedback")
 		return nil
 	}
 
@@ -751,6 +818,7 @@ func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
 			Success:       fe.Success,
 		})
 	}
+	log.Debug().Int("feedbackHistoryLength", len(feedbackHistory)).Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Feedback history prepared")
 
 	resultData, resultMIME, feedbackEntry, err := chat.ProcessFeedback(
 		ctx, geminiImageClient, imagenClient,
@@ -769,7 +837,7 @@ func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
 			Body: bytes.NewReader(resultData), ContentType: &contentType,
 		})
 		if uploadErr != nil {
-			log.Error().Err(uploadErr).Str("key", feedbackKey).Msg("Failed to upload feedback result")
+			log.Error().Err(uploadErr).Str("key", feedbackKey).Str("sessionId", event.SessionID).Msg("Failed to upload feedback result")
 			return nil
 		}
 
@@ -798,6 +866,7 @@ func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
 			})
 		}
 		sessionStore.PutEnhancementJob(ctx, event.SessionID, job)
+		log.Info().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Str("feedbackKey", feedbackKey).Dur("duration", time.Since(jobStart)).Msg("Enhancement feedback processing complete")
 	}
 
 	return nil
@@ -806,6 +875,7 @@ func handleEnhancementFeedback(ctx context.Context, event WorkerEvent) error {
 // ===== Shared Helpers =====
 
 func downloadFromS3(ctx context.Context, key string) (string, func(), error) {
+	log.Debug().Str("key", key).Msg("Starting S3 download")
 	tmpFile, err := os.CreateTemp("", "media-*"+filepath.Ext(key))
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp file: %w", err)
@@ -828,11 +898,13 @@ func downloadFromS3(ctx context.Context, key string) (string, func(), error) {
 	}
 	tmpFile.Close()
 
+	log.Debug().Str("key", key).Str("tmpPath", tmpFile.Name()).Msg("S3 download completed")
 	cleanup := func() { os.Remove(tmpFile.Name()) }
 	return tmpFile.Name(), cleanup, nil
 }
 
 func downloadToFile(ctx context.Context, key, localPath string) error {
+	log.Debug().Str("key", key).Str("localPath", localPath).Msg("Starting S3 download to file")
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &mediaBucket, Key: &key,
 	})
@@ -850,6 +922,7 @@ func downloadToFile(ctx context.Context, key, localPath string) error {
 	if _, err := io.Copy(f, result.Body); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
+	log.Debug().Str("key", key).Str("localPath", localPath).Msg("S3 download to file completed")
 	return nil
 }
 
@@ -875,6 +948,7 @@ func generateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension 
 }
 
 func buildDescriptionMediaItems(ctx context.Context, keys []string) ([]chat.DescriptionMediaItem, error) {
+	log.Debug().Int("keyCount", len(keys)).Msg("Building description media items")
 	var items []chat.DescriptionMediaItem
 
 	for _, key := range keys {
@@ -892,12 +966,14 @@ func buildDescriptionMediaItems(ctx context.Context, keys []string) ([]chat.Desc
 			if err != nil {
 				origPath, origCleanup, origErr := downloadFromS3(ctx, key)
 				if origErr != nil {
+					log.Warn().Str("key", key).Str("thumbKey", thumbKey).Err(origErr).Msg("Skipping media item: failed to download original after thumbnail download failed")
 					continue
 				}
 				defer origCleanup()
 
 				origData, readErr := os.ReadFile(origPath)
 				if readErr != nil {
+					log.Warn().Str("key", key).Err(readErr).Msg("Skipping media item: failed to read original file")
 					continue
 				}
 
@@ -908,6 +984,7 @@ func buildDescriptionMediaItems(ctx context.Context, keys []string) ([]chat.Desc
 
 				thumbData, thumbMIME, thumbErr := generateThumbnailFromBytes(origData, mime, filehandler.DefaultThumbnailMaxDimension)
 				if thumbErr != nil {
+					log.Warn().Str("key", key).Err(thumbErr).Msg("Skipping media item: failed to generate thumbnail")
 					continue
 				}
 				item.ThumbnailData = thumbData
@@ -916,6 +993,7 @@ func buildDescriptionMediaItems(ctx context.Context, keys []string) ([]chat.Desc
 				defer cleanup()
 				thumbData, err := os.ReadFile(tmpPath)
 				if err != nil {
+					log.Warn().Str("key", key).Str("thumbKey", thumbKey).Err(err).Msg("Skipping media item: failed to read thumbnail file")
 					continue
 				}
 				item.ThumbnailData = thumbData
@@ -928,17 +1006,20 @@ func buildDescriptionMediaItems(ctx context.Context, keys []string) ([]chat.Desc
 
 			tmpPath, cleanup, err := downloadFromS3(ctx, thumbKey)
 			if err != nil {
+				log.Warn().Str("key", key).Str("thumbKey", thumbKey).Err(err).Msg("Skipping media item: failed to download video thumbnail")
 				continue
 			}
 			defer cleanup()
 
 			thumbData, err := os.ReadFile(tmpPath)
 			if err != nil {
+				log.Warn().Str("key", key).Str("thumbKey", thumbKey).Err(err).Msg("Skipping media item: failed to read video thumbnail file")
 				continue
 			}
 			item.ThumbnailData = thumbData
 			item.ThumbnailMIMEType = "image/jpeg"
 		} else {
+			log.Warn().Str("key", key).Str("ext", ext).Msg("Skipping media item: unsupported file type")
 			continue
 		}
 

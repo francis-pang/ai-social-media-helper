@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -40,19 +42,30 @@ var (
 	mediaBucket string
 )
 
+var coldStart = true
+
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
 	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
 	if mediaBucket == "" {
 		log.Fatal().Msg("MEDIA_BUCKET_NAME environment variable is required")
 	}
+
+	log.Info().
+		Str("function", "thumbnail-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("Thumbnail Lambda init complete")
 }
 
 // ThumbnailEvent is the input payload from Step Functions.
@@ -73,6 +86,12 @@ type ThumbnailResult struct {
 }
 
 func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error) {
+	handlerStart := time.Now()
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "thumbnail-lambda").Msg("Cold start — first invocation")
+	}
+
 	bucket := mediaBucket
 	if event.Bucket != "" {
 		bucket = event.Bucket
@@ -98,6 +117,7 @@ func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error)
 	ext := strings.ToLower(filepath.Ext(filename))
 
 	if !filehandler.IsSupported(ext) {
+		logger.Warn().Str("extension", ext).Msg("Unsupported file type rejected")
 		return ThumbnailResult{
 			OriginalKey: event.Key,
 			Success:     false,
@@ -116,6 +136,11 @@ func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error)
 		}, err
 	}
 	defer os.Remove(tmpPath)
+
+	// Log media file size after download
+	if fileInfo, err := os.Stat(tmpPath); err == nil {
+		logger.Debug().Int64("mediaFileSize", fileInfo.Size()).Msg("Media file downloaded")
+	}
 
 	// Load as MediaFile for thumbnail generation.
 	mf, err := filehandler.LoadMediaFile(tmpPath)
@@ -138,6 +163,7 @@ func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error)
 			Error:       fmt.Sprintf("thumbnail generation failed: %v", err),
 		}, err
 	}
+	logger.Debug().Int("thumbnailSize", len(thumbData)).Msg("Thumbnail generated")
 
 	// Upload thumbnail to S3 at {sessionId}/thumbnails/{baseName}.jpg.
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
@@ -162,6 +188,7 @@ func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error)
 	logger.Info().
 		Str("thumbKey", thumbKey).
 		Int("thumbSize", len(thumbData)).
+		Dur("duration", time.Since(handlerStart)).
 		Msg("Thumbnail generated and uploaded")
 
 	return ThumbnailResult{

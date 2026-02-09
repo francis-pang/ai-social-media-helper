@@ -28,6 +28,9 @@ const UploadTimeout = 10 * time.Minute
 // NewGeminiClient creates a new Gemini API client using the provided API key.
 // Uses the new google.golang.org/genai SDK (SDK-A migration).
 func NewGeminiClient(ctx context.Context, apiKey string) (*genai.Client, error) {
+	log.Debug().
+		Bool("api_key_present", apiKey != "").
+		Msg("Creating Gemini API client")
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
@@ -40,16 +43,25 @@ func NewGeminiClient(ctx context.Context, apiKey string) (*genai.Client, error) 
 
 // AskTextQuestion sends a text-only question to the Gemini API and returns the response.
 func AskTextQuestion(ctx context.Context, client *genai.Client, question string) (string, error) {
-	log.Debug().Str("question", question).Msg("Sending text question to Gemini")
+	modelName := GetModelName()
+	callStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("prompt_length", len(question)).
+		Msg("Starting Gemini API call for text question")
 
-	resp, err := client.Models.GenerateContent(ctx, GetModelName(), genai.Text(question), nil)
+	resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(question), nil)
+	duration := time.Since(callStart)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to generate content")
+		log.Error().Err(err).Dur("duration", duration).Msg("Failed to generate content")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	response := resp.Text()
-	log.Debug().Int("response_length", len(response)).Msg("Received response from Gemini")
+	log.Debug().
+		Int("response_length", len(response)).
+		Dur("duration", duration).
+		Msg("Gemini API response received for text question")
 
 	return response, nil
 }
@@ -172,25 +184,37 @@ func AskMediaQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 	}
 
 	// Generate content
+	modelName := GetModelName()
+	callStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("prompt_length", len(question)).
+		Int("media_part_count", 1).
+		Msg("Starting Gemini API call for media question")
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
-	resp, err := client.Models.GenerateContent(ctx, GetModelName(), contents, config)
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+	duration := time.Since(callStart)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to generate content from media")
+		log.Error().Err(err).Dur("duration", duration).Msg("Failed to generate content from media")
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	response := resp.Text()
-	log.Debug().Int("response_length", len(response)).Msg("Received media analysis response from Gemini")
+	log.Debug().
+		Int("response_length", len(response)).
+		Dur("duration", duration).
+		Msg("Gemini API response received for media question")
 
 	return response, nil
 }
 
 // uploadAndWaitForProcessing uploads a file using the Files API and waits for it to be processed.
 func uploadAndWaitForProcessing(ctx context.Context, client *genai.Client, mediaFile *filehandler.MediaFile) (*genai.File, error) {
-	log.Info().
+	log.Debug().
 		Str("path", mediaFile.Path).
-		Int64("size_mb", mediaFile.Size/(1024*1024)).
-		Msg("Uploading file using Files API...")
+		Int64("size_bytes", mediaFile.Size).
+		Str("mime_type", mediaFile.MIMEType).
+		Msg("Starting Gemini Files API upload")
 
 	// Open the file for streaming upload
 	f, err := os.Open(mediaFile.Path)
@@ -216,13 +240,16 @@ func uploadAndWaitForProcessing(ctx context.Context, client *genai.Client, media
 
 	// Wait for file to be processed
 	deadline := time.Now().Add(UploadTimeout)
+	pollIteration := 0
 	for file.State == genai.FileStateProcessing {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("timeout waiting for file processing after %v", UploadTimeout)
 		}
 
+		pollIteration++
 		log.Debug().
 			Str("state", string(file.State)).
+			Int("poll_iteration", pollIteration).
 			Msg("File still processing, waiting...")
 
 		time.Sleep(UploadPollingInterval)
@@ -242,6 +269,7 @@ func uploadAndWaitForProcessing(ctx context.Context, client *genai.Client, media
 		Str("name", file.Name).
 		Str("state", string(file.State)).
 		Dur("total_time", time.Since(uploadStart)).
+		Int("poll_iterations", pollIteration).
 		Msg("File ready for inference")
 
 	return file, nil

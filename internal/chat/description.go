@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/jsonutil"
@@ -75,11 +76,11 @@ func GenerateDescription(
 	tripContext string,
 	mediaItems []DescriptionMediaItem,
 ) (*DescriptionResult, string, error) {
-	log.Info().
+	log.Debug().
 		Str("group_label", truncateString(groupLabel, 100)).
+		Str("trip_context", truncateString(tripContext, 100)).
 		Int("media_count", len(mediaItems)).
-		Bool("has_trip_context", tripContext != "").
-		Msg("Generating Instagram caption with full media context (DDR-036)")
+		Msg("Starting description generation")
 
 	// Build the user prompt
 	prompt := BuildDescriptionPrompt(groupLabel, tripContext, mediaItems)
@@ -129,10 +130,18 @@ func GenerateDescription(
 		Msg("Sending media to Gemini for caption generation...")
 
 	// Generate content
+	modelName := GetModelName()
+	callStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("prompt_length", len(prompt)).
+		Int("media_part_count", len(parts)-1). // -1 for prompt
+		Msg("Starting Gemini API call for description generation")
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
-	resp, err := client.Models.GenerateContent(ctx, GetModelName(), contents, config)
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+	duration := time.Since(callStart)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to generate description from Gemini")
+		log.Error().Err(err).Dur("duration", duration).Msg("Failed to generate description from Gemini")
 		return nil, "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
@@ -143,13 +152,22 @@ func GenerateDescription(
 	responseText := resp.Text()
 	log.Debug().
 		Int("response_length", len(responseText)).
-		Msg("Received caption response from Gemini")
+		Dur("duration", duration).
+		Msg("Gemini API response received for description generation")
 
 	// Parse JSON response
+	log.Debug().Msg("Parsing description response")
 	result, err := parseDescriptionResponse(responseText)
 	if err != nil {
+		log.Debug().Err(err).Msg("Failed to parse description response")
 		return nil, responseText, fmt.Errorf("failed to parse description response: %w", err)
 	}
+
+	log.Debug().
+		Int("caption_length", len(result.Caption)).
+		Int("hashtag_count", len(result.Hashtags)).
+		Str("location", result.LocationTag).
+		Msg("Description response parsed successfully")
 
 	log.Info().
 		Int("caption_length", len(result.Caption)).
@@ -172,10 +190,12 @@ func RegenerateDescription(
 	feedback string,
 	history []DescriptionConversationEntry,
 ) (*DescriptionResult, string, error) {
-	log.Info().
-		Str("feedback", truncateString(feedback, 200)).
-		Int("history_len", len(history)).
-		Msg("Regenerating caption with feedback (DDR-036)")
+	log.Debug().
+		Str("group_label", truncateString(groupLabel, 100)).
+		Int("feedback_length", len(feedback)).
+		Int("history_length", len(history)).
+		Int("media_count", len(mediaItems)).
+		Msg("Starting description regeneration with feedback")
 
 	// Configure model with description system instruction
 	config := &genai.GenerateContentConfig{
@@ -268,9 +288,16 @@ func RegenerateDescription(
 		Msg("Sending multi-turn feedback to Gemini...")
 
 	// Generate content with conversation history
-	resp, err := client.Models.GenerateContent(ctx, GetModelName(), contents, config)
+	modelName := GetModelName()
+	callStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("conversation_turns", len(contents)).
+		Msg("Starting Gemini API call for description regeneration")
+	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+	duration := time.Since(callStart)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to regenerate description from Gemini")
+		log.Error().Err(err).Dur("duration", duration).Msg("Failed to regenerate description from Gemini")
 		return nil, "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
@@ -281,7 +308,8 @@ func RegenerateDescription(
 	responseText := resp.Text()
 	log.Debug().
 		Int("response_length", len(responseText)).
-		Msg("Received regenerated caption from Gemini")
+		Dur("duration", duration).
+		Msg("Gemini API response received for description regeneration")
 
 	// Parse JSON response
 	result, err := parseDescriptionResponse(responseText)
@@ -302,6 +330,9 @@ func RegenerateDescription(
 // BuildDescriptionPrompt creates the user prompt for caption generation.
 // Combines the group label, trip context, and media metadata into a structured prompt.
 func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []DescriptionMediaItem) string {
+	log.Trace().
+		Int("media_count", len(mediaItems)).
+		Msg("Building description prompt")
 	var sb strings.Builder
 
 	sb.WriteString("## Instagram Carousel Caption Request\n\n")
@@ -369,13 +400,21 @@ func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []
 
 // parseDescriptionResponse extracts and parses the JSON caption from Gemini's response.
 func parseDescriptionResponse(response string) (*DescriptionResult, error) {
+	log.Debug().
+		Int("response_length", len(response)).
+		Msg("Parsing description response JSON")
 	result, err := jsonutil.ParseJSON[DescriptionResult](response)
 	if err != nil {
-		log.Error().Str("response", response).Msg("Failed to parse description response")
+		log.Error().Err(err).Str("response", response).Msg("Failed to parse description response")
 		return nil, fmt.Errorf("description response: %w", err)
 	}
 	if result.Caption == "" {
 		return nil, fmt.Errorf("empty caption in description response")
 	}
+	log.Debug().
+		Int("caption_length", len(result.Caption)).
+		Int("hashtag_count", len(result.Hashtags)).
+		Str("location_tag", result.LocationTag).
+		Msg("Description response parsed successfully")
 	return &result, nil
 }

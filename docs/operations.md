@@ -8,6 +8,8 @@ This document covers logging, observability, error handling, and retry strategie
 
 ## Logging
 
+> See also [DDR-002](./design-decisions/DDR-002-logging-before-features.md) (original zerolog adoption) and [DDR-051](./design-decisions/DDR-051-comprehensive-logging-overhaul.md) (comprehensive logging overhaul).
+
 ### Design Decision: zerolog
 
 We chose **zerolog** over alternatives (zap, slog) for the following reasons:
@@ -19,54 +21,260 @@ We chose **zerolog** over alternatives (zap, slog) for the following reasons:
 | CLI console output | Excellent `ConsoleWriter` | Needs setup | Basic |
 | Context support | Built-in `log.Ctx()` | Manual | Manual |
 
-**Key factors for CLI tooling:**
+**Key factors:**
 - Zero allocation minimizes GC pressure during media processing
 - Fluent API (`log.Info().Str("key", val).Msg("...")`) reduces boilerplate
 - `ConsoleWriter` provides colored, human-readable output ideal for terminal use
+- JSON output mode for CloudWatch Logs Insights queries in Lambda
+
+### Environment Policy
+
+Since there is no staging or developmental environment, production is treated as the developmental environment:
+
+- **Default log level: `debug`** — gives full diagnostic visibility without the firehose of trace
+- **Trace** is wired up but must be explicitly enabled via `GEMINI_LOG_LEVEL=trace` for deep debugging sessions
+- Aggressive CloudWatch log retention lifecycle policy is already in place, so over-logging is acceptable
 
 ### Log Levels
 
-| Level | Purpose | Examples |
-|-------|---------|----------|
-| `error` | Failures that stop the operation | API errors, file not found, auth failures |
-| `warn` | Potential issues, degraded operation | Retry attempts, slow responses, deprecated features |
-| `info` | Normal operation milestones | Upload started/completed, session created |
-| `debug` | Detailed diagnostic information | Request/response details, timing, internal state |
+| Level | Question it answers | When to use | Examples |
+|-------|-------------------|-------------|----------|
+| `trace` | "What exactly is happening in this code path?" | Only during deep debugging sessions; not enabled by default | DynamoDB PK/SK details, marshal/unmarshal, per-frame histograms, prompt building, form parameter names |
+| `debug` | "Why did this request/operation behave this way?" | Key decisions, downstream calls, intermediate states | API calls with timing, S3 ops, handler entry, config values, cache hits/misses, DynamoDB results |
+| `info` | "What is the system doing, at a business level?" | Business events, lifecycle milestones, configuration | Cold starts, init summaries, job start/complete, phase transitions, "post published to Instagram" |
+| `warn` | "Something is off; it might become a problem." | Recoverable issues, fallback behavior, skipped items | Skipped files in batch, Imagen fallback, missing optional config, transient retry |
+| `error` | "A real failure occurred; behavior was affected." | Failed operations, permanent failures, data integrity | Job failed, API call failed permanently, S3 upload failed, invariant violated |
+| `fatal` | "The process cannot safely continue." | Startup failures with no recovery path | Required env var missing, AWS config load failed, required SSM parameter missing |
 
-### Log Format
+### Per-Log-Line Mental Checklist
 
-#### Text Format (Default)
+When adding a new log statement, ask:
 
-Human-readable format for terminal use:
+1. **If this appears every second in prod, is that okay?** — If no, lower the level or sample.
+2. **If this condition causes user impact, would on-call want to see it?** — If yes, at least Error, maybe Warn.
+3. **If I had only logs, not a debugger, would this help me reconstruct what happened?** — If no, add IDs and concrete context.
+4. **Is this level consistent with the rest of the codebase?** — If no, adjust to match existing conventions.
 
-```
-2025-12-30T10:15:32.123Z INFO  Uploading file: photo.jpg (2.3 MB)
-2025-12-30T10:15:35.456Z INFO  Upload complete: photo.jpg → files/abc123
-2025-12-30T10:15:35.789Z DEBUG API request completed in 3.21s
-2025-12-30T10:15:36.012Z INFO  Generating response for: "What's in this image?"
-2025-12-30T10:15:38.234Z INFO  Response received (245 tokens)
-```
+### Log Output Format
 
-#### JSON Format
+#### Lambda (JSON)
 
-Structured format for log aggregation:
+When `AWS_LAMBDA_FUNCTION_NAME` is set, output is JSON for CloudWatch Logs Insights:
 
 ```json
-{"time":"2025-12-30T10:15:32.123Z","level":"info","msg":"Uploading file","file":"photo.jpg","size":2411724}
-{"time":"2025-12-30T10:15:35.456Z","level":"info","msg":"Upload complete","file":"photo.jpg","ref":"files/abc123","duration_ms":3333}
-{"time":"2025-12-30T10:15:35.789Z","level":"debug","msg":"API request completed","duration_ms":3210,"status":200}
+{"level":"info","requestId":"a1b2c3d4","functionName":"media-lambda","sessionId":"550e8400-...","jobId":"triage-abc123","msg":"Triage job dispatched to Worker Lambda","time":"2026-02-09T10:15:32Z"}
+{"level":"debug","requestId":"a1b2c3d4","method":"POST","path":"/api/triage/start","status":200,"duration":45,"msg":"POST /api/triage/start 200","time":"2026-02-09T10:15:32Z"}
+```
+
+**CloudWatch Logs Insights example queries:**
+
+```
+# Find all logs for a specific job
+fields @timestamp, level, msg
+| filter jobId = "triage-abc123"
+| sort @timestamp asc
+
+# Find all errors in the last hour
+fields @timestamp, functionName, msg, error
+| filter level = "error"
+| sort @timestamp desc
+| limit 50
+
+# Cold start frequency
+fields @timestamp, functionName
+| filter msg = "Cold start — first invocation"
+| stats count() by functionName
+```
+
+#### CLI (Console)
+
+When running locally (no `AWS_LAMBDA_FUNCTION_NAME`), output uses `ConsoleWriter` for human-readable terminal format:
+
+```
+10:15:32 INF Logger initialized level=debug
+10:15:32 INF API Lambda init complete function=media-lambda goVersion=go1.24.0 region=ap-southeast-2 ...
+10:15:33 DBG Handler entry: handleTriageStart method=POST path=/api/triage/start
+10:15:33 INF Triage job dispatched to Worker Lambda jobId=triage-abc123 sessionId=550e8400-...
 ```
 
 ### Logging Conventions
 
-| Convention | Example |
-|------------|---------|
-| Use `Str()` for string fields | `log.Info().Str("file", name).Msg("...")` |
-| Use `Err()` for errors | `log.Error().Err(err).Msg("failed")` |
-| Keep messages lowercase | `Msg("upload complete")` |
-| Use snake_case for field names | `Str("session_id", id)` |
-| Add context via `With()` | `log.With().Str("session", id).Logger()` |
-| Use `Fatal()` for unrecoverable errors | `log.Fatal().Msg("cannot continue")` |
+#### Field naming
+
+| Convention | Example | Notes |
+|------------|---------|-------|
+| Use `Str()` for string fields | `log.Info().Str("jobId", id).Msg("...")` | |
+| Use `Err()` for errors | `log.Error().Err(err).Msg("failed")` | Always attach the error object |
+| Use `Int()` for counts | `log.Debug().Int("count", len(items)).Msg("...")` | |
+| Use `Dur()` for timing | `log.Debug().Dur("elapsed", time.Since(start)).Msg("...")` | |
+| Use `Bool()` for flags | `log.Info().Bool("instagramEnabled", true).Msg("...")` | |
+| Keep messages sentence-cased | `Msg("Triage job dispatched")` | Start with capital, no trailing period |
+| Use camelCase for field names | `Str("sessionId", id)` | Consistent across codebase |
+| Add context via `With()` | `log.With().Str("jobId", id).Logger()` | For sub-loggers in long functions |
+
+#### Message style
+
+- **Good:** `"Failed to download file for triage"` — actionable, clear operation context
+- **Bad:** `"Error in download"` — vague, no operation context
+- **Good:** `"Triage complete"` with `.Int("keep", 5).Int("discard", 3)` — summary in fields
+- **Bad:** `"Triage complete: 5 keep, 3 discard"` — summary in message string (not queryable)
+
+#### Context enrichment
+
+Every long-running handler or job should create a sub-logger with correlation IDs:
+
+```go
+logger := log.With().
+    Str("sessionId", event.SessionID).
+    Str("jobId", event.JobID).
+    Logger()
+
+logger.Info().Msg("Starting triage processing")
+// All subsequent logs include sessionId and jobId
+```
+
+For Lambda handlers, use the logging helper:
+
+```go
+logger := logging.WithLambdaContext(ctx)
+// Includes requestId and functionName automatically
+```
+
+### Sensitive Data Rules
+
+| Category | Rule | Example |
+|----------|------|---------|
+| API keys | **Never log** | Gemini API key, Instagram app secret |
+| Access tokens | **Never log** | Instagram access token, OAuth tokens |
+| SSM parameter values | **Never log** | Any `*result.Parameter.Value` |
+| Presigned URLs | **Never log full URL** | Log the S3 key only: `log.Debug().Str("key", key).Msg("Presigned URL generated")` |
+| Session IDs | Allowed | `log.Debug().Str("sessionId", id)` |
+| Job IDs | Allowed | `log.Debug().Str("jobId", id)` |
+| S3 keys | Allowed | `log.Debug().Str("key", "session-uuid/photo.jpg")` |
+| Container IDs | Allowed | `log.Info().Str("containerId", id)` |
+| File names | Allowed | `log.Debug().Str("filename", name)` |
+| File sizes | Allowed | `log.Debug().Int64("size", bytes)` |
+| Durations | Allowed | `log.Debug().Dur("elapsed", d)` |
+
+### What to Log: Per-Component Guide
+
+#### Lambda init (every Lambda)
+
+```go
+func init() {
+    initStart := time.Now()
+    logging.Init()
+
+    // ... setup ...
+
+    log.Info().
+        Str("function", "media-lambda").
+        Str("goVersion", runtime.Version()).
+        Str("region", cfg.Region).
+        Bool("dynamoEnabled", sessionStore != nil).
+        Bool("instagramEnabled", igClient != nil).
+        Dur("initDuration", time.Since(initStart)).
+        Msg("API Lambda init complete")
+}
+```
+
+#### Cold start detection (every Lambda)
+
+```go
+var coldStart = true
+
+func handler(ctx context.Context, event Event) error {
+    if coldStart {
+        coldStart = false
+        log.Info().Str("function", "worker-lambda").Msg("Cold start — first invocation")
+    }
+    // ...
+}
+```
+
+#### SSM parameter loads (every Lambda that uses SSM)
+
+```go
+ssmStart := time.Now()
+result, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{...})
+if err != nil {
+    log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
+}
+os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
+log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
+```
+
+#### HTTP handlers (API Lambda)
+
+```go
+func handleTriageStart(w http.ResponseWriter, r *http.Request) {
+    log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleTriageStart")
+    // ... validation ...
+    if err != nil {
+        log.Warn().Str("param", "sessionId").Msg("Invalid session ID format")
+        httpError(w, http.StatusBadRequest, "invalid session ID")
+        return
+    }
+    // ... dispatch ...
+    log.Info().Str("jobId", jobID).Str("sessionId", req.SessionID).Msg("Triage job dispatched")
+}
+```
+
+#### Worker Lambda job handlers
+
+```go
+func handleTriage(ctx context.Context, event WorkerEvent) error {
+    jobStart := time.Now()
+    log.Debug().Str("sessionId", event.SessionID).Str("model", model).Msg("Starting triage processing")
+
+    // Log each external call with timing
+    log.Debug().Str("prefix", prefix).Msg("Listing S3 objects")
+    // ... S3 call ...
+    log.Debug().Int("objectCount", len(result.Contents)).Msg("S3 objects listed")
+
+    // Log skipped items as Warn
+    if !filehandler.IsSupported(ext) {
+        log.Warn().Str("key", key).Str("ext", ext).Msg("Skipping unsupported file type")
+        continue
+    }
+
+    // Log completion with summary
+    log.Info().
+        Int("keep", len(keep)).
+        Int("discard", len(discard)).
+        Dur("duration", time.Since(jobStart)).
+        Msg("Triage complete")
+}
+```
+
+#### External API calls (Gemini, Instagram, DynamoDB)
+
+```go
+// Always log: call start, timing, result summary
+apiStart := time.Now()
+log.Debug().Str("model", model).Int("promptLen", len(prompt)).Msg("Sending to Gemini API")
+resp, err := client.GenerateContent(ctx, parts...)
+if err != nil {
+    log.Error().Err(err).Dur("elapsed", time.Since(apiStart)).Msg("Gemini API call failed")
+    return err
+}
+log.Debug().Int("responseLen", len(resp.Text())).Dur("elapsed", time.Since(apiStart)).Msg("Gemini API response received")
+```
+
+#### Error paths (must never be silent)
+
+```go
+// BAD — silent return nil:
+if job == nil {
+    return nil
+}
+
+// GOOD — log the error before returning:
+if job == nil {
+    log.Error().Str("jobId", event.JobID).Str("sessionId", event.SessionID).Msg("Enhancement job not found for feedback")
+    return nil
+}
+```
 
 ### Implementation
 
@@ -76,7 +284,10 @@ Logging is initialized via `GEMINI_LOG_LEVEL` environment variable:
 package logging
 
 import (
+    "context"
     "os"
+
+    "github.com/aws/aws-lambda-go/lambdacontext"
     "github.com/rs/zerolog"
     "github.com/rs/zerolog/log"
 )
@@ -84,60 +295,68 @@ import (
 func Init() {
     level := os.Getenv("GEMINI_LOG_LEVEL")
     switch level {
-    case "debug":
-        zerolog.SetGlobalLevel(zerolog.DebugLevel)
+    case "trace":
+        zerolog.SetGlobalLevel(zerolog.TraceLevel)
+    case "info":
+        zerolog.SetGlobalLevel(zerolog.InfoLevel)
     case "warn":
         zerolog.SetGlobalLevel(zerolog.WarnLevel)
     case "error":
         zerolog.SetGlobalLevel(zerolog.ErrorLevel)
     default:
-        zerolog.SetGlobalLevel(zerolog.InfoLevel)
+        // Default to debug — this is the only environment (no staging/dev).
+        zerolog.SetGlobalLevel(zerolog.DebugLevel)
     }
-    
-    log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
+    // Use JSON output in Lambda for CloudWatch; console writer for local/CLI.
+    if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
+        log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+    } else {
+        log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+    }
+
+    log.Info().Str("level", zerolog.GlobalLevel().String()).Msg("Logger initialized")
+}
+
+// WithLambdaContext returns a sub-logger enriched with Lambda request ID
+// and function name extracted from the Lambda context.
+func WithLambdaContext(ctx context.Context) zerolog.Logger {
+    if lc, ok := lambdacontext.FromContext(ctx); ok {
+        return log.With().
+            Str("requestId", lc.AwsRequestID).
+            Str("functionName", lambdacontext.FunctionName).
+            Logger()
+    }
+    return log.Logger
+}
+
+// WithJob returns a sub-logger enriched with sessionId and jobId fields.
+func WithJob(sessionId, jobId string) zerolog.Logger {
+    return log.With().
+        Str("sessionId", sessionId).
+        Str("jobId", jobId).
+        Logger()
 }
 ```
 
-### Secret Redaction
+### Controlling Log Level at Runtime
 
-Automatically redact sensitive information in logs:
+Set the `GEMINI_LOG_LEVEL` environment variable on the Lambda function:
 
-```go
-var secretPatterns = []struct {
-    pattern *regexp.Regexp
-    replace string
-}{
-    // Gemini API key pattern
-    {regexp.MustCompile(`AIzaSy[a-zA-Z0-9_-]{33}`), "AIzaSy****...****"},
-    // Generic API key patterns
-    {regexp.MustCompile(`api[_-]?key[=:]\s*["']?([a-zA-Z0-9_-]{20,})["']?`), "api_key=****"},
-    // Bearer tokens
-    {regexp.MustCompile(`Bearer\s+[a-zA-Z0-9._-]+`), "Bearer ****"},
-}
+| Value | Effect | When to use |
+|-------|--------|-------------|
+| (unset) | `debug` — full diagnostic output | Default for all environments |
+| `trace` | Everything including DynamoDB PK/SK, marshal details, per-frame data | Targeted deep debugging only |
+| `info` | Business events only, reduced volume | If log costs become a concern |
+| `warn` | Only warnings and errors | Minimal logging |
+| `error` | Errors only | Emergency noise reduction |
 
-func RedactSecrets(s string) string {
-    result := s
-    for _, p := range secretPatterns {
-        result = p.pattern.ReplaceAllString(result, p.replace)
-    }
-    return result
-}
-```
+To change at runtime without redeployment:
 
-### Log Contexts
-
-Add context to log entries for traceability:
-
-```go
-// Create logger with session context
-sessionLog := log.With().
-    Str("session_id", session.ID).
-    Str("command", "upload").
-    Logger()
-
-// All subsequent logs include this context
-sessionLog.Info().Str("file", filename).Msg("starting upload")
-sessionLog.Debug().Int64("size", fileSize).Msg("file validated")
+```bash
+aws lambda update-function-configuration \
+    --function-name ai-social-media-worker \
+    --environment "Variables={GEMINI_LOG_LEVEL=trace,...}"
 ```
 
 ---
@@ -800,5 +1019,5 @@ This section documents key design decisions made during implementation.
 
 ---
 
-**Last Updated**: 2025-12-31  
-**Version**: 1.1.0
+**Last Updated**: 2026-02-09  
+**Version**: 2.0.0

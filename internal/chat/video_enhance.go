@@ -128,8 +128,12 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 	startTime := time.Now()
 
 	log.Info().
-		Str("video", filepath.Base(videoPath)).
-		Str("output", filepath.Base(outputPath)).
+		Str("video_path", videoPath).
+		Str("output_path", outputPath).
+		Float64("frame_rate", metadata.FrameRate).
+		Dur("duration", metadata.Duration).
+		Int("width", metadata.Width).
+		Int("height", metadata.Height).
 		Msg("Starting multi-step video enhancement pipeline (DDR-032)")
 
 	// Apply defaults
@@ -159,7 +163,7 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 	}
 
 	// --- Phase 1: Frame Extraction ---
-	log.Info().Msg("Phase 1: Extracting frames from video")
+	log.Debug().Msg("Phase 1: Starting frame extraction")
 
 	extraction, err := filehandler.ExtractFrames(ctx, videoPath, metadata)
 	if err != nil {
@@ -173,7 +177,7 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 		Msg("Phase 1 complete: frames extracted")
 
 	// --- Phase 2: Frame Grouping ---
-	log.Info().Msg("Phase 2: Grouping frames by color histogram similarity")
+	log.Debug().Msg("Phase 2: Starting frame grouping")
 
 	groups, err := filehandler.GroupFramesByHistogram(extraction.FramePaths, config.SimilarityThreshold)
 	if err != nil {
@@ -196,11 +200,11 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 	var summaryParts []string
 
 	for i, group := range groups {
-		log.Info().
+		log.Debug().
 			Int("group", i).
 			Int("frame_count", group.FrameCount).
 			Str("representative", filepath.Base(group.RepresentativePath)).
-			Msg("Phase 3-4: Enhancing group representative frame")
+			Msg("Phase 3-4: Starting group enhancement")
 
 		result, err := enhanceFrameGroup(ctx, geminiClient, imagenClient, group, i, config)
 		if err != nil {
@@ -245,7 +249,7 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 	}
 
 	// --- Phase 5: Reassemble Video ---
-	log.Info().Msg("Phase 5: Reassembling video from enhanced frames")
+	log.Debug().Msg("Phase 5: Starting video reassembly")
 
 	err = filehandler.ReassembleVideo(ctx, enhancedFrameDir, videoPath, outputPath, extraction.ExtractionFPS)
 	if err != nil {
@@ -263,7 +267,8 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 		Dur("total_duration", totalDuration).
 		Int("groups", len(groups)).
 		Int("frames", extraction.TotalFrames).
-		Msg("Video enhancement pipeline complete")
+		Str("output_path", outputPath).
+		Msg("Video enhancement pipeline completed")
 
 	return &VideoEnhancementResult{
 		OutputPath:         outputPath,

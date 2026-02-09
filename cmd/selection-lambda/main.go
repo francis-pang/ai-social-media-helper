@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -41,13 +43,17 @@ var (
 	mediaBucket  string
 )
 
+var coldStart = true
+
 func init() {
+	initStart := time.Now()
 	logging.Init()
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load AWS config")
 	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
 	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
@@ -70,6 +76,7 @@ func init() {
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/gemini-api-key"
 		}
+		ssmStart := time.Now()
 		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
 			Name:           &paramName,
 			WithDecryption: aws.Bool(true),
@@ -78,8 +85,16 @@ func init() {
 			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-		log.Info().Msg("Gemini API key loaded from SSM Parameter Store")
+		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
+
+	log.Info().
+		Str("function", "selection-lambda").
+		Str("goVersion", runtime.Version()).
+		Str("region", cfg.Region).
+		Str("table", tableName).
+		Dur("initDuration", time.Since(initStart)).
+		Msg("Selection Lambda init complete")
 }
 
 // SelectionEvent is the input payload from Step Functions.
@@ -110,6 +125,11 @@ type SelectionResult struct {
 }
 
 func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error) {
+	handlerStart := time.Now()
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "selection-lambda").Msg("Cold start — first invocation")
+	}
 	bucket := mediaBucket
 	if event.Bucket != "" {
 		bucket = event.Bucket
@@ -121,9 +141,19 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		Int("mediaCount", len(event.MediaKeys)).
 		Logger()
 
-	logger.Info().Msg("Starting AI media selection")
+	logger.Info().
+		Str("tripContext", event.TripContext).
+		Str("model", event.Model).
+		Int("thumbnailCount", len(event.ThumbnailKeys)).
+		Str("bucket", bucket).
+		Msg("Starting AI media selection")
 
 	// Validate input.
+	logger.Debug().
+		Bool("hasSessionID", event.SessionID != "").
+		Bool("hasJobID", event.JobID != "").
+		Bool("hasMediaKeys", len(event.MediaKeys) > 0).
+		Msg("Validating event fields")
 	if event.SessionID == "" || event.JobID == "" {
 		return SelectionResult{Error: "sessionId and jobId are required"},
 			fmt.Errorf("sessionId and jobId are required")
@@ -143,6 +173,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		ID:     event.JobID,
 		Status: "processing",
 	}
+	logger.Debug().Str("status", "processing").Msg("Updating DynamoDB job status")
 	if err := sessionStore.PutSelectionJob(ctx, event.SessionID, selJob); err != nil {
 		logger.Error().Err(err).Msg("Failed to update job status")
 		// Non-fatal — continue processing even if status update fails.
@@ -194,6 +225,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 
 	// Initialize Gemini client and run selection.
 	apiKey := os.Getenv("GEMINI_API_KEY")
+	logger.Debug().Str("model", model).Msg("Calling Gemini API for media selection")
 	client, err := chat.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to create Gemini client: %v", err)
@@ -216,6 +248,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 	for _, sel := range selResult.Selected {
 		idx := sel.Media - 1
 		if idx < 0 || idx >= len(allMediaFiles) {
+			logger.Warn().Int("mediaIndex", idx+1).Int("maxIndex", len(allMediaFiles)).Msg("Skipping result with out-of-bounds media index")
 			continue
 		}
 		key := s3Keys[idx]
@@ -237,6 +270,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 	for _, exc := range selResult.Excluded {
 		idx := exc.Media - 1
 		if idx < 0 || idx >= len(allMediaFiles) {
+			logger.Warn().Int("mediaIndex", idx+1).Int("maxIndex", len(allMediaFiles)).Msg("Skipping result with out-of-bounds media index")
 			continue
 		}
 		key := s3Keys[idx]
@@ -262,6 +296,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		for _, item := range sg.Items {
 			idx := item.Media - 1
 			if idx < 0 || idx >= len(allMediaFiles) {
+				logger.Warn().Int("mediaIndex", idx+1).Int("maxIndex", len(allMediaFiles)).Msg("Skipping result with out-of-bounds media index")
 				continue
 			}
 			key := s3Keys[idx]
@@ -292,6 +327,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		Int("selected", len(selJob.Selected)).
 		Int("excluded", len(selJob.Excluded)).
 		Int("scenes", len(selJob.SceneGroups)).
+		Dur("duration", time.Since(handlerStart)).
 		Msg("Selection complete, results written to DynamoDB")
 
 	return SelectionResult{
@@ -310,6 +346,7 @@ func main() {
 
 // downloadToFile downloads an S3 object to a specific local path.
 func downloadToFile(ctx context.Context, bucket, key, localPath string) error {
+	log.Debug().Str("bucket", bucket).Str("key", key).Str("localPath", localPath).Msg("Downloading file from S3")
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &bucket,
 		Key:    &key,

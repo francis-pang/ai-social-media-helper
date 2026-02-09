@@ -100,14 +100,14 @@ type ImagenEditResult struct {
 //   - prompt: description of what to do in the masked region
 //   - editMode: "inpainting-remove" (remove content) or "inpainting-insert" (add content)
 func (c *ImagenClient) EditWithMask(ctx context.Context, imageData []byte, maskData []byte, prompt string, editMode string) (*ImagenEditResult, error) {
-	startTime := time.Now()
-	log.Info().
-		Str("project", c.projectID).
-		Str("region", c.region).
+	log.Debug().
+		Str("instruction", truncateString(prompt, 100)).
+		Str("edit_mode", editMode).
 		Int("image_bytes", len(imageData)).
 		Int("mask_bytes", len(maskData)).
-		Str("edit_mode", editMode).
-		Msg("Sending image to Imagen 3 for mask-based editing")
+		Msg("EditWithMask: Starting Imagen API call")
+
+	startTime := time.Now()
 
 	req := imagenRequest{
 		Instances: []imagenInstance{
@@ -148,6 +148,7 @@ func (c *ImagenClient) EditWithMask(ctx context.Context, imageData []byte, maskD
 	httpReq.Header.Set("Authorization", "Bearer "+c.accessToken)
 
 	resp, err := c.httpClient.Do(httpReq)
+	httpDuration := time.Since(startTime)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
@@ -157,6 +158,11 @@ func (c *ImagenClient) EditWithMask(ctx context.Context, imageData []byte, maskD
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
+
+	log.Debug().
+		Int("status_code", resp.StatusCode).
+		Dur("duration", httpDuration).
+		Msg("EditWithMask: HTTP call completed")
 
 	if resp.StatusCode != http.StatusOK {
 		log.Error().
@@ -184,10 +190,11 @@ func (c *ImagenClient) EditWithMask(ctx context.Context, imageData []byte, maskD
 		return nil, fmt.Errorf("failed to decode response image: %w", err)
 	}
 
-	log.Info().
+	totalDuration := time.Since(startTime)
+	log.Debug().
 		Int("output_bytes", len(decoded)).
-		Dur("duration", time.Since(startTime)).
-		Msg("Imagen 3 mask-based edit complete")
+		Dur("duration", totalDuration).
+		Msg("EditWithMask: Imagen API call completed successfully")
 
 	return &ImagenEditResult{
 		ImageData: decoded,
@@ -219,6 +226,12 @@ type RegionMask struct {
 //	"bottom-left", "bottom-center", "bottom-right",
 //	"background", "foreground", "global"
 func GenerateRegionMask(width, height int, region string) ([]byte, error) {
+	log.Debug().
+		Str("region", region).
+		Int("width", width).
+		Int("height", height).
+		Msg("GenerateRegionMask: Creating mask")
+
 	mask := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	// Fill entire mask with black (keep)

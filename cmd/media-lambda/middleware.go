@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -15,6 +16,7 @@ func withOriginVerify(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if originVerifySecret == "" {
 			// Secret not configured — allow through (dev/initial deploy)
+			log.Debug().Str("path", r.URL.Path).Msg("Origin verification skipped — secret not configured")
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -23,6 +25,7 @@ func withOriginVerify(next http.Handler) http.Handler {
 			httpError(w, http.StatusForbidden, "forbidden")
 			return
 		}
+		log.Debug().Str("path", r.URL.Path).Msg("Origin verification passed")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -38,10 +41,15 @@ func (sr *statusRecorder) WriteHeader(code int) {
 	sr.ResponseWriter.WriteHeader(code)
 }
 
-// withMetrics is middleware that emits per-request EMF metrics:
+// withMetrics is middleware that emits per-request EMF metrics and request logging:
 // RequestLatencyMs, RequestCount (with Endpoint and StatusCode dimensions).
 func withMetrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if coldStart {
+			coldStart = false
+			log.Info().Str("function", "media-lambda").Msg("Cold start — first invocation")
+		}
+
 		start := time.Now()
 		sr := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 
@@ -51,6 +59,13 @@ func withMetrics(next http.Handler) http.Handler {
 
 		// Normalize endpoint for dimension (avoid high cardinality from path params)
 		endpoint := normalizeEndpoint(r.URL.Path)
+
+		log.Debug().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Int("status", sr.statusCode).
+			Dur("duration", elapsed).
+			Msg(fmt.Sprintf("%s %s %d", r.Method, r.URL.Path, sr.statusCode))
 
 		metrics.New("AiSocialMedia").
 			Dimension("Endpoint", endpoint).

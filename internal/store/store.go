@@ -306,16 +306,16 @@ type ConversationEntry struct {
 
 // PublishJob represents an Instagram publishing job (DynamoDB SK = PUBLISH#{jobId}).
 type PublishJob struct {
-	ID              string         `json:"id" dynamodbav:"-"`
-	SessionID       string         `json:"-" dynamodbav:"-"`
-	GroupID         string         `json:"groupId" dynamodbav:"groupId"`
-	Status          string         `json:"status" dynamodbav:"status"`
-	Phase           string         `json:"phase" dynamodbav:"phase"`
-	TotalItems      int            `json:"totalItems" dynamodbav:"totalItems"`
-	CompletedItems  int            `json:"completedItems" dynamodbav:"completedItems"`
-	InstagramPostID string         `json:"instagramPostId,omitempty" dynamodbav:"instagramPostId,omitempty"`
-	ContainerIDs    []string       `json:"containerIds,omitempty" dynamodbav:"containerIds,omitempty"`
-	Error           string         `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	ID              string   `json:"id" dynamodbav:"-"`
+	SessionID       string   `json:"-" dynamodbav:"-"`
+	GroupID         string   `json:"groupId" dynamodbav:"groupId"`
+	Status          string   `json:"status" dynamodbav:"status"`
+	Phase           string   `json:"phase" dynamodbav:"phase"`
+	TotalItems      int      `json:"totalItems" dynamodbav:"totalItems"`
+	CompletedItems  int      `json:"completedItems" dynamodbav:"completedItems"`
+	InstagramPostID string   `json:"instagramPostId,omitempty" dynamodbav:"instagramPostId,omitempty"`
+	ContainerIDs    []string `json:"containerIds,omitempty" dynamodbav:"containerIds,omitempty"`
+	Error           string   `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }
 
 // PostGroup represents a user-created post group (DynamoDB SK = GROUP#{groupId}).

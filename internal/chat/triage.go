@@ -159,6 +159,10 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 
 		if filehandler.IsImage(ext) {
 			// Generate thumbnail for images
+			log.Debug().
+				Int("index", i+1).
+				Str("file", filepath.Base(file.Path)).
+				Msg("Processing image file for triage")
 			thumbData, mimeType, err := filehandler.GenerateThumbnail(file, filehandler.DefaultThumbnailMaxDimension)
 			if err != nil {
 				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to generate thumbnail, skipping")
@@ -242,6 +246,11 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 	// Generate content
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
 	geminiStart := time.Now()
+	log.Debug().
+		Str("model", modelName).
+		Int("prompt_length", len(prompt)).
+		Int("media_part_count", len(parts)-1). // -1 for prompt
+		Msg("Starting Gemini API call for media triage")
 	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
 	geminiElapsed := time.Since(geminiStart)
 
@@ -260,20 +269,22 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 	m.Flush()
 
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to generate triage from Gemini")
+		log.Error().Err(err).Dur("duration", geminiElapsed).Msg("Failed to generate triage from Gemini")
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	if resp == nil || resp.Text() == "" {
-		log.Warn().Msg("Received empty response from Gemini")
+		log.Warn().Dur("duration", geminiElapsed).Msg("Received empty response from Gemini")
 		return nil, fmt.Errorf("received empty response from Gemini API")
 	}
 
+	log.Debug().
+		Int("response_length", len(resp.Text())).
+		Dur("duration", geminiElapsed).
+		Msg("Gemini API response received for media triage")
+
 	// Extract text from response
 	responseText := resp.Text()
-	log.Debug().
-		Int("response_length", len(responseText)).
-		Msg("Received triage response from Gemini")
 
 	// Parse JSON response
 	results, err := parseTriageResponse(responseText)
@@ -290,14 +301,20 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 
 // parseTriageResponse extracts and parses the JSON array from Gemini's response.
 func parseTriageResponse(response string) ([]TriageResult, error) {
+	log.Debug().
+		Int("response_length", len(response)).
+		Msg("Parsing triage response JSON")
 	results, err := jsonutil.ParseJSON[[]TriageResult](response)
 	if err != nil {
-		log.Error().Str("response", response).Msg("Failed to parse triage response")
+		log.Error().Err(err).Str("response", response).Msg("Failed to parse triage response")
 		return nil, fmt.Errorf("triage response: %w", err)
 	}
 	if len(results) == 0 {
 		return nil, fmt.Errorf("empty results array in triage response")
 	}
+	log.Debug().
+		Int("item_count", len(results)).
+		Msg("Triage response parsed successfully")
 	return results, nil
 }
 

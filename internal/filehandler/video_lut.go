@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -210,6 +211,11 @@ func ApplyLUTToFrames(ctx context.Context, framePaths []string, lutContent strin
 		return nil
 	}
 
+	log.Debug().
+		Int("frame_count", len(framePaths)).
+		Str("output_dir", outputDir).
+		Msg("Starting LUT application to frames")
+
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return fmt.Errorf("ffmpeg not found: LUT application requires ffmpeg: %w", err)
@@ -234,12 +240,9 @@ func ApplyLUTToFrames(ctx context.Context, framePaths []string, lutContent strin
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	log.Info().
-		Int("frame_count", len(framePaths)).
-		Str("output_dir", outputDir).
-		Msg("Applying color LUT to frames")
 
 	// Apply LUT to each frame using ffmpeg
+	startTime := time.Now()
 	for i, framePath := range framePaths {
 		outputPath := fmt.Sprintf("%s/frame_%06d.jpg", outputDir, i+1)
 
@@ -249,6 +252,13 @@ func ApplyLUTToFrames(ctx context.Context, framePaths []string, lutContent strin
 			"-qscale:v", "2",
 			"-y", outputPath,
 		)
+
+		log.Debug().
+			Int("frame_index", i).
+			Str("input_frame", framePath).
+			Str("output_frame", outputPath).
+			Str("lut_path", lutPath).
+			Msg("Applying LUT to frame via ffmpeg")
 
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -269,9 +279,11 @@ func ApplyLUTToFrames(ctx context.Context, framePaths []string, lutContent strin
 		}
 	}
 
+	duration := time.Since(startTime)
 	log.Info().
 		Int("frame_count", len(framePaths)).
-		Msg("Color LUT applied to all frames")
+		Dur("duration", duration).
+		Msg("Color LUT application complete")
 
 	return nil
 }

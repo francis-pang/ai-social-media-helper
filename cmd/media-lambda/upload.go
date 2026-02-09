@@ -23,6 +23,8 @@ import (
 //   - Content-Type is included in the presigned signature
 //   - Size limits are enforced at processing time (triage/selection start)
 func handleUploadURL(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleUploadURL")
+
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -32,13 +34,21 @@ func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Query().Get("filename")
 	contentType := r.URL.Query().Get("contentType")
 
+	log.Debug().
+		Str("sessionId", sessionID).
+		Str("filename", filename).
+		Str("contentType", contentType).
+		Msg("Upload URL request received")
+
 	if sessionID == "" || filename == "" || contentType == "" {
+		log.Warn().Msg("Missing required query parameters: sessionId, filename, or contentType")
 		httpError(w, http.StatusBadRequest, "sessionId, filename, and contentType are required")
 		return
 	}
 
 	// Validate sessionId is a proper UUID (DDR-028 Problem 3)
 	if err := validateSessionID(sessionID); err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Session ID validation failed")
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -46,12 +56,14 @@ func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 	// Sanitize and validate filename (DDR-028 Problem 4)
 	filename = filepath.Base(filename) // strip directory components
 	if err := validateFilename(filename); err != nil {
+		log.Warn().Err(err).Str("filename", filename).Msg("Filename validation failed")
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Validate content type against allowlist (DDR-028 Problem 7)
 	if !allowedContentTypes[contentType] {
+		log.Warn().Str("contentType", contentType).Msg("Unsupported content type")
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type: %s", contentType))
 		return
 	}

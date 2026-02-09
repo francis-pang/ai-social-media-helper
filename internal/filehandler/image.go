@@ -141,14 +141,11 @@ func ExtractImageMetadata(filePath string) (*ImageMetadata, error) {
 		metadata.RawFields["Model"] = metadata.CameraModel
 	}
 
-	log.Info().
+	log.Debug().
+		Str("path", filePath).
 		Bool("has_gps", metadata.HasGPS).
-		Float64("latitude", metadata.Latitude).
-		Float64("longitude", metadata.Longitude).
 		Bool("has_date", metadata.HasDate).
-		Time("date_taken", metadata.DateTaken).
-		Str("camera", metadata.CameraMake+" "+metadata.CameraModel).
-		Msg("Image EXIF metadata extracted")
+		Msg("Image metadata extraction complete")
 
 	return metadata, nil
 }
