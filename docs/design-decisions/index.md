@@ -59,6 +59,8 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-044](./DDR-044-instagram-webhook-integration.md) | 2026-02-09 | Instagram Webhook Integration — Dedicated Stack | Accepted |
 | [DDR-045](./DDR-045-stateful-stateless-stack-split.md) | 2026-02-09 | Stateful/Stateless Stack Split | Accepted |
 | [DDR-046](./DDR-046-centralized-registry-stack.md) | 2026-02-09 | Centralized RegistryStack for ECR Repositories | Accepted |
+| [DDR-047](./DDR-047-cdk-deploy-optimization.md) | 2026-02-09 | CDK Deploy Optimization | Accepted |
+| [DDR-048](./DDR-048-instagram-oauth-lambda.md) | 2026-02-09 | Instagram OAuth Lambda — Automated Token Exchange | Accepted |
 
 ---
 
@@ -73,4 +75,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-000, DDR-046)
+**Last Updated**: 2026-02-09 (DDR-000, DDR-048)

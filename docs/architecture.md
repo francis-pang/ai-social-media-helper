@@ -11,6 +11,8 @@ graph TD
         MediaTriage["media-triage\n(CLI)"]
         MediaWeb["media-web\n(local web server)"]
         MediaLambda["media-lambda\n(AWS Lambda)"]
+        WebhookLambda["webhook-lambda\n(AWS Lambda)"]
+        OAuthLambda["oauth-lambda\n(AWS Lambda)"]
     end
 
     subgraph internal [Shared Packages - internal/]
@@ -21,7 +23,8 @@ graph TD
         Assets["assets\n(prompts, reference photos)"]
         Store["store\n(DynamoDB sessions)"]
         Jobs["jobs\n(job routing)"]
-        Instagram["instagram\n(publishing client)"]
+        Instagram["instagram\n(publishing client,\nOAuth token exchange)"]
+        Webhook["webhook\n(Meta event handler)"]
     end
 
     subgraph frontend [Frontend]
@@ -39,6 +42,8 @@ graph TD
     MediaLambda --> FileHandler
     MediaLambda --> Store
     MediaLambda --> Instagram
+    WebhookLambda --> Webhook
+    OAuthLambda --> Instagram
     PreactSPA --> MediaWeb
     PreactSPA --> MediaLambda
 ```
@@ -149,8 +154,10 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min |
 | Enhancement | Per-photo Gemini image editing | Light | 2 GB | 5 min |
 | Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min |
+| Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s |
+| OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s |
 
-"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [docker-images.md](./docker-images.md).
+"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. Webhook and OAuth Lambdas are deployed in a separate WebhookStack with their own CloudFront distribution (DDR-044, DDR-048). See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [docker-images.md](./docker-images.md).
 
 ### Processing Lambda Entrypoints
 
@@ -208,9 +215,30 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 | Pipeline | Flow |
 |----------|------|
 | Frontend | Preact build -> S3 sync -> CloudFront invalidation |
-| Backend | 6 Docker builds (3 light + 3 heavy) -> 6 Lambda function updates |
+| Backend | 7 parallel Docker builds (4 light + 3 heavy) with BuildKit caching -> 7 Lambda function updates |
 
 ECR repositories are owned by a dedicated RegistryStack (DDR-046), deployed before any application stack. This breaks the chicken-and-egg dependency where `DockerImageFunction` requires an image that the pipeline hasn't pushed yet. See [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md).
+
+### Deploy Optimization (DDR-047)
+
+CDK deployments use optimized flags via `cdk/Makefile`:
+
+| Command | Purpose |
+|---------|---------|
+| `make deploy` | Full deploy: `--method=direct --concurrency 3` |
+| `make deploy-backend` | Single-stack deploy: `--method=direct --exclusively` |
+| `make deploy-dev` | Dev mode: `--hotswap --concurrency 3` |
+| `make watch-backend` | Auto-deploy on CDK file changes |
+
+Local Lambda code iteration bypasses CodePipeline entirely:
+
+```
+make push-api    # ~1-2 min: docker build -> ECR push -> Lambda update
+```
+
+Operations monitoring is split into two stacks for faster deploys:
+- **OperationsAlertStack**: alarms, SNS, X-Ray (changes often, deploys in ~1-2 min)
+- **OperationsMonitoringStack**: dashboard, metric filters, Firehose, Glue (changes rarely)
 
 ## Related Documents
 
@@ -221,6 +249,7 @@ ECR repositories are owned by a dedicated RegistryStack (DDR-046), deployed befo
 - [authentication.md](./authentication.md) — Credential management and Cognito auth
 - [docker-images.md](./docker-images.md) — Docker image strategy and ECR layer sharing
 - [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md) — Centralized RegistryStack for ECR repositories
+- [DDR-047](./design-decisions/DDR-047-cdk-deploy-optimization.md) — CDK deploy optimization
 
 ---
 
