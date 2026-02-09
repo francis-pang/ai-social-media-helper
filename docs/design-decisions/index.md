@@ -50,6 +50,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-036](./DDR-036-ai-post-description.md) | 2026-02-08 | AI Post Description Generation with Full Media Context | Accepted |
 | [DDR-037](./DDR-037-step-navigation-and-state-invalidation.md) | 2026-02-08 | Step Navigation UI and Downstream State Invalidation | Accepted |
 | [DDR-038](./DDR-038-overlay-media-player.md) | 2026-02-08 | Overlay Media Player for Inline Previews | Accepted |
+| [DDR-039](./DDR-039-dynamodb-session-store.md) | 2026-02-09 | DynamoDB SessionStore for Persistent Multi-Step State | Implementing |
 
 ---
 
@@ -64,4 +65,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-08 (DDR-038)
+**Last Updated**: 2026-02-09 (DDR-039)
