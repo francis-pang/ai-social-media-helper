@@ -101,7 +101,7 @@ All design documentation lives in [docs/](./docs/index.md):
 - **Architecture** — [architecture.md](./docs/architecture.md) — system components, local + cloud deployment
 - **Workflows** — [media-triage.md](./docs/media-triage.md), [media-selection.md](./docs/media-selection.md)
 - **Media processing** — [image-processing.md](./docs/image-processing.md), [video-processing.md](./docs/video-processing.md)
-- **Design decisions** — [43 DDRs](./docs/design-decisions/) documenting every architectural choice
+- **Design decisions** — [47 DDRs](./docs/design-decisions/) documenting every architectural choice
 
 ## Roadmap
 
