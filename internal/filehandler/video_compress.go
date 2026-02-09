@@ -258,4 +258,3 @@ func roundUpToOpusSampleRate(sourceRate int) int {
 	// Source exceeds max, use highest (48000)
 	return opusSampleRates[0]
 }
-

@@ -25,6 +25,9 @@ import type {
   DescriptionResults,
   DescriptionFeedbackRequest,
   DescriptionFeedbackResponse,
+  PublishStartRequest,
+  PublishStartResponse,
+  PublishStatus,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -314,13 +317,47 @@ export function submitDescriptionFeedback(
   );
 }
 
+// --- Publish APIs (DDR-040) ---
+
+/** Response from GET /api/health. */
+export interface HealthResponse {
+  status: string;
+  service: string;
+  instagramConfigured: boolean;
+}
+
+/** Check whether Instagram publishing is configured on the backend. */
+export function getHealth(): Promise<HealthResponse> {
+  return fetchJSON<HealthResponse>("/api/health");
+}
+
+/** Start publishing a post group to Instagram. */
+export function startPublish(
+  req: PublishStartRequest,
+): Promise<PublishStartResponse> {
+  return fetchJSON<PublishStartResponse>("/api/publish/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Get publishing status (poll until status is "published" or "error"). */
+export function getPublishStatus(
+  id: string,
+  sessionId: string,
+): Promise<PublishStatus> {
+  return fetchJSON<PublishStatus>(
+    `/api/publish/${id}/status?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
 // --- Session Invalidation API (DDR-037) ---
 
 /** Request body for POST /api/session/invalidate. */
 export interface InvalidateRequest {
   sessionId: string;
   /** The step from which to invalidate (all downstream state is cleared). */
-  fromStep: "selection" | "enhancement" | "grouping" | "download" | "description";
+  fromStep: "selection" | "enhancement" | "grouping" | "download" | "description" | "publish";
 }
 
 /** Response from POST /api/session/invalidate. */

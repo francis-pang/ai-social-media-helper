@@ -13,6 +13,7 @@ import {
   thumbnailUrl,
 } from "../api/client";
 import { postGroups, groupableMedia } from "./PostGrouper";
+import { setGroupCaption } from "./PublishView";
 import type { PostGroup, GroupableMediaItem } from "../types/api";
 
 // --- State ---
@@ -217,6 +218,13 @@ function copyToClipboard() {
 }
 
 function acceptAndContinue() {
+  // Save caption data for the current group (used by PublishView)
+  const group = currentGroup.value;
+  const state = descriptionState.value;
+  if (group && state.status === "complete") {
+    setGroupCaption(group.id, state.caption, state.hashtags);
+  }
+
   if (hasMoreGroups.value) {
     // Move to the next group
     currentGroupIndex.value = currentGroupIndex.value + 1;
@@ -232,8 +240,8 @@ function acceptAndContinue() {
     feedbackText.value = "";
     isEditing.value = false;
   } else {
-    // All groups done — navigate back to grouping as the final step
-    navigateToStep("group-posts");
+    // All groups done — proceed to Instagram publishing (DDR-040)
+    navigateToStep("instagram-publish");
   }
 }
 

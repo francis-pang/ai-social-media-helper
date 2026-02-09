@@ -22,6 +22,7 @@ const (
 	skDownload  = "DOWNLOAD#"
 	skDesc      = "DESC#"
 	skGroup     = "GROUP#"
+	skPublish   = "PUBLISH#"
 
 	// maxBatchWrite is the DynamoDB BatchWriteItem limit per call.
 	maxBatchWrite = 25
@@ -34,6 +35,7 @@ var stepToSKPrefix = map[string]string{
 	"grouping":    skGroup,
 	"download":    skDownload,
 	"description": skDesc,
+	"publish":     skPublish,
 }
 
 // DynamoStore implements SessionStore using AWS DynamoDB.

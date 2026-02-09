@@ -30,8 +30,8 @@ type metricDef struct {
 
 // emfDirective is the _aws metadata block required by EMF.
 type emfDirective struct {
-	Timestamp        int64        `json:"Timestamp"`
-	CloudWatchMetrics []cwMetric  `json:"CloudWatchMetrics"`
+	Timestamp         int64      `json:"Timestamp"`
+	CloudWatchMetrics []cwMetric `json:"CloudWatchMetrics"`
 }
 
 // cwMetric defines a CloudWatch metric namespace, dimensions, and metric definitions.

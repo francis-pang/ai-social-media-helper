@@ -142,6 +142,40 @@ func (s *DynamoStore) GetDescriptionJob(ctx context.Context, sessionID, jobID st
 	return &job, nil
 }
 
+// --- Publish job operations ---
+
+func (s *DynamoStore) PutPublishJob(ctx context.Context, sessionID string, job *PublishJob) error {
+	sk := skPublish + job.ID
+	if err := s.putItem(ctx, sessionPK(sessionID), sk, job); err != nil {
+		return fmt.Errorf("put publish job %s/%s: %w", sessionID, job.ID, err)
+	}
+
+	log.Debug().
+		Str("sessionId", sessionID).
+		Str("jobId", job.ID).
+		Str("status", job.Status).
+		Str("phase", job.Phase).
+		Int("completed", job.CompletedItems).
+		Int("total", job.TotalItems).
+		Msg("Publish job persisted")
+	return nil
+}
+
+func (s *DynamoStore) GetPublishJob(ctx context.Context, sessionID, jobID string) (*PublishJob, error) {
+	var job PublishJob
+	found, err := s.getItem(ctx, sessionPK(sessionID), skPublish+jobID, &job)
+	if err != nil {
+		return nil, fmt.Errorf("get publish job %s/%s: %w", sessionID, jobID, err)
+	}
+	if !found {
+		return nil, nil
+	}
+
+	job.ID = jobID
+	job.SessionID = sessionID
+	return &job, nil
+}
+
 // --- Post group operations ---
 
 func (s *DynamoStore) PutPostGroup(ctx context.Context, sessionID string, group *PostGroup) error {

@@ -28,6 +28,10 @@ import {
   DescriptionEditor,
   resetDescriptionState,
 } from "./components/DescriptionEditor";
+import {
+  PublishView,
+  resetPublishState,
+} from "./components/PublishView";
 import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
 
@@ -46,7 +50,8 @@ export type Step =
   | "review-enhanced"
   | "group-posts"
   | "publish"
-  | "description";
+  | "description"
+  | "instagram-publish";
 
 export const currentStep = signal<Step>(isCloudMode ? "upload" : "browse");
 export const selectedPaths = signal<string[]>([]);
@@ -74,6 +79,7 @@ const CLOUD_STEP_ORDER: { steps: Step[]; invalidationKey: string }[] = [
   { steps: ["group-posts"], invalidationKey: "grouping" },
   { steps: ["publish"], invalidationKey: "download" },
   { steps: ["description"], invalidationKey: "description" },
+  { steps: ["instagram-publish"], invalidationKey: "publish" },
 ];
 
 /** Get the navigator index (0-based) for a Step value. */
@@ -109,7 +115,7 @@ export function navigateBack() {
  *                   All steps AFTER this one are invalidated.
  */
 export async function invalidateDownstream(
-  fromStep: "selection" | "enhancement" | "grouping" | "download" | "description",
+  fromStep: "selection" | "enhancement" | "grouping" | "download" | "description" | "publish",
 ) {
   const sessionId = uploadSessionId.value;
   if (!sessionId) return;
@@ -127,6 +133,7 @@ export async function invalidateDownstream(
     grouping: resetPostGrouperState,
     download: resetDownloadState,
     description: resetDescriptionState,
+    publish: resetPublishState,
   };
 
   const fromIndex = CLOUD_STEP_ORDER.findIndex(
@@ -178,6 +185,8 @@ const stepTitle = computed(() => {
       return "Publish or Download";
     case "description":
       return "Post Description";
+    case "instagram-publish":
+      return "Publish to Instagram";
   }
 });
 
@@ -260,6 +269,11 @@ export function App() {
       {/* Description (DDR-036) */}
       {currentStep.value === "description" && isCloudMode && (
         <DescriptionEditor />
+      )}
+
+      {/* Instagram Publish (DDR-040) */}
+      {currentStep.value === "instagram-publish" && isCloudMode && (
+        <PublishView />
       )}
 
       {/* Global overlay media player (DDR-038) */}

@@ -24,7 +24,7 @@ const SessionTTL = 24 * time.Hour
 // StepOrder defines the cascade order for downstream invalidation.
 // When a user navigates back to step N and re-triggers processing,
 // all state for steps N through the end is invalidated.
-var StepOrder = []string{"selection", "enhancement", "grouping", "download", "description"}
+var StepOrder = []string{"selection", "enhancement", "grouping", "download", "description", "publish"}
 
 // SessionStore defines the persistence interface for multi-step workflow state.
 // Each method is safe for concurrent use. Implementations must handle
@@ -88,10 +88,18 @@ type SessionStore interface {
 	// DeletePostGroup deletes a single post group.
 	DeletePostGroup(ctx context.Context, sessionID, groupID string) error
 
+	// --- Publish jobs ---
+
+	// PutPublishJob creates or replaces a publish job record.
+	PutPublishJob(ctx context.Context, sessionID string, job *PublishJob) error
+
+	// GetPublishJob retrieves a publish job. Returns nil, nil if not found.
+	GetPublishJob(ctx context.Context, sessionID, jobID string) (*PublishJob, error)
+
 	// --- Session invalidation ---
 
 	// InvalidateDownstream deletes all job records for steps at or after fromStep.
-	// Valid step names: "selection", "enhancement", "grouping", "download", "description".
+	// Valid step names: "selection", "enhancement", "grouping", "download", "description", "publish".
 	// Returns the list of deleted sort key values for logging.
 	InvalidateDownstream(ctx context.Context, sessionID, fromStep string) ([]string, error)
 }
@@ -265,6 +273,20 @@ type DescriptionJob struct {
 type ConversationEntry struct {
 	UserFeedback  string `json:"userFeedback" dynamodbav:"userFeedback"`
 	ModelResponse string `json:"modelResponse" dynamodbav:"modelResponse"`
+}
+
+// PublishJob represents an Instagram publishing job (DynamoDB SK = PUBLISH#{jobId}).
+type PublishJob struct {
+	ID              string         `json:"id" dynamodbav:"-"`
+	SessionID       string         `json:"-" dynamodbav:"-"`
+	GroupID         string         `json:"groupId" dynamodbav:"groupId"`
+	Status          string         `json:"status" dynamodbav:"status"`
+	Phase           string         `json:"phase" dynamodbav:"phase"`
+	TotalItems      int            `json:"totalItems" dynamodbav:"totalItems"`
+	CompletedItems  int            `json:"completedItems" dynamodbav:"completedItems"`
+	InstagramPostID string         `json:"instagramPostId,omitempty" dynamodbav:"instagramPostId,omitempty"`
+	ContainerIDs    []string       `json:"containerIds,omitempty" dynamodbav:"containerIds,omitempty"`
+	Error           string         `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }
 
 // PostGroup represents a user-created post group (DynamoDB SK = GROUP#{groupId}).

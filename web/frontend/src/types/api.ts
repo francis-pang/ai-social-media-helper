@@ -315,6 +315,38 @@ export interface DescriptionFeedbackResponse {
   status: string;
 }
 
+// --- Publish types (DDR-040) ---
+
+/** Request body for POST /api/publish/start. */
+export interface PublishStartRequest {
+  sessionId: string;
+  groupId: string;
+  keys: string[];
+  caption: string;
+  hashtags: string[];
+}
+
+/** Response from POST /api/publish/start. */
+export interface PublishStartResponse {
+  id: string;
+}
+
+/** Progress info for a publish job. */
+export interface PublishProgress {
+  completed: number;
+  total: number;
+}
+
+/** Response from GET /api/publish/{id}/status. */
+export interface PublishStatus {
+  id: string;
+  status: "pending" | "creating_containers" | "processing_videos" | "creating_carousel" | "publishing" | "published" | "error";
+  phase: string;
+  progress: PublishProgress;
+  instagramPostId?: string;
+  error?: string;
+}
+
 // --- Post Grouping types (DDR-033) ---
 
 /** A post group — a collection of media items destined for one Instagram carousel or download bundle. */
