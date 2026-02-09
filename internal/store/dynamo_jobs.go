@@ -12,6 +12,39 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// --- Triage job operations (DDR-050) ---
+
+func (s *DynamoStore) PutTriageJob(ctx context.Context, sessionID string, job *TriageJob) error {
+	sk := skTriage + job.ID
+	if err := s.putItem(ctx, sessionPK(sessionID), sk, job); err != nil {
+		return fmt.Errorf("put triage job %s/%s: %w", sessionID, job.ID, err)
+	}
+
+	log.Debug().
+		Str("sessionId", sessionID).
+		Str("jobId", job.ID).
+		Str("status", job.Status).
+		Int("keep", len(job.Keep)).
+		Int("discard", len(job.Discard)).
+		Msg("Triage job persisted")
+	return nil
+}
+
+func (s *DynamoStore) GetTriageJob(ctx context.Context, sessionID, jobID string) (*TriageJob, error) {
+	var job TriageJob
+	found, err := s.getItem(ctx, sessionPK(sessionID), skTriage+jobID, &job)
+	if err != nil {
+		return nil, fmt.Errorf("get triage job %s/%s: %w", sessionID, jobID, err)
+	}
+	if !found {
+		return nil, nil
+	}
+
+	job.ID = jobID
+	job.SessionID = sessionID
+	return &job, nil
+}
+
 // --- Selection job operations ---
 
 func (s *DynamoStore) PutSelectionJob(ctx context.Context, sessionID string, job *SelectionJob) error {

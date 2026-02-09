@@ -1,66 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 
-	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/jobs"
+	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
-// --- Description Endpoints (DDR-036) ---
-
-type descriptionJob struct {
-	mu        sync.Mutex
-	id        string
-	sessionID string
-	status    string // "pending", "processing", "complete", "error"
-	result    *chat.DescriptionResult
-	// rawResponse stores the raw JSON response for multi-turn history
-	rawResponse string
-	history     []chat.DescriptionConversationEntry
-	// groupLabel and tripContext are stored for regeneration
-	groupLabel  string
-	tripContext string
-	// mediaItems are stored for regeneration (thumbnails only — small)
-	mediaItems []chat.DescriptionMediaItem
-	errMsg     string
-}
-
-var (
-	descJobsMu sync.Mutex
-	descJobs   = make(map[string]*descriptionJob)
-)
-
-func newDescriptionJob(sessionID string) *descriptionJob {
-	descJobsMu.Lock()
-	defer descJobsMu.Unlock()
-	id := jobs.GenerateID("desc-")
-	j := &descriptionJob{
-		id:        id,
-		sessionID: sessionID,
-		status:    "pending",
-	}
-	descJobs[id] = j
-	return j
-}
-
-func getDescriptionJob(id string) *descriptionJob {
-	descJobsMu.Lock()
-	defer descJobsMu.Unlock()
-	return descJobs[id]
-}
-
-func setDescriptionJobError(job *descriptionJob, msg string) {
-	job.mu.Lock()
-	defer job.mu.Unlock()
-	job.status = "error"
-	job.errMsg = msg
-	log.Error().Str("job", job.id).Str("error", msg).Msg("Description job failed")
-}
+// --- Description Endpoints (DDR-036, DDR-050: DynamoDB + async Worker Lambda) ---
 
 // POST /api/description/generate
 // Body: {"sessionId": "uuid", "keys": ["uuid/enhanced/file1.jpg", ...], "groupLabel": "...", "tripContext": "..."}
@@ -96,14 +47,44 @@ func handleDescriptionGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job := newDescriptionJob(req.SessionID)
-	job.groupLabel = req.GroupLabel
-	job.tripContext = req.TripContext
+	jobID := jobs.GenerateID("desc-")
 
-	go runDescriptionJob(job, req.Keys)
+	// Write pending job to DynamoDB (DDR-050).
+	if sessionStore != nil {
+		pendingJob := &store.DescriptionJob{
+			ID:          jobID,
+			Status:      "pending",
+			GroupLabel:  req.GroupLabel,
+			TripContext: req.TripContext,
+			MediaKeys:   req.Keys,
+		}
+		if err := sessionStore.PutDescriptionJob(context.Background(), req.SessionID, pendingJob); err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to persist pending description job")
+			httpError(w, http.StatusInternalServerError, "failed to create job")
+			return
+		}
+	}
+
+	// Dispatch to Worker Lambda asynchronously (DDR-050).
+	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+		"type":        "description",
+		"sessionId":   req.SessionID,
+		"jobId":       jobID,
+		"keys":        req.Keys,
+		"groupLabel":  req.GroupLabel,
+		"tripContext": req.TripContext,
+	}); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for description")
+		if sessionStore != nil {
+			errJob := &store.DescriptionJob{ID: jobID, Status: "error", Error: "failed to start processing"}
+			sessionStore.PutDescriptionJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, "failed to start processing")
+		return
+	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
-		"id": job.id,
+		"id": jobID,
 	})
 }
 
@@ -114,57 +95,64 @@ func handleDescriptionRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := getDescriptionJob(jobID)
-	if job == nil {
-		httpError(w, http.StatusNotFound, "not found")
-		return
-	}
-
 	switch action {
 	case "results":
-		handleDescriptionResults(w, r, job)
+		handleDescriptionResults(w, r, jobID)
 	case "feedback":
-		handleDescriptionFeedback(w, r, job)
+		handleDescriptionFeedback(w, r, jobID)
 	default:
 		httpError(w, http.StatusNotFound, "not found")
 	}
 }
 
 // GET /api/description/{id}/results?sessionId=...
-func handleDescriptionResults(w http.ResponseWriter, r *http.Request, job *descriptionJob) {
+func handleDescriptionResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Ownership check (DDR-028)
-	if !jobs.CheckOwnership(r, job.sessionID) {
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
 
-	job.mu.Lock()
-	defer job.mu.Unlock()
+	if sessionStore == nil {
+		httpError(w, http.StatusServiceUnavailable, "store not configured")
+		return
+	}
+
+	job, err := sessionStore.GetDescriptionJob(context.Background(), sessionID, jobID)
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to read description job from DynamoDB")
+		httpError(w, http.StatusInternalServerError, "failed to read job status")
+		return
+	}
+	if job == nil {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
 
 	resp := map[string]interface{}{
-		"id":            job.id,
-		"status":        job.status,
-		"feedbackRound": len(job.history),
+		"id":            job.ID,
+		"status":        job.Status,
+		"feedbackRound": len(job.History),
 	}
-	if job.result != nil {
-		resp["caption"] = job.result.Caption
-		resp["hashtags"] = job.result.Hashtags
-		resp["locationTag"] = job.result.LocationTag
+	if job.Caption != "" {
+		resp["caption"] = job.Caption
+		resp["hashtags"] = job.Hashtags
+		resp["locationTag"] = job.LocationTag
 	}
-	if job.errMsg != "" {
-		resp["error"] = job.errMsg
+	if job.Error != "" {
+		resp["error"] = job.Error
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/description/{id}/feedback
 // Body: {"sessionId": "uuid", "feedback": "make it shorter"}
-func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, job *descriptionJob) {
+func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, jobID string) {
 	if r.Method != http.MethodPost {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -178,9 +166,7 @@ func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, job *desc
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	// Ownership check (DDR-028)
-	if req.SessionID == "" || req.SessionID != job.sessionID {
+	if req.SessionID == "" {
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -189,22 +175,34 @@ func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, job *desc
 		return
 	}
 
-	// Mark as processing
-	job.mu.Lock()
-	if job.status != "complete" {
-		job.mu.Unlock()
-		httpError(w, http.StatusBadRequest, "description must be complete before providing feedback")
+	// Verify job exists and is complete before accepting feedback
+	if sessionStore != nil {
+		job, err := sessionStore.GetDescriptionJob(context.Background(), req.SessionID, jobID)
+		if err != nil || job == nil {
+			httpError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if job.Status != "complete" {
+			httpError(w, http.StatusBadRequest, "description must be complete before providing feedback")
+			return
+		}
+
+		// Mark as processing in DynamoDB
+		job.Status = "processing"
+		sessionStore.PutDescriptionJob(context.Background(), req.SessionID, job)
+	}
+
+	// Dispatch feedback processing to Worker Lambda (DDR-050).
+	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+		"type":      "description-feedback",
+		"sessionId": req.SessionID,
+		"jobId":     jobID,
+		"feedback":  req.Feedback,
+	}); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for description feedback")
+		httpError(w, http.StatusInternalServerError, "failed to start feedback processing")
 		return
 	}
-	// Record the current response in history before regenerating
-	job.history = append(job.history, chat.DescriptionConversationEntry{
-		UserFeedback:  req.Feedback,
-		ModelResponse: job.rawResponse,
-	})
-	job.status = "processing"
-	job.mu.Unlock()
-
-	go runDescriptionFeedback(job, req.Feedback)
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
 		"status": "processing",

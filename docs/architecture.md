@@ -11,6 +11,7 @@ graph TD
         MediaTriage["media-triage\n(CLI)"]
         MediaWeb["media-web\n(local web server)"]
         MediaLambda["media-lambda\n(AWS Lambda)"]
+        WorkerLambdaBin["worker-lambda\n(AWS Lambda, DDR-050)"]
         WebhookLambda["webhook-lambda\n(AWS Lambda)"]
         OAuthLambda["oauth-lambda\n(AWS Lambda)"]
     end
@@ -42,6 +43,10 @@ graph TD
     MediaLambda --> FileHandler
     MediaLambda --> Store
     MediaLambda --> Instagram
+    WorkerLambdaBin --> Chat
+    WorkerLambdaBin --> FileHandler
+    WorkerLambdaBin --> Store
+    WorkerLambdaBin --> Instagram
     WebhookLambda --> Webhook
     OAuthLambda --> Instagram
     PreactSPA --> MediaWeb
@@ -99,6 +104,7 @@ graph TD
     subgraph aws [AWS Backend]
         APIGW["API Gateway HTTP API\n(JWT authorizer via Cognito)"]
         APILambda["API Lambda\n(256MB, 30s)"]
+        WorkerLambda["Worker Lambda\n(2GB, 10min, DDR-050)"]
         ThumbLambda["Thumbnail Lambda\n(512MB, 2min)"]
         SelectionLambda["Selection Lambda\n(4GB, 15min)"]
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
@@ -119,8 +125,12 @@ graph TD
     APIGW --> Cognito
     APIGW --> APILambda
     APILambda --> StepFn
+    APILambda -->|"async invoke"| WorkerLambda
     APILambda --> DynamoDB
     APILambda --> S3Media
+    WorkerLambda --> DynamoDB
+    WorkerLambda --> S3Media
+    WorkerLambda --> GeminiAPI
     StepFn --> ThumbLambda
     StepFn --> SelectionLambda
     StepFn --> EnhancementLambda
@@ -149,7 +159,8 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 
 | Lambda | Purpose | Container | Memory | Timeout |
 |--------|---------|-----------|--------|---------|
-| API | HTTP API, DynamoDB, presigned URLs, start Step Functions | Light | 256 MB | 30s |
+| API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s |
+| Worker | Triage, description, download, publish processing (DDR-050) | Light | 2 GB | 10 min |
 | Thumbnail | Per-file thumbnail generation | Heavy (ffmpeg) | 512 MB | 2 min |
 | Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min |
 | Enhancement | Per-photo Gemini image editing | Light | 2 GB | 5 min |
@@ -159,12 +170,28 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 
 "Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. Webhook and OAuth Lambdas are deployed in a separate WebhookStack with their own CloudFront distribution (DDR-044, DDR-048). See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [docker-images.md](./docker-images.md).
 
+### Async Job Dispatch (DDR-050)
+
+The API Lambda dispatches all long-running work asynchronously — **no background goroutines**. This avoids Lambda's execution freeze problem where goroutines stall between invocations.
+
+| Workflow | Dispatch | Processor |
+|----------|----------|-----------|
+| Selection | Step Functions `StartExecution` | Thumbnail → Selection pipeline |
+| Enhancement | Step Functions `StartExecution` | Enhancement + Video pipeline |
+| Triage | `lambda:Invoke` (async) | Worker Lambda |
+| Description | `lambda:Invoke` (async) | Worker Lambda |
+| Download | `lambda:Invoke` (async) | Worker Lambda |
+| Publish | `lambda:Invoke` (async) | Worker Lambda |
+
+All job state is stored in DynamoDB. The API Lambda writes a pending job, dispatches processing, and polls DynamoDB for results.
+
 ### Processing Lambda Entrypoints
 
-The API Lambda uses HTTP request/response via API Gateway. The four processing Lambdas are **directly invoked** by Step Functions with typed JSON events — no HTTP overhead. Each Lambda's handler follows `func(ctx, Event) (Result, error)`:
+The API Lambda uses HTTP request/response via API Gateway. The processing Lambdas (Thumbnail, Selection, Enhancement, Video) are **directly invoked** by Step Functions with typed JSON events. The Worker Lambda is invoked asynchronously by the API Lambda. Each handler follows `func(ctx, Event) (Result, error)`:
 
 | Lambda | Entrypoint | Input | Output |
 |--------|-----------|-------|--------|
+| Worker | `cmd/worker-lambda` | `{type, sessionId, jobId, ...payload}` | writes to DynamoDB |
 | Thumbnail | `cmd/thumbnail-lambda` | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
 | Selection | `cmd/selection-lambda` | `{sessionId, jobId, tripContext, mediaKeys[]}` | `{selectedCount, excludedCount}` |
 | Enhancement | `cmd/enhance-lambda` | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
@@ -215,7 +242,7 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 | Pipeline | Flow |
 |----------|------|
 | Frontend | Preact build -> S3 sync -> CloudFront invalidation |
-| Backend | 7 parallel Docker builds (4 light + 3 heavy) with BuildKit caching -> 7 Lambda function updates |
+| Backend | 8 parallel Docker builds (5 light + 3 heavy) with BuildKit caching -> 8 Lambda function updates |
 
 ECR repositories are owned by a dedicated RegistryStack (DDR-046), deployed before any application stack. This breaks the chicken-and-egg dependency where `DockerImageFunction` requires an image that the pipeline hasn't pushed yet. See [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md).
 
@@ -258,6 +285,7 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md) — Centralized RegistryStack for ECR repositories
 - [DDR-047](./design-decisions/DDR-047-cdk-deploy-optimization.md) — CDK deploy optimization
 - [DDR-049](./design-decisions/DDR-049-aws-resource-tagging.md) — AWS resource tagging for cost tracking
+- [DDR-050](./design-decisions/DDR-050-replace-goroutines-with-async-dispatch.md) — Replace goroutines with DynamoDB + Step Functions / async Lambda
 
 ---
 

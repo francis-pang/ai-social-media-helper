@@ -1,18 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
 	"github.com/rs/zerolog/log"
 )
 
-// --- Session Invalidation (DDR-037) ---
+// --- Session Invalidation (DDR-037, DDR-050: DynamoDB-backed) ---
 
 // POST /api/session/invalidate
-// Body: {"sessionId": "uuid", "fromStep": "selection"|"enhancement"|"grouping"|"download"|"description"}
+// Body: {"sessionId": "uuid", "fromStep": "triage"|"selection"|"enhancement"|"grouping"|"download"|"description"|"publish"}
 //
-// Invalidates all downstream in-memory job state from the given step onward.
+// Invalidates all downstream state in DynamoDB from the given step onward.
 // Called by the frontend when a user navigates back and re-triggers processing,
 // ensuring stale job results are not returned on subsequent polls.
 func handleSessionInvalidate(w http.ResponseWriter, r *http.Request) {
@@ -34,88 +35,35 @@ func handleSessionInvalidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine which job types to invalidate based on the cascade.
-	// Order: selection -> enhancement -> grouping (no backend state) -> download -> description
-	// "fromStep" means: invalidate this step and everything after it.
-	type stepDef struct {
-		name string
-		// index in the cascade (lower = earlier)
-	}
-	stepOrder := []string{"selection", "enhancement", "grouping", "download", "description"}
-	fromIndex := -1
-	for i, s := range stepOrder {
-		if s == req.FromStep {
-			fromIndex = i
-			break
-		}
-	}
-	if fromIndex < 0 {
-		httpError(w, http.StatusBadRequest, "invalid fromStep: must be one of selection, enhancement, grouping, download, description")
+	if sessionStore == nil {
+		httpError(w, http.StatusServiceUnavailable, "store not configured")
 		return
 	}
 
-	invalidated := []string{}
+	// Delegate to DynamoDB InvalidateDownstream (DDR-050).
+	deletedSKs, err := sessionStore.InvalidateDownstream(context.Background(), req.SessionID, req.FromStep)
+	if err != nil {
+		log.Error().Err(err).
+			Str("sessionId", req.SessionID).
+			Str("fromStep", req.FromStep).
+			Msg("Failed to invalidate downstream state")
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	// Invalidate steps from fromIndex onward
-	for _, step := range stepOrder[fromIndex:] {
-		switch step {
-		case "selection":
-			selJobsMu.Lock()
-			for id, job := range selJobs {
-				if job.sessionID == req.SessionID {
-					delete(selJobs, id)
-					invalidated = append(invalidated, "selection:"+id)
-				}
-			}
-			selJobsMu.Unlock()
-
-		case "enhancement":
-			enhJobsMu.Lock()
-			for id, job := range enhJobs {
-				if job.sessionID == req.SessionID {
-					delete(enhJobs, id)
-					invalidated = append(invalidated, "enhancement:"+id)
-				}
-			}
-			enhJobsMu.Unlock()
-
-			// Best-effort: delete S3 enhanced/ and thumbnails/ artifacts
-			go cleanupS3Prefix(req.SessionID, "enhanced/")
-			go cleanupS3Prefix(req.SessionID, "thumbnails/")
-
-		case "download":
-			dlJobsMu.Lock()
-			for id, job := range dlJobs {
-				if job.sessionID == req.SessionID {
-					delete(dlJobs, id)
-					invalidated = append(invalidated, "download:"+id)
-				}
-			}
-			dlJobsMu.Unlock()
-
-		case "description":
-			descJobsMu.Lock()
-			for id, job := range descJobs {
-				if job.sessionID == req.SessionID {
-					delete(descJobs, id)
-					invalidated = append(invalidated, "description:"+id)
-				}
-			}
-			descJobsMu.Unlock()
-
-		case "grouping":
-			// Grouping is client-side only — no backend state to invalidate.
-			invalidated = append(invalidated, "grouping:client-only")
-		}
+	// Best-effort: delete S3 enhanced/ and thumbnails/ artifacts if enhancement was invalidated
+	if req.FromStep == "enhancement" || req.FromStep == "selection" || req.FromStep == "triage" {
+		go cleanupS3Prefix(req.SessionID, "enhanced/")
+		go cleanupS3Prefix(req.SessionID, "thumbnails/")
 	}
 
 	log.Info().
 		Str("sessionId", req.SessionID).
 		Str("fromStep", req.FromStep).
-		Int("count", len(invalidated)).
-		Msg("Session state invalidated")
+		Int("count", len(deletedSKs)).
+		Msg("Session state invalidated via DynamoDB")
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"invalidated": invalidated,
+		"invalidated": deletedSKs,
 	})
 }

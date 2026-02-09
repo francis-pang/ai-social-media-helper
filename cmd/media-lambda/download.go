@@ -1,78 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/fpang/gemini-media-cli/internal/jobs"
+	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
-// --- Download Job Management (DDR-034) ---
-
-type downloadJob struct {
-	mu        sync.Mutex
-	id        string
-	sessionID string
-	status    string // "pending", "processing", "complete", "error"
-	bundles   []downloadBundle
-	errMsg    string
-}
-
-type downloadBundle struct {
-	Type        string `json:"type"`                  // "images" or "videos"
-	Name        string `json:"name"`                  // display name: "images.zip" or "videos-1.zip"
-	ZipKey      string `json:"zipKey"`                // S3 key of the created ZIP
-	DownloadURL string `json:"downloadUrl,omitempty"` // presigned GET URL (populated on complete)
-	FileCount   int    `json:"fileCount"`
-	TotalSize   int64  `json:"totalSize"` // total original file size in bytes
-	ZipSize     int64  `json:"zipSize"`   // ZIP file size in bytes (populated on complete)
-	Status      string `json:"status"`    // "pending", "processing", "complete", "error"
-	Error       string `json:"error,omitempty"`
-}
-
-// fileWithSize holds an S3 key and its object size (from HeadObject).
-type fileWithSize struct {
-	key  string
-	size int64
-}
-
-var (
-	dlJobsMu sync.Mutex
-	dlJobs   = make(map[string]*downloadJob)
-)
-
-func newDownloadJob(sessionID string) *downloadJob {
-	dlJobsMu.Lock()
-	defer dlJobsMu.Unlock()
-	id := jobs.GenerateID("dl-")
-	j := &downloadJob{
-		id:        id,
-		sessionID: sessionID,
-		status:    "pending",
-	}
-	dlJobs[id] = j
-	return j
-}
-
-func getDownloadJob(id string) *downloadJob {
-	dlJobsMu.Lock()
-	defer dlJobsMu.Unlock()
-	return dlJobs[id]
-}
-
-func setDownloadJobError(job *downloadJob, msg string) {
-	job.mu.Lock()
-	defer job.mu.Unlock()
-	job.status = "error"
-	job.errMsg = msg
-	log.Error().Str("job", job.id).Str("error", msg).Msg("Download job failed")
-}
-
-// --- Download Endpoints (DDR-034) ---
+// --- Download Endpoints (DDR-034, DDR-050: DynamoDB + async Worker Lambda) ---
 
 // POST /api/download/start
 // Body: {"sessionId": "uuid", "keys": ["uuid/enhanced/file1.jpg", ...], "groupLabel": "Tokyo Day 1"}
@@ -116,11 +56,40 @@ func handleDownloadStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job := newDownloadJob(req.SessionID)
-	go runDownloadJob(job, req.Keys, req.GroupLabel)
+	jobID := jobs.GenerateID("dl-")
+
+	// Write pending job to DynamoDB (DDR-050).
+	if sessionStore != nil {
+		pendingJob := &store.DownloadJob{
+			ID:     jobID,
+			Status: "pending",
+		}
+		if err := sessionStore.PutDownloadJob(context.Background(), req.SessionID, pendingJob); err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to persist pending download job")
+			httpError(w, http.StatusInternalServerError, "failed to create job")
+			return
+		}
+	}
+
+	// Dispatch to Worker Lambda asynchronously (DDR-050).
+	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+		"type":       "download",
+		"sessionId":  req.SessionID,
+		"jobId":      jobID,
+		"keys":       req.Keys,
+		"groupLabel": req.GroupLabel,
+	}); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for download")
+		if sessionStore != nil {
+			errJob := &store.DownloadJob{ID: jobID, Status: "error", Error: "failed to start processing"}
+			sessionStore.PutDownloadJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, "failed to start processing")
+		return
+	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
-		"id": job.id,
+		"id": jobID,
 	})
 }
 
@@ -131,43 +100,50 @@ func handleDownloadRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := getDownloadJob(jobID)
-	if job == nil {
-		httpError(w, http.StatusNotFound, "not found")
-		return
-	}
-
 	switch action {
 	case "results":
-		handleDownloadResults(w, r, job)
+		handleDownloadResults(w, r, jobID)
 	default:
 		httpError(w, http.StatusNotFound, "not found")
 	}
 }
 
 // GET /api/download/{id}/results?sessionId=...
-func handleDownloadResults(w http.ResponseWriter, r *http.Request, job *downloadJob) {
+func handleDownloadResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Ownership check (DDR-028)
-	if !jobs.CheckOwnership(r, job.sessionID) {
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
 
-	job.mu.Lock()
-	defer job.mu.Unlock()
+	if sessionStore == nil {
+		httpError(w, http.StatusServiceUnavailable, "store not configured")
+		return
+	}
+
+	job, err := sessionStore.GetDownloadJob(context.Background(), sessionID, jobID)
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to read download job from DynamoDB")
+		httpError(w, http.StatusInternalServerError, "failed to read job status")
+		return
+	}
+	if job == nil {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
 
 	resp := map[string]interface{}{
-		"id":      job.id,
-		"status":  job.status,
-		"bundles": job.bundles,
+		"id":      job.ID,
+		"status":  job.Status,
+		"bundles": job.Bundles,
 	}
-	if job.errMsg != "" {
-		resp["error"] = job.errMsg
+	if job.Error != "" {
+		resp["error"] = job.Error
 	}
 	respondJSON(w, http.StatusOK, resp)
 }

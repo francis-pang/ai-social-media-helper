@@ -158,12 +158,12 @@ func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
 
 	// Build enhancement config from environment.
 	config := chat.VideoEnhancementConfig{
-		GeminiAPIKey:          os.Getenv("GEMINI_API_KEY"),
-		VertexAIProject:       os.Getenv("VERTEX_AI_PROJECT"),
-		VertexAIRegion:        os.Getenv("VERTEX_AI_REGION"),
-		VertexAIAccessToken:   os.Getenv("VERTEX_AI_TOKEN"),
-		SimilarityThreshold:   0.92,
-		MaxAnalysisIterations: 3,
+		GeminiAPIKey:            os.Getenv("GEMINI_API_KEY"),
+		VertexAIProject:         os.Getenv("VERTEX_AI_PROJECT"),
+		VertexAIRegion:          os.Getenv("VERTEX_AI_REGION"),
+		VertexAIAccessToken:     os.Getenv("VERTEX_AI_TOKEN"),
+		SimilarityThreshold:     0.92,
+		MaxAnalysisIterations:   3,
 		TargetProfessionalScore: 8.5,
 	}
 

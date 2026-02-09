@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
 )
@@ -21,7 +20,8 @@ import (
 //   - sessionId must be a valid UUID
 //   - filename is sanitized and validated against safe character set
 //   - contentType must be in the allowed media type list
-//   - Presigned URL includes Content-Length constraint to enforce size limits
+//   - Content-Type is included in the presigned signature
+//   - Size limits are enforced at processing time (triage/selection start)
 func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -56,19 +56,12 @@ func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce file size limits (DDR-028 Problem 7)
-	sizeLimit := maxPhotoSize
-	if isVideoContentType(contentType) {
-		sizeLimit = maxVideoSize
-	}
-
 	key := sessionID + "/" + filename
 
 	result, err := presigner.PresignPutObject(context.Background(), &s3.PutObjectInput{
-		Bucket:        &mediaBucket,
-		Key:           &key,
-		ContentType:   &contentType,
-		ContentLength: aws.Int64(sizeLimit),
+		Bucket:      &mediaBucket,
+		Key:         &key,
+		ContentType: &contentType,
 	}, s3.WithPresignExpires(15*time.Minute))
 	if err != nil {
 		log.Error().Err(err).Str("key", key).Msg("Failed to generate presigned URL")

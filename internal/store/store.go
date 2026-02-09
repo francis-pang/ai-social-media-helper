@@ -24,7 +24,7 @@ const SessionTTL = 24 * time.Hour
 // StepOrder defines the cascade order for downstream invalidation.
 // When a user navigates back to step N and re-triggers processing,
 // all state for steps N through the end is invalidated.
-var StepOrder = []string{"selection", "enhancement", "grouping", "download", "description", "publish"}
+var StepOrder = []string{"triage", "selection", "enhancement", "grouping", "download", "description", "publish"}
 
 // SessionStore defines the persistence interface for multi-step workflow state.
 // Each method is safe for concurrent use. Implementations must handle
@@ -44,6 +44,14 @@ type SessionStore interface {
 	// UpdateSessionStatus atomically updates the status field of a session
 	// without overwriting other fields. Uses DynamoDB UpdateItem.
 	UpdateSessionStatus(ctx context.Context, sessionID, status string) error
+
+	// --- Triage jobs (DDR-050) ---
+
+	// PutTriageJob creates or replaces a triage job record.
+	PutTriageJob(ctx context.Context, sessionID string, job *TriageJob) error
+
+	// GetTriageJob retrieves a triage job. Returns nil, nil if not found.
+	GetTriageJob(ctx context.Context, sessionID, jobID string) (*TriageJob, error)
 
 	// --- Selection jobs ---
 
@@ -117,6 +125,27 @@ type Session struct {
 	TripContext  string   `json:"tripContext,omitempty" dynamodbav:"tripContext,omitempty"`
 	UploadedKeys []string `json:"uploadedKeys,omitempty" dynamodbav:"uploadedKeys,omitempty"`
 	CreatedAt    int64    `json:"createdAt" dynamodbav:"createdAt"`
+}
+
+// TriageJob represents AI triage results (DynamoDB SK = TRIAGE#{jobId}).
+// Added by DDR-050 to support async triage via Worker Lambda.
+type TriageJob struct {
+	ID        string       `json:"id" dynamodbav:"-"`
+	SessionID string       `json:"-" dynamodbav:"-"`
+	Status    string       `json:"status" dynamodbav:"status"`
+	Keep      []TriageItem `json:"keep,omitempty" dynamodbav:"keep,omitempty"`
+	Discard   []TriageItem `json:"discard,omitempty" dynamodbav:"discard,omitempty"`
+	Error     string       `json:"error,omitempty" dynamodbav:"error,omitempty"`
+}
+
+// TriageItem represents a single media item in triage results.
+type TriageItem struct {
+	Media        int    `json:"media" dynamodbav:"media"`
+	Filename     string `json:"filename" dynamodbav:"filename"`
+	Key          string `json:"key" dynamodbav:"key"`
+	Saveable     bool   `json:"saveable" dynamodbav:"saveable"`
+	Reason       string `json:"reason" dynamodbav:"reason"`
+	ThumbnailURL string `json:"thumbnailUrl" dynamodbav:"thumbnailUrl"`
 }
 
 // SelectionJob represents AI selection results (DynamoDB SK = SELECTION#{jobId}).

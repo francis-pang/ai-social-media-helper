@@ -1,80 +1,22 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 
-	"github.com/fpang/gemini-media-cli/internal/chat"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/jobs"
+	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
-// --- Enhancement Job Management (DDR-031) ---
-
-type enhancementJob struct {
-	mu             sync.Mutex
-	id             string
-	sessionID      string
-	status         string // "pending", "processing", "complete", "error"
-	items          []enhancementResultItem
-	totalCount     int
-	completedCount int
-	errMsg         string
-}
-
-type enhancementResultItem struct {
-	Key              string               `json:"key"`
-	Filename         string               `json:"filename"`
-	Phase            string               `json:"phase"`
-	OriginalKey      string               `json:"originalKey"`
-	EnhancedKey      string               `json:"enhancedKey"`
-	OriginalThumbKey string               `json:"originalThumbKey"`
-	EnhancedThumbKey string               `json:"enhancedThumbKey"`
-	Phase1Text       string               `json:"phase1Text"`
-	Analysis         *chat.AnalysisResult `json:"analysis,omitempty"`
-	ImagenEdits      int                  `json:"imagenEdits"`
-	FeedbackHistory  []chat.FeedbackEntry `json:"feedbackHistory"`
-	Error            string               `json:"error,omitempty"`
-}
-
-var (
-	enhJobsMu sync.Mutex
-	enhJobs   = make(map[string]*enhancementJob)
-)
-
-func newEnhancementJob(sessionID string) *enhancementJob {
-	enhJobsMu.Lock()
-	defer enhJobsMu.Unlock()
-	id := jobs.GenerateID("enh-")
-	j := &enhancementJob{
-		id:        id,
-		sessionID: sessionID,
-		status:    "pending",
-	}
-	enhJobs[id] = j
-	return j
-}
-
-func getEnhancementJob(id string) *enhancementJob {
-	enhJobsMu.Lock()
-	defer enhJobsMu.Unlock()
-	return enhJobs[id]
-}
-
-func setEnhancementJobError(job *enhancementJob, msg string) {
-	job.mu.Lock()
-	defer job.mu.Unlock()
-	job.status = "error"
-	job.errMsg = msg
-	log.Error().Str("job", job.id).Str("error", msg).Msg("Enhancement job failed")
-}
-
-// --- Enhancement Endpoints (DDR-031) ---
+// --- Enhancement Endpoints (DDR-031, DDR-050) ---
 
 // POST /api/enhance/start
 // Body: {"sessionId": "uuid", "keys": ["uuid/file1.jpg", ...]}
@@ -117,25 +59,73 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Filter to photos only (enhancement is for photos)
+	// Separate photos and videos for the enhancement pipeline
 	var photoKeys []string
+	var videoKeys []string
 	for _, key := range req.Keys {
 		ext := strings.ToLower(filepath.Ext(key))
 		if filehandler.IsImage(ext) {
 			photoKeys = append(photoKeys, key)
+		} else if filehandler.IsVideo(ext) {
+			videoKeys = append(videoKeys, key)
 		}
 	}
 
-	if len(photoKeys) == 0 {
-		httpError(w, http.StatusBadRequest, "no photo files in the provided keys")
+	if len(photoKeys) == 0 && len(videoKeys) == 0 {
+		httpError(w, http.StatusBadRequest, "no media files in the provided keys")
 		return
 	}
 
-	job := newEnhancementJob(req.SessionID)
-	go runEnhancementJob(job, photoKeys)
+	jobID := jobs.GenerateID("enh-")
+
+	// Write pending job to DynamoDB (DDR-050).
+	if sessionStore != nil {
+		pendingJob := &store.EnhancementJob{
+			ID:         jobID,
+			Status:     "pending",
+			TotalCount: len(photoKeys) + len(videoKeys),
+		}
+		if err := sessionStore.PutEnhancementJob(context.Background(), req.SessionID, pendingJob); err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to persist pending enhancement job")
+			httpError(w, http.StatusInternalServerError, "failed to create job")
+			return
+		}
+	}
+
+	// Start Step Functions execution (DDR-050).
+	if sfnClient != nil && enhancementSfnArn != "" {
+		sfnInput, _ := json.Marshal(map[string]interface{}{
+			"sessionId": req.SessionID,
+			"jobId":     jobID,
+			"photos":    photoKeys,
+			"videos":    videoKeys,
+		})
+		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+			StateMachineArn: aws.String(enhancementSfnArn),
+			Input:           aws.String(string(sfnInput)),
+			Name:            aws.String(jobID),
+		})
+		if err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start enhancement pipeline")
+			if sessionStore != nil {
+				errJob := &store.EnhancementJob{ID: jobID, Status: "error", Error: "failed to start processing pipeline"}
+				sessionStore.PutEnhancementJob(context.Background(), req.SessionID, errJob)
+			}
+			httpError(w, http.StatusInternalServerError, "failed to start processing")
+			return
+		}
+
+		log.Info().
+			Str("jobId", jobID).
+			Str("sessionId", req.SessionID).
+			Int("photos", len(photoKeys)).
+			Int("videos", len(videoKeys)).
+			Str("sfnArn", enhancementSfnArn).
+			Msg("Enhancement pipeline started via Step Functions")
+	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
-		"id": job.id,
+		"id": jobID,
 	})
 }
 
@@ -146,47 +136,95 @@ func handleEnhanceRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := getEnhancementJob(jobID)
-	if job == nil {
-		httpError(w, http.StatusNotFound, "not found")
-		return
-	}
-
 	switch action {
 	case "results":
-		handleEnhanceResults(w, r, job)
+		handleEnhanceResults(w, r, jobID)
 	case "feedback":
-		handleEnhanceFeedback(w, r, job)
+		handleEnhanceFeedback(w, r, jobID)
 	default:
 		httpError(w, http.StatusNotFound, "not found")
 	}
 }
 
 // GET /api/enhance/{id}/results?sessionId=...
-func handleEnhanceResults(w http.ResponseWriter, r *http.Request, job *enhancementJob) {
+func handleEnhanceResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Ownership check (DDR-028)
-	if !jobs.CheckOwnership(r, job.sessionID) {
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
 		httpError(w, http.StatusNotFound, "not found")
 		return
 	}
 
-	job.mu.Lock()
-	defer job.mu.Unlock()
+	if sessionStore == nil {
+		httpError(w, http.StatusServiceUnavailable, "store not configured")
+		return
+	}
+
+	job, err := sessionStore.GetEnhancementJob(context.Background(), sessionID, jobID)
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to read enhancement job from DynamoDB")
+		httpError(w, http.StatusInternalServerError, "failed to read job status")
+		return
+	}
+	if job == nil {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
 
 	resp := map[string]interface{}{
-		"id":             job.id,
-		"status":         job.status,
-		"items":          job.items,
-		"totalCount":     job.totalCount,
-		"completedCount": job.completedCount,
+		"id":             job.ID,
+		"status":         job.Status,
+		"items":          job.Items,
+		"totalCount":     job.TotalCount,
+		"completedCount": job.CompletedCount,
 	}
-	if job.errMsg != "" {
-		resp["error"] = job.errMsg
+	if job.Error != "" {
+		resp["error"] = job.Error
 	}
 	respondJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/enhance/{id}/feedback
+// Body: {"sessionId": "uuid", "key": "uuid/file.jpg", "feedback": "make it brighter"}
+func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, jobID string) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"sessionId"`
+		Key       string `json:"key"`
+		Feedback  string `json:"feedback"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" || req.Key == "" || req.Feedback == "" {
+		httpError(w, http.StatusBadRequest, "sessionId, key, and feedback are required")
+		return
+	}
+
+	// Dispatch enhancement feedback to Worker Lambda (DDR-050).
+	if err := invokeWorkerAsync(context.Background(), map[string]interface{}{
+		"type":      "enhancement-feedback",
+		"sessionId": req.SessionID,
+		"jobId":     jobID,
+		"key":       req.Key,
+		"feedback":  req.Feedback,
+	}); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for enhancement feedback")
+		httpError(w, http.StatusInternalServerError, "failed to start feedback processing")
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"status": "processing",
+	})
 }

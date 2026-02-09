@@ -17,6 +17,7 @@ import (
 const (
 	pkPrefix    = "SESSION#"
 	skMeta      = "META"
+	skTriage    = "TRIAGE#"
 	skSelection = "SELECTION#"
 	skEnhance   = "ENHANCE#"
 	skDownload  = "DOWNLOAD#"
@@ -30,6 +31,7 @@ const (
 
 // stepToSKPrefix maps step names (from StepOrder) to DynamoDB sort key prefixes.
 var stepToSKPrefix = map[string]string{
+	"triage":      skTriage,
 	"selection":   skSelection,
 	"enhancement": skEnhance,
 	"grouping":    skGroup,

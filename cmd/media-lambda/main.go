@@ -37,12 +37,16 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
 	"github.com/fpang/gemini-media-cli/internal/instagram"
 	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
@@ -64,6 +68,31 @@ func init() {
 	originVerifySecret = os.Getenv("ORIGIN_VERIFY_SECRET")
 	if originVerifySecret == "" {
 		log.Warn().Msg("ORIGIN_VERIFY_SECRET not set — origin verification disabled")
+	}
+
+	// Initialize DynamoDB session store (DDR-050: persistent job state).
+	dynamoTableName := os.Getenv("DYNAMO_TABLE_NAME")
+	if dynamoTableName != "" {
+		ddbClient := dynamodb.NewFromConfig(cfg)
+		sessionStore = store.NewDynamoStore(ddbClient, dynamoTableName)
+		log.Info().Str("table", dynamoTableName).Msg("DynamoDB session store initialized")
+	} else {
+		log.Warn().Msg("DYNAMO_TABLE_NAME not set — DynamoDB store disabled")
+	}
+
+	// Initialize Lambda client for async Worker Lambda invocations (DDR-050).
+	lambdaClient = lambdasvc.NewFromConfig(cfg)
+	workerLambdaArn = os.Getenv("WORKER_LAMBDA_ARN")
+	if workerLambdaArn == "" {
+		log.Warn().Msg("WORKER_LAMBDA_ARN not set — async worker dispatch disabled")
+	}
+
+	// Initialize Step Functions client for selection/enhancement pipelines (DDR-050).
+	sfnClient = sfn.NewFromConfig(cfg)
+	selectionSfnArn = os.Getenv("SELECTION_STATE_MACHINE_ARN")
+	enhancementSfnArn = os.Getenv("ENHANCEMENT_STATE_MACHINE_ARN")
+	if selectionSfnArn == "" || enhancementSfnArn == "" {
+		log.Warn().Msg("State machine ARNs not set — Step Functions dispatch disabled")
 	}
 
 	// Load Gemini API key from SSM Parameter Store if not set via env var.
