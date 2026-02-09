@@ -30,15 +30,20 @@ Apply a four-tier optimization strategy:
 - Add **CodeBuild S3 cache** for Go module and build caches
 - **Parallelize Docker builds** using shell background processes in 3 waves (light, heavy, webhook)
 - **Parallelize ECR pushes** in the post_build phase
+- **Conditional builds** — track last successful build commit in SSM Parameter Store (`/ai-social-media/last-build-commit`); skip rebuilding unchanged Lambda images by comparing `git diff` on `cmd/`, `internal/`, and shared files. Saves ~80-90% when only one Lambda changed.
 
 ### Tier 3: OperationsStack Split
 
 Split the monolithic OperationsStack (~940 lines, ~70-75 resources) into two stacks:
 
 - **OperationsAlertStack** (~25 resources): alarms, SNS topic, X-Ray tracing — changes often
-- **OperationsMonitoringStack** (~45 resources): metric filters, subscription filters, Firehose, dashboard, Glue — changes rarely
+- **OperationsMonitoringStack** (~45+ resources): metric filters, subscription filters, Firehose, dashboard, Glue, Metric Streams — changes rarely
 
 Both depend on BackendStack and StorageStack but not on each other, so they deploy in parallel with `--concurrency 3`.
+
+### Tier 3b: Long-Term Metric Storage
+
+Enable **CloudWatch Metric Streams** -> **Kinesis Firehose** -> **S3** for long-term metric archival beyond CloudWatch's 15-month retention. The metrics archive S3 bucket (in StorageStack) uses tiered lifecycle: Standard -> Infrequent Access (90d) -> Glacier (365d). Metric Streams filter to relevant namespaces only (Lambda, API Gateway, Step Functions, DynamoDB, custom).
 
 ### Tier 4: Dockerfile + Local Dev Workflow
 
@@ -55,6 +60,7 @@ Both depend on BackendStack and StorageStack but not on each other, so they depl
 | Parallel Docker builds (3 waves) | Build time from ~10-15 min to ~3-5 min |
 | `--cache-from` + BuildKit | ~30-50% faster per image when layers cached |
 | CodeBuild S3 cache | Go modules cached across pipeline runs |
+| Conditional builds (SSM) | ~80-90% savings when only one Lambda changed |
 | OperationsStack split | Alarm changes ~60% faster (2 min vs 5-8 min) |
 | Local Lambda push | Code iteration from ~5+ min to ~1-2 min |
 
@@ -86,6 +92,8 @@ Combined: most common dev scenario (Lambda code change) goes from ~15-20 min to 
 - `--hotswap` should not be used in production (skips CloudFormation drift detection)
 - Parallel Docker builds require CodeBuild MEDIUM compute or larger
 - Local push uses `:dev` tags that differ from pipeline `:commit-hash` tags
+- Conditional builds rely on SSM parameter; deleting the parameter triggers a full rebuild
+- Metric Streams incur additional CloudWatch costs (~$0.003/metric/month)
 
 ## Implementation
 
@@ -96,7 +104,8 @@ Combined: most common dev scenario (Lambda code change) goes from ~15-20 min to 
 | `cdk/package.json` | Add `tsx`, remove `ts-node` |
 | `cdk/tsconfig.json` | Add `incremental: true` |
 | `cdk/.gitignore` | Add `.tsbuildinfo` |
-| `cdk/lib/backend-pipeline-stack.ts` | BuildKit, --cache-from, S3 cache, parallel builds/pushes |
+| `cdk/lib/backend-pipeline-stack.ts` | BuildKit, --cache-from, S3 cache, parallel builds/pushes, conditional builds via SSM |
+| `cdk/bin/cdk.ts` | Enable metric archive by default; wire Metric Streams |
 | `cdk/lib/operations-alert-stack.ts` | **New** — alarms, SNS, X-Ray (split from operations-stack.ts) |
 | `cdk/lib/operations-monitoring-stack.ts` | **New** — metric filters, Firehose, dashboard, Glue (split from operations-stack.ts) |
 | `cdk/lib/operations-stack.ts` | **Deleted** — replaced by the two stacks above |
