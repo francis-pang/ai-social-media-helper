@@ -25,8 +25,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 FROM public.ecr.aws/lambda/provided:al2023
 
 # Copy static ffmpeg and ffprobe binaries (with AV1+Opus support)
-COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/
-COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/
+# ffmpeg cached in ECR to avoid Docker Hub rate limits (DDR-041)
+COPY --from=123456789012.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffmpeg /usr/local/bin/
+COPY --from=123456789012.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffprobe /usr/local/bin/
 
 # Copy Go binary (changes most often — last layer for optimal caching)
 COPY --from=builder /handler /var/runtime/bootstrap

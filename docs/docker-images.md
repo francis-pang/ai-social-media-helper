@@ -228,6 +228,20 @@ Deploy (CodeBuild)
 
 Docker's build cache means builds 2-5 reuse the Go module download layer from build 1. The `go mod download` step (~30s) only runs once; subsequent builds only re-run `go build` (~5-10s each).
 
+## Lambda Entrypoints
+
+Each Lambda function has a dedicated `cmd/` entrypoint directory:
+
+| `cmd/` Directory | Lambda Function | Dockerfile | Invocation Model |
+|---|---|---|---|
+| `cmd/media-lambda` | API Handler | Light | HTTP via API Gateway |
+| `cmd/thumbnail-lambda` | Thumbnail Processor | Heavy | Direct invocation via Step Functions |
+| `cmd/selection-lambda` | Selection Processor | Heavy | Direct invocation via Step Functions |
+| `cmd/enhance-lambda` | Enhancement Processor | Light | Direct invocation via Step Functions |
+| `cmd/video-lambda` | Video Processor | Heavy | Direct invocation via Step Functions |
+
+The API Lambda uses `aws-lambda-go-api-proxy` to translate API Gateway events into `http.Request` objects. The four processing Lambdas use direct `lambda.Start(handler)` with typed JSON event structs — no HTTP overhead. See [DDR-043](design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
+
 ## Adding a New Lambda
 
 To add a new Lambda function:
@@ -257,9 +271,10 @@ cmd/media-lambda/
 - [DDR-027](design-decisions/DDR-027-container-image-lambda-local-commands.md): Original container image Lambda deployment
 - [DDR-035](design-decisions/DDR-035-multi-lambda-deployment.md): Multi-Lambda deployment architecture decision
 - [DDR-041](design-decisions/DDR-041-container-registry-strategy.md): Container registry strategy (ECR Private + ECR Public)
+- [DDR-043](design-decisions/DDR-043-step-functions-lambda-entrypoints.md): Step Functions Lambda entrypoints
 - [architecture.md](architecture.md): Overall system architecture
 
 ---
 
 **Last Updated**: 2026-02-09  
-**Updated for**: DDR-041 (Container Registry Strategy — ECR Private + ECR Public)
+**Updated for**: DDR-043 (Step Functions Lambda Entrypoints)

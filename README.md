@@ -9,7 +9,11 @@ A collection of Go tools for analyzing, selecting, and enhancing photos and vide
 | `media-select` | AI-powered media selection for Instagram carousels |
 | `media-triage` | AI-powered media triage to identify and delete unsaveable files |
 | `media-web` | Web UI for visual triage and selection (local web server) |
-| `media-lambda` | Cloud-hosted service via AWS Lambda + S3 + CloudFront |
+| `media-lambda` | Cloud-hosted API service via AWS Lambda + S3 + CloudFront |
+| `thumbnail-lambda` | Per-file thumbnail generation (Step Functions worker) |
+| `selection-lambda` | AI media selection via Gemini (Step Functions worker) |
+| `enhance-lambda` | Per-photo AI enhancement via Gemini (Step Functions worker) |
+| `video-lambda` | Per-video enhancement via ffmpeg (Step Functions worker) |
 
 ## Quick Start
 
@@ -97,7 +101,7 @@ All design documentation lives in [docs/](./docs/index.md):
 - **Architecture** — [architecture.md](./docs/architecture.md) — system components, local + cloud deployment
 - **Workflows** — [media-triage.md](./docs/media-triage.md), [media-selection.md](./docs/media-selection.md)
 - **Media processing** — [image-processing.md](./docs/image-processing.md), [video-processing.md](./docs/video-processing.md)
-- **Design decisions** — [42 DDRs](./docs/design-decisions/) documenting every architectural choice
+- **Design decisions** — [43 DDRs](./docs/design-decisions/) documenting every architectural choice
 
 ## Roadmap
 
@@ -110,10 +114,11 @@ All design documentation lives in [docs/](./docs/index.md):
 - [x] Multi-Lambda architecture with Step Functions
 - [x] Landing page workflow switcher, AI post descriptions
 - [x] Container registry strategy (ECR Private + ECR Public)
+- [x] Step Functions Lambda entrypoints (Thumbnail, Selection, Enhancement, Video)
 - [ ] Media enhancement (Steps 4-5): Gemini 3 Pro Image + Imagen 3
 - [ ] Post grouping and publishing (Steps 6-7, 9)
 - [ ] Video triage in Lambda (requires FFmpeg Lambda layer)
-- [ ] DynamoDB session state store (Go implementation)
+- [ ] DynamoDB session state store (handler migration)
 - [ ] Custom domain with ACM certificate
 
 ## Testing

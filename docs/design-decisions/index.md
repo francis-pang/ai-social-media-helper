@@ -55,6 +55,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-040](./DDR-040-instagram-publishing-client.md) | 2026-02-09 | Instagram Publishing Client | Accepted |
 | [DDR-041](./DDR-041-container-registry-strategy.md) | 2026-02-09 | Container Registry Strategy — ECR Private + ECR Public | Accepted |
 | [DDR-042](./DDR-042-landing-page-workflow-switcher.md) | 2026-02-09 | Landing Page Workflow Switcher | Accepted |
+| [DDR-043](./DDR-043-step-functions-lambda-entrypoints.md) | 2026-02-09 | Step Functions Lambda Entrypoints | Accepted |
 
 ---
 
@@ -69,4 +70,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-000, DDR-042)
+**Last Updated**: 2026-02-09 (DDR-000, DDR-043)

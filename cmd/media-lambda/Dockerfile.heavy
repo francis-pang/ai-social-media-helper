@@ -34,7 +34,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 #   2. ffmpeg binaries (shared by ALL Lambda images in this repo)
 #   3. Go binary (unique per Lambda — last layer for optimal caching)
 FROM public.ecr.aws/lambda/provided:al2023
-COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/
-COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/
+# ffmpeg cached in ECR to avoid Docker Hub rate limits (DDR-041)
+COPY --from=123456789012.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffmpeg /usr/local/bin/
+COPY --from=123456789012.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffprobe /usr/local/bin/
 COPY --from=builder /handler /var/runtime/bootstrap
 ENTRYPOINT ["/var/runtime/bootstrap"]

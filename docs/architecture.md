@@ -152,6 +152,19 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 
 "Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [docker-images.md](./docker-images.md).
 
+### Processing Lambda Entrypoints
+
+The API Lambda uses HTTP request/response via API Gateway. The four processing Lambdas are **directly invoked** by Step Functions with typed JSON events — no HTTP overhead. Each Lambda's handler follows `func(ctx, Event) (Result, error)`:
+
+| Lambda | Entrypoint | Input | Output |
+|--------|-----------|-------|--------|
+| Thumbnail | `cmd/thumbnail-lambda` | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
+| Selection | `cmd/selection-lambda` | `{sessionId, jobId, tripContext, mediaKeys[]}` | `{selectedCount, excludedCount}` |
+| Enhancement | `cmd/enhance-lambda` | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
+| Video | `cmd/video-lambda` | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
+
+Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch (Gemini needs the full set for comparative selection). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
+
 ## Security Architecture
 
 Defense-in-depth with multiple layers. See [DDR-028](./design-decisions/DDR-028-security-hardening.md).
