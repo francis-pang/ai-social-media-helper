@@ -1,624 +1,211 @@
 # Architecture Overview
 
-## Purpose
+## System Overview
 
-The Gemini Media Analysis CLI enables users to:
-- Upload media files (images/videos) directly to Gemini API, bypassing typical UI file size limits
-- Maintain stateful conversation sessions for asking multiple questions about uploaded media
-- Perform in-depth analysis of visual content using Gemini's multimodal capabilities
+The Gemini Media CLI is a collection of Go tools for analyzing, selecting, and enhancing photos and videos using Google's Gemini API. It runs in two modes: **local** (CLI + embedded web server) and **cloud** (AWS Lambda + S3 + CloudFront).
 
-## Language Choice: Go
+```mermaid
+graph TD
+    subgraph binaries [Binaries]
+        MediaSelect["media-select\n(CLI)"]
+        MediaTriage["media-triage\n(CLI)"]
+        MediaWeb["media-web\n(local web server)"]
+        MediaLambda["media-lambda\n(AWS Lambda)"]
+    end
 
-**Selected for:**
-- ⚡ **Fast startup times** - Native binary, no JVM overhead
-- 📦 **Single binary deployment** - Easy distribution, no dependencies
-- 🚀 **Efficient file handling** - Excellent streaming support for large files
-- 🛠️ **CLI-first design** - Strong ecosystem for command-line tools
-- 🔒 **Type safety** - Compile-time error checking
-- 🧵 **Concurrency** - Built-in goroutines for efficient concurrent operations
+    subgraph internal [Shared Packages - internal/]
+        Auth["auth\n(API key, Cognito)"]
+        Chat["chat\n(Gemini API: selection,\ntriage, enhancement)"]
+        FileHandler["filehandler\n(EXIF, thumbnails,\ncompression)"]
+        Logging["logging\n(zerolog)"]
+        Assets["assets\n(prompts, reference photos)"]
+        Store["store\n(DynamoDB sessions)"]
+        Jobs["jobs\n(job routing)"]
+        Instagram["instagram\n(publishing client)"]
+    end
 
-See [language_comparison.md](./language_comparison.md) for detailed comparison with alternatives.
+    subgraph frontend [Frontend]
+        PreactSPA["Preact SPA\n(TypeScript + Vite)"]
+    end
 
----
-
-## Core Components
-
-1. **CLI Binaries** - Independent commands under `cmd/`:
-   - `media-select` - AI-powered media selection for Instagram carousels
-   - `media-triage` - AI-powered media triage to identify and delete unsaveable files
-   - `media-web` - Local web server providing a visual UI for triage and selection (Phase 1)
-   - `media-lambda` - AWS Lambda function for cloud-hosted triage via S3 (Phase 2)
-2. **Web Frontend** - Preact SPA under `web/frontend/` consumed by both the local web server and CloudFront
-3. **File Handler** - File validation, EXIF extraction, thumbnail generation
-4. **Gemini Client** - API communication and file uploads
-5. **Photo Selection** - Quality-agnostic selection with scene detection
-6. **Media Triage** - Batch quality/meaning evaluation with interactive deletion
-7. **Session Manager** - Stateful conversation management (future)
-8. **Configuration** - API key and settings management
-
----
-
-## Technical Stack
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Language** | Go 1.24+ | Core language |
-| **Gemini Model** | `gemini-3-flash-preview` | AI model (free tier compatible) |
-| **SDK** | `github.com/google/generative-ai-go/genai` | Official Gemini API SDK |
-| **Logging** | `github.com/rs/zerolog` | Structured logging |
-| **CLI Framework** | `github.com/spf13/cobra` | Command-line interface |
-| **Web Frontend** | Preact + Vite + TypeScript | Browser-based UI (SPA) |
-| **Web Server** | Go `net/http` + `embed.FS` | Local JSON API + embedded SPA (Phase 1) |
-| **Lambda Adapter** | `aws-lambda-go-api-proxy` | API Gateway HTTP API v2 to `http.ServeMux` (Phase 2) |
-| **AWS SDK** | `aws-sdk-go-v2` (S3, SSM) | S3 presigned URLs, object operations, secrets (Phase 2) |
-| **Configuration** | Environment variables + GPG (local), SSM Parameter Store (cloud) | Config and secret management |
-| **JSON** | `encoding/json` | Session persistence |
-| **File I/O** | `os`, `io`, `mime` | File handling |
-| **UUID** | `github.com/google/uuid` | Session IDs |
-| **Testing** | `testing` package | Unit tests |
-| **Build** | `go build` | Single binary output |
-| **Dependencies** | `go.mod` + `go.sum` | Dependency management |
-
-**Pricing Reference**: [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing)
-
----
-
-## Data Flow
-
-```
-┌─────────────────┐
-│  User Input     │  (CLI commands)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Cobra Parser    │  (cmd/media-select/ or cmd/media-triage/)
-│ - Parse args    │
-│ - Route commands│
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ File Handler    │  (internal/filehandler/handler.go)
-│ - Validate      │
-│ - Read file     │
-│ - Stream I/O    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Gemini Client   │  (internal/gemini/client.go)
-│ - Upload file   │
-│ - Generate      │
-│ - Context-aware │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Session Manager │  (internal/session/manager.go)
-│ - Store refs    │
-│ - Save history  │
-│ - Persist JSON  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Response Output │  (fmt.Printf)
-└─────────────────┘
+    MediaSelect --> Chat
+    MediaSelect --> FileHandler
+    MediaTriage --> Chat
+    MediaTriage --> FileHandler
+    MediaWeb --> Chat
+    MediaWeb --> FileHandler
+    MediaWeb --> PreactSPA
+    MediaLambda --> Chat
+    MediaLambda --> FileHandler
+    MediaLambda --> Store
+    MediaLambda --> Instagram
+    PreactSPA --> MediaWeb
+    PreactSPA --> MediaLambda
 ```
 
-### Go-Specific Characteristics
+## Tech Stack
 
-- ✅ Context propagation for cancellation/timeouts
-- ✅ Error handling via `(result, error)` tuples
-- ✅ Thread-safe operations with mutexes
-- ✅ Streaming file I/O for large files
-- ✅ No shared mutable state
+| Component | Technology |
+|-----------|-----------|
+| Language | Go 1.24 |
+| AI Model | Gemini 3 (Flash for triage, Pro for selection/enhancement) |
+| SDK | `google.golang.org/genai` |
+| CLI Framework | `github.com/spf13/cobra` |
+| Logging | `github.com/rs/zerolog` |
+| Web Frontend | Preact 10 + Vite 6 + TypeScript |
+| AWS SDK | `aws-sdk-go-v2` (S3, SSM, DynamoDB) |
+| Lambda Adapter | `aws-lambda-go-api-proxy` (HTTP API v2 to `http.ServeMux`) |
 
----
+## Local Architecture
 
-## Photo Selection Flow (Iteration 10)
+In local mode, `media-web` serves the Preact SPA via `go:embed` and exposes a JSON REST API on `localhost:8080`. Media files are read from the local filesystem.
 
-```
-┌─────────────────┐
-│ Directory Scan  │  Recursive, sorted by path
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ EXIF Extraction │  GPS, Date, Camera info
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Thumbnail Gen   │  1024px max, JPEG output
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Gemini API      │  Thumbnails + Metadata + Context
-│ Selection       │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ Structured Output                        │
-│ 1. Ranked list with justification       │
-│ 2. Scene grouping (hybrid detection)    │
-│ 3. Exclusion report (per-photo reasons) │
-└─────────────────────────────────────────┘
+```mermaid
+graph LR
+    Browser["Browser"]
+    GoServer["Go HTTP Server\n(media-web)"]
+    EmbedFS["Embedded SPA\n(embed.FS)"]
+    JSONAPI["JSON REST API\n(/api/browse, /api/triage/*)"]
+    LocalFS["Local Filesystem"]
+    GeminiAPI["Gemini API"]
+
+    Browser --> GoServer
+    GoServer --> EmbedFS
+    GoServer --> JSONAPI
+    JSONAPI --> LocalFS
+    JSONAPI --> GeminiAPI
 ```
 
-### Quality-Agnostic Selection
+The JSON-only API design enabled the Phase 2 migration to Lambda without changing the frontend. See [DDR-022](./design-decisions/DDR-022-web-ui-preact-spa.md).
 
-**Key Principle**: Photo quality is NOT a selection criterion. User has Google enhancement tools (Magic Editor, Unblur, Portrait Light, etc.).
+## Cloud Architecture
 
-**Selection Priorities**:
-1. Subject/Scene Diversity (Highest)
-2. Scene Representation
-3. Enhancement Potential (duplicates only)
-4. People Variety (Lower)
-5. Time of Day (Tiebreaker)
+In cloud mode, the Preact SPA is hosted on CloudFront (S3 origin), the Go backend runs as Lambda functions behind API Gateway, and media files are stored in S3 with presigned URL uploads.
 
-**Scene Detection (Hybrid)**:
-- Visual similarity
-- Time gaps (2+ hours = new scene)
-- GPS gaps (1km+ = new location)
+```mermaid
+graph TD
+    Browser["Browser\n(Preact SPA)"]
 
-See [DDR-016](./design-decisions/DDR-016-quality-agnostic-photo-selection.md) for details.
+    subgraph cloudfront [CloudFront]
+        DefaultBehavior["/* -> S3 origin\n(SPA static assets, OAC)"]
+        APIBehavior["/api/* -> API Gateway\n(same-origin proxy)"]
+    end
 
----
+    subgraph aws [AWS Backend]
+        APIGW["API Gateway HTTP API\n(JWT authorizer via Cognito)"]
+        APILambda["API Lambda\n(256MB, 30s)"]
+        ThumbLambda["Thumbnail Lambda\n(512MB, 2min)"]
+        SelectionLambda["Selection Lambda\n(4GB, 15min)"]
+        EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
+        VideoLambda["Video Lambda\n(4GB, 15min)"]
+        StepFn["Step Functions\n(SelectionPipeline,\nEnhancementPipeline)"]
+        DynamoDB["DynamoDB\n(session state, TTL 24h)"]
+    end
 
-## Media Triage Flow (Iteration 12)
+    S3Media["S3 Media Bucket\n(24h auto-expiration)"]
+    S3Frontend["S3 Frontend Bucket"]
+    GeminiAPI["Gemini API"]
+    SSM["SSM Parameter Store\n(API keys, credentials)"]
+    Cognito["Cognito User Pool"]
 
-```
-┌─────────────────┐
-│ Directory Scan  │  Recursive, images + videos
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Pre-filter      │  Videos < 2s flagged locally
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Media Processing│  Thumbnails (images) + Compress (videos)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Gemini API      │  Single batch call with all media
-│ Triage          │  Returns JSON array of verdicts
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ Interactive Report                       │
-│ 1. KEEP list with reasons               │
-│ 2. DISCARD list with reasons             │
-│ 3. Confirm deletion prompt               │
-└─────────────────────────────────────────┘
-```
-
-### Triage Criteria
-
-**Key Principle**: Be generous — if a normal person can understand the subject and light editing could make it decent, keep it.
-
-**Discard if:**
-- Too dark/blurry to recover any meaningful content
-- Accidental shot (pocket photo, floor, finger over lens)
-- No discernible subject or meaning
-- Video too short (< 2 seconds, pre-filtered locally)
-
-See [DDR-021](./design-decisions/DDR-021-media-triage-command.md) for details.
-
----
-
-## Web UI Architecture (Phase 1)
-
-```
-┌──────────────────────────────────────────────────┐
-│  Browser                                          │
-│  ┌────────────────────────────────────────────┐  │
-│  │ Preact SPA                                  │  │
-│  │  - File browser (directory listing)         │  │
-│  │  - Thumbnail grid (media preview)           │  │
-│  │  - Multi-select & confirm (triage actions)  │  │
-│  └──────────────┬─────────────────────────────┘  │
-│                  │ fetch("/api/...")               │
-└──────────────────┼───────────────────────────────┘
-                   │
-┌──────────────────┼───────────────────────────────┐
-│  Go HTTP Server  │  (cmd/media-web)               │
-│                  ▼                                 │
-│  ┌──────────────────────────┐  ┌───────────────┐ │
-│  │ JSON REST API             │  │ Static Files  │ │
-│  │  /api/browse              │  │ (embed.FS)    │ │
-│  │  /api/triage/start        │  │ index.html    │ │
-│  │  /api/triage/{id}/results │  │ JS/CSS        │ │
-│  │  /api/triage/{id}/confirm │  └───────────────┘ │
-│  │  /api/media/thumbnail     │                     │
-│  │  /api/media/full          │                     │
-│  └──────────┬───────────────┘                     │
-│             │                                      │
-│  ┌──────────▼───────────────┐                     │
-│  │ internal/ packages        │                     │
-│  │  filehandler, chat, auth  │                     │
-│  └──────────┬───────────────┘                     │
-│             │                                      │
-└─────────────┼──────────────────────────────────────┘
-              │
-              ▼
-┌──────────────────────┐  ┌─────────────────┐
-│ Local Filesystem     │  │ Gemini API      │
-│ (media files)        │  │ (AI evaluation) │
-└──────────────────────┘  └─────────────────┘
-```
-
-**Key design principle:** The Go server only serves JSON. The Preact SPA handles all rendering. This clean separation enabled the migration to AWS Lambda (Phase 2) without changing the frontend.
-
-See [DDR-022](./design-decisions/DDR-022-web-ui-preact-spa.md) for the full decision record.
-
----
-
-## Cloud Architecture (Phase 2)
-
-Phase 2 migrates the application from a local tool to a remotely hosted service. The Preact SPA is deployed to CloudFront, the Go backend runs as a Lambda function, and media files are stored in S3.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  Browser                                                              │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │ Preact SPA (VITE_CLOUD_MODE=1)                                 │  │
-│  │  - Drag-and-drop file upload (FileUploader)                    │  │
-│  │  - Presigned URL upload directly to S3                         │  │
-│  │  - Thumbnail grid (media preview via /api/media/thumbnail)     │  │
-│  │  - Multi-select & confirm (triage actions)                     │  │
-│  └──────────────┬────────────────────────────┬────────────────────┘  │
-│                  │ fetch("/api/...")           │ PUT (presigned URL)   │
-└──────────────────┼────────────────────────────┼──────────────────────┘
-                   │                            │
-┌──────────────────┼────────────────────────────┼──────────────────────┐
-│  CloudFront      │  (d10rlnv7vz8qt7.cloudfront.net)                  │
-│                  │                            │                       │
-│  ┌───────────────▼───────────────┐            │                       │
-│  │ /api/* behavior               │            │                       │
-│  │ (proxy to API Gateway)        │            │                       │
-│  └───────────────┬───────────────┘            │                       │
-│  ┌───────────────────────────────┐            │                       │
-│  │ /* behavior (default)         │            │                       │
-│  │ S3 origin (OAC, cached)       │            │                       │
-│  └───────────────────────────────┘            │                       │
-└──────────────────┼────────────────────────────┼──────────────────────┘
-                   │                            │
-┌──────────────────▼───────────────┐  ┌─────────▼──────────────────────┐
-│  API Gateway HTTP API            │  │  S3 Media Bucket               │
-│  /api/{proxy+} -> Lambda         │  │  ai-social-media-uploads-...   │
-└──────────────────┬───────────────┘  │  {sessionId}/{filename}        │
-                   │                  │  24h auto-expiration            │
-┌──────────────────▼───────────────┐  └────────────────────────────────┘
-│  Lambda (provided.al2023)        │
-│  cmd/media-lambda/main.go        │
-│  ┌─────────────────────────────┐ │
-│  │ httpadapter.NewV2 (ServeMux)│ │
-│  │  /api/health                │ │
-│  │  /api/upload-url            │ │
-│  │  /api/triage/start          │ │
-│  │  /api/triage/{id}/results   │ │
-│  │  /api/triage/{id}/confirm   │ │
-│  │  /api/download/start        │ │
-│  │  /api/download/{id}/results │ │
-│  │  /api/media/thumbnail       │ │
-│  │  /api/media/full            │ │
-│  └──────────┬──────────────────┘ │
-│             │ reuses internal/   │
-│  ┌──────────▼──────────────────┐ │
-│  │ chat.AskMediaTriage()       │ │
-│  │ filehandler.LoadMediaFile() │ │
-│  │ filehandler.GenerateThumbnail()│
-│  └──────────┬──────────────────┘ │
-└─────────────┼────────────────────┘
-              │
-    ┌─────────▼─────────┐  ┌───────────────────────┐
-    │ Gemini API         │  │ SSM Parameter Store   │
-    │ (AI evaluation)    │  │ (Gemini API key)      │
-    └────────────────────┘  └───────────────────────┘
+    Browser --> cloudfront
+    DefaultBehavior --> S3Frontend
+    APIBehavior --> APIGW
+    APIGW --> Cognito
+    APIGW --> APILambda
+    APILambda --> StepFn
+    APILambda --> DynamoDB
+    APILambda --> S3Media
+    StepFn --> ThumbLambda
+    StepFn --> SelectionLambda
+    StepFn --> EnhancementLambda
+    StepFn --> VideoLambda
+    ThumbLambda --> S3Media
+    SelectionLambda --> GeminiAPI
+    EnhancementLambda --> GeminiAPI
+    VideoLambda --> S3Media
+    APILambda --> SSM
+    Browser -->|"presigned PUT"| S3Media
 ```
 
 ### Key Design Decisions
 
-1. **Presigned URL uploads** bypass Lambda's 6MB payload limit — the browser uploads directly to S3
-2. **Session-based grouping** — each upload session gets a UUID; files are stored at `{sessionId}/{filename}` in S3
-3. **Download-to-tmp processing** — Lambda downloads S3 objects to `/tmp` so existing `filehandler` and `chat` packages work unchanged
-4. **CloudFront API proxy** — `/api/*` requests are proxied to API Gateway, making all requests same-origin (no CORS)
-5. **Build-time mode detection** — `VITE_CLOUD_MODE` env var determines whether the SPA shows the file uploader (cloud) or file picker (local)
-6. **Separate binary** — `cmd/media-lambda` is purpose-built for Lambda rather than sharing handlers with `cmd/media-web` via a StorageProvider interface, because the two modes have fundamentally different I/O patterns
+1. **Presigned URL uploads** — browser uploads directly to S3, bypassing Lambda's 6MB payload limit
+2. **CloudFront API proxy** — `/api/*` requests are proxied to API Gateway, making all requests same-origin (no CORS needed)
+3. **Download-to-tmp** — Lambda downloads S3 objects to `/tmp` so existing `filehandler` and `chat` packages work unchanged
+4. **Separate binary** — `media-lambda` is purpose-built for Lambda; different I/O patterns than `media-web`
+5. **Build-time mode detection** — `VITE_CLOUD_MODE` flag switches between local file picker and S3 drag-and-drop uploader
 
-### AWS Resources
+See [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md) for the full cloud migration decision.
 
-| Resource | Purpose |
-|----------|---------|
-| S3 (media uploads) | Stores uploaded media files (24h auto-expiration) |
-| S3 (frontend) | Stores Preact SPA static assets |
-| CloudFront | Serves frontend + proxies `/api/*` to API Gateway |
-| API Gateway HTTP API | Routes requests to Lambda (JWT authorizer) |
-| Lambda x5 (`provided.al2023`) | API handler, Thumbnail, Selection, Enhancement, Video (DDR-035) |
-| Step Functions x2 | SelectionPipeline, EnhancementPipeline (DDR-035) |
-| DynamoDB | Session state with single-table design and TTL (DDR-035) |
-| ECR x2 | Light + Heavy container image repos with layer sharing (DDR-035) |
-| Cognito User Pool | Authentication (DDR-028) |
-| SSM Parameter Store | Gemini API key, Instagram credentials (SecureString) |
-| CodePipeline x2 | Frontend pipeline + Backend pipeline (DDR-035) |
+## Multi-Lambda Architecture
 
-See [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md) for the full decision record.
-See [DDR-028](./design-decisions/DDR-028-security-hardening.md) for the security hardening decision record.
-See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) for the multi-Lambda deployment decision record.
-See [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) for the Docker image strategy.
-See [PHASE2-REMOTE-HOSTING.md](./PHASE2-REMOTE-HOSTING.md) for the hosting platform evaluation.
+Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functions for parallel orchestration:
 
----
+| Lambda | Purpose | Container | Memory | Timeout |
+|--------|---------|-----------|--------|---------|
+| API | HTTP API, DynamoDB, presigned URLs, start Step Functions | Light | 256 MB | 30s |
+| Thumbnail | Per-file thumbnail generation | Heavy (ffmpeg) | 512 MB | 2 min |
+| Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min |
+| Enhancement | Per-photo Gemini image editing | Light | 2 GB | 5 min |
+| Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min |
 
-## Security Architecture (DDR-028)
+"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [DOCKER-IMAGES.md](./DOCKER-IMAGES.md).
 
-The cloud deployment is hardened with defense-in-depth security:
+## Security Architecture
 
-```
-Browser ──► CloudFront ──► API Gateway ──► Lambda
-  │              │               │            │
-  │  x-origin-verify     JWT Authorizer  Origin verify
-  │  custom header       (Cognito)       middleware
-  │                                          │
-  │              Input validation ◄──────────┘
-  │              (sessionId, filename, S3 key,
-  │               content type, file size)
+Defense-in-depth with multiple layers. See [DDR-028](./design-decisions/DDR-028-security-hardening.md).
+
+```mermaid
+flowchart LR
+    Browser --> CloudFront
+    CloudFront -->|"x-origin-verify header"| APIGW["API Gateway"]
+    APIGW -->|"JWT Authorizer (Cognito)"| Lambda
+    Lambda -->|"Origin verify middleware\nInput validation\nContent-type allowlist\nRandom job IDs"| Processing["Process Request"]
 ```
 
-| Layer | Control | Purpose |
-|-------|---------|---------|
-| CloudFront | Origin-verify header | Blocks direct API Gateway access |
-| API Gateway | JWT authorizer (Cognito) | Authentication |
-| API Gateway | Default throttling (100 burst / 50 rps) | Rate limiting / DoS protection |
-| API Gateway | CORS locked to CloudFront domain | Cross-origin restriction |
-| Lambda | Origin-verify middleware | Defense-in-depth for header check |
-| Lambda | Input validation (UUID, filename regex) | Injection / traversal prevention |
-| Lambda | Content-type allowlist + size limits | Upload abuse prevention |
-| Lambda | Random job IDs (crypto/rand) | Enumeration prevention |
-| Lambda | Safe error messages | Information leak prevention |
-| S3 | CORS locked to CloudFront domain | Cross-origin restriction |
-
----
-
-## Media Selection Flow (Cloud Mode — DDR-029)
-
-Cloud mode is being extended from a triage-only workflow to a full media selection and publishing pipeline. The selection flow runs in cloud mode while the triage flow continues to operate in local mode unchanged.
-
-### Step 1: Upload Media
-
-The upload step uses the **File System Access API** (Chrome-only) for a native file/folder picking experience:
-
-```
-┌──────────────────────────────────────────────────┐
-│  Browser (Chrome on macOS)                        │
-│                                                    │
-│  ┌──────────────────────────────────────────────┐ │
-│  │ MediaUploader Component                       │ │
-│  │                                                │ │
-│  │ [Choose Files]  [Choose Folder]               │ │
-│  │  showOpenFilePicker()  showDirectoryPicker()  │ │
-│  │                                                │ │
-│  │ ┌─────────┐ ┌─────────┐ ┌─────────┐          │ │
-│  │ │ Thumb 1 │ │ Thumb 2 │ │ Thumb N │  ← Canvas│ │
-│  │ └─────────┘ └─────────┘ └─────────┘          │ │
-│  │ ═══════════════════ 67% ═══════    ← S3 PUT  │ │
-│  │                                                │ │
-│  │ Trip context: [3-day trip to Tokyo...]        │ │
-│  │                     [Continue to Selection →] │ │
-│  └──────────────────────────────────────────────┘ │
-└────────────────────────┬─────────────────────────┘
-                         │ PUT (presigned URL)
-                         ▼
-┌────────────────────────────────────────────────────┐
-│  S3 Media Bucket                                    │
-│  {sessionId}/IMG_001.jpg                            │
-│  {sessionId}/IMG_002.png                            │
-│  {sessionId}/VID_003.mp4                            │
-└────────────────────────────────────────────────────┘
-```
-
-**Key features:**
-
-- **File System Access API** — `showOpenFilePicker()` for individual files, `showDirectoryPicker()` with recursive scanning for folders
-- **Client-side thumbnails** — generated in-browser using `<canvas>` for images and `<video>` frame extraction for videos
-- **Media filtering** — folder picker iterates entries and only collects supported media types (JPEG, PNG, GIF, WebP, HEIC, MP4, MOV, etc.)
-- **Trip context** — text input describing the event (used by AI selection in later steps)
-- **Drag-and-drop** — retained as supplementary input method alongside the API buttons
-- **S3 upload** — reuses existing presigned PUT URL flow (no backend changes)
-
-See [DDR-029](./design-decisions/DDR-029-file-system-access-api-upload.md) for the full decision record.
-
-### Steps 2 & 3: AI Selection + Review (DDR-030)
-
-After upload, the user clicks "Continue to Selection" to trigger AI analysis.
-
-**Step 2 (AI Selection)** — Backend processing:
-
-1. API Lambda receives `POST /api/selection/start` with session ID and trip context
-2. Lists all media files in the session's S3 prefix
-3. Downloads files to `/tmp`, generates 400px thumbnails (goroutines, 10 concurrent)
-4. Uploads thumbnails to S3 at `{sessionId}/thumbnails/{filename}.jpg` (pre-generation cache)
-5. For images: generates 1024px thumbnails for Gemini (in-memory)
-6. For videos: compresses with ffmpeg (AV1+Opus) and uploads to Gemini Files API
-7. Sends ALL media to Gemini in a single API call for comparative analysis
-8. Gemini returns structured JSON with selected items, excluded items, and scene groups
-9. Frontend polls `GET /api/selection/{id}/results` every 3 seconds
-
-**Step 3 (Review Selection)** — Frontend review:
-
-- **Selected section**: Grid of thumbnails with rank badge, type badge, scene label, justification, and comparison notes
-- **Excluded section**: Collapsible grid with category badges, exclusion reasons, and duplicate references
-- **Scene groups**: Collapsible view showing media grouped by detected scenes (visual similarity + time/GPS gaps)
-- **Override**: User can move items between selected/excluded (client-side only)
-- **Confirm**: Proceeds to enhancement with the final selection
-
-**Key design decisions (DDR-030):**
-
-- **Structured JSON output**: Gemini returns a JSON object (not freeform text) for type-safe parsing
-- **No item limit**: AI selects all worthy items; post grouping (max 20 per carousel) happens in Step 6
-- **Thumbnail pre-generation**: Cached in S3 during selection; served directly for all downstream steps
-- **Video thumbnails**: Frame extraction at 1s using ffmpeg (replaces SVG placeholders)
-
-See [DDR-030](./design-decisions/DDR-030-cloud-selection-backend.md) for the full decision record.
-
-### Step 7: Download (DDR-034)
-
-After grouping media into post groups, the user can download each group's media as ZIP bundles.
-
-**Download bundling strategy:**
-
-1. **All images** in a post group are bundled into **one ZIP** (photos are typically small enough combined)
-2. **Videos** are split into **ZIP bundles of ≤ 375 MB each** — based on a 30-second download time at AT&T Internet Air's typical 100 Mbps speed in San Jose
-
-**Flow:**
-
-1. User clicks "Prepare Download" on a post group
-2. Backend queries each file's size via S3 `HeadObject`
-3. Backend groups files into bundles: 1 image ZIP + N video ZIPs (≤ 375 MB each)
-4. Backend creates each ZIP with **Zstandard (zstd) level 12 compression** by downloading from S3, compressing to `/tmp`, and uploading the ZIP back to S3
-5. Frontend polls for progress and displays download links as bundles complete
-6. Each download link is a presigned S3 GET URL (1-hour expiry) with `Content-Disposition: attachment`
-
-**API endpoints:**
-
-| Method | Path | Action |
-|--------|------|--------|
-| `POST` | `/api/download/start` | Start ZIP bundle creation for a post group |
-| `GET` | `/api/download/{id}/results` | Poll bundle creation status and download URLs |
-
-**Video grouping algorithm:** First-fit-decreasing bin packing — sorts videos by size (largest first), then fits each into the first bundle with remaining capacity ≤ 375 MB. Videos larger than 375 MB get their own bundle.
-
-See [DDR-034](./design-decisions/DDR-034-download-zip-bundling.md) for the full decision record.
-
-### Step 8: Post Description (DDR-036)
-
-AI-generated Instagram carousel captions with full media context and iterative feedback.
-
-**Flow:**
-
-1. After downloading, user clicks "Generate Captions" to proceed to the description step
-2. For each post group: backend sends thumbnails + compressed videos + post group label + trip context to Gemini
-3. Gemini returns a structured JSON caption with: caption text, 15-20 hashtags, and a suggested location tag
-4. User reviews the caption in an editable text area, can remove individual hashtags
-5. User can provide feedback (e.g., "make it shorter", "more casual") to regenerate with multi-turn conversation context
-6. User accepts the caption and proceeds to the next group (or finishes)
-
-**Key design choices:**
-
-- **Full media context**: Actual thumbnails and video frames are sent to Gemini, not just text metadata. This allows Gemini to reference specific visual details in the caption.
-- **Group label as primary context**: The descriptive label the user entered in Step 6 is the most important input for caption generation — it describes the user's intent for the post.
-- **Inline processing**: Runs within the API Lambda's 30-second timeout (thumbnails are small, Gemini responds in 5-15 seconds). No Step Functions needed.
-- **Structured JSON output**: Caption, hashtags, and location tag are returned as separate fields for rich frontend editing.
-- **Consistent brand voice**: `description-system.txt` prompt defines Francis's persona, tone, caption structure, and hashtag strategy.
-
-**API endpoints:**
-
-| Method | Path | Action |
-|--------|------|--------|
-| `POST` | `/api/description/generate` | Generate AI caption for a post group |
-| `GET` | `/api/description/{id}/results` | Poll caption generation results |
-| `POST` | `/api/description/{id}/feedback` | Regenerate caption with user feedback |
-
-See [DDR-036](./design-decisions/DDR-036-ai-post-description.md) for the full decision record.
-
-### Backend: Multi-Lambda + Step Functions Architecture (DDR-035)
-
-Steps 2+ require long-running parallel processing that cannot fit within API Gateway's 30-second timeout. The architecture splits into two orchestration patterns:
-
-1. **User-driven transitions** (upload -> review -> enhance -> group -> publish): Managed via DynamoDB state + frontend polling. The user controls the pace.
-2. **Within-step parallel processing** (generate N thumbnails, enhance N photos): Managed via **AWS Step Functions** Map state with built-in retry, concurrency throttling, and fan-in.
-
-```
-CloudFront ──► API Gateway ──► API Lambda ──► DynamoDB
-                                    │
-                                    ├──► Step Functions: SelectionPipeline
-                                    │       ├── Map: Thumbnail Lambda (per file, MaxConcurrency 20)
-                                    │       └── Selection Lambda (Gemini AI)
-                                    │
-                                    └──► Step Functions: EnhancementPipeline
-                                            ├── Map: Enhancement Lambda (per photo, MaxConcurrency 10)
-                                            └── Map: Video Lambda (per video, MaxConcurrency 5)
-```
-
-**Lambda functions:**
-
-| Lambda | Purpose | Memory | Timeout | Container |
-|--------|---------|--------|---------|-----------|
-| API Lambda | HTTP API, DynamoDB R/W, presigned URLs, start Step Functions | 256 MB | 30s | Light |
-| Thumbnail Lambda | Per-file thumbnail generation (image resize / video frame) | 512 MB | 2 min | Heavy |
-| Selection Lambda | Gemini AI media selection (all thumbnails + metadata) | 4 GB | 15 min | Heavy |
-| Enhancement Lambda | Per-photo Gemini image editing | 2 GB | 5 min | Light |
-| Video Processing Lambda | Per-video ffmpeg enhancement | 4 GB | 15 min | Heavy |
-
-Each Lambda is deployed as its own container image with exactly one Go binary. "Light" images (no ffmpeg, ~55 MB) are used for API and Enhancement. "Heavy" images (with ffmpeg, ~175 MB) are used for Thumbnail, Selection, and Video. See [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) for the image strategy and layer sharing.
-
-**Step Functions state machines:**
-
-| State Machine | Trigger | Flow |
-|---------------|---------|------|
-| `SelectionPipeline` | `POST /api/selection/start` | Map: generate thumbnails (parallel, MaxConcurrency 20) -> Selection Lambda (Gemini) |
-| `EnhancementPipeline` | `POST /api/enhance/start` | Parallel: Map enhance photos (MaxConcurrency 10) + Map process videos (MaxConcurrency 5) |
-
-Step Functions provides built-in parallel execution, per-item retry with backoff, concurrency throttling (`MaxConcurrency`), fan-in (wait for all), and visual execution monitoring. Cost is ~$0.002 per session (~$0.60/month at 10 sessions/day).
-
-**Infrastructure:**
-
-| Resource | Purpose |
-|----------|---------|
-| DynamoDB (`media-selection-sessions`) | Single-table session state with PK/SK, TTL auto-cleanup after 24h |
-| Step Functions (2 state machines) | Orchestrate parallel thumbnail generation and enhancement |
-| ECR (2 repositories) | Light images (no ffmpeg) and heavy images (with ffmpeg), with Docker layer deduplication |
-| SSM Parameter Store (new keys) | Instagram access token and user ID |
-
-**CI/CD (DDR-035):**
-
-Two independent CodePipelines:
-
-| Pipeline | Trigger | Flow |
-|----------|---------|------|
-| Frontend Pipeline | GitHub main branch | Preact SPA build -> S3 sync + CloudFront invalidation |
-| Backend Pipeline | GitHub main branch | 5 Docker builds (2 light + 3 heavy) -> 5 Lambda function updates |
-
-See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) for the full decision record.
-
----
+| Layer | Control |
+|-------|---------|
+| CloudFront | Origin-verify header, response security headers (CSP, HSTS) |
+| API Gateway | JWT authorizer (Cognito), throttling (100 burst / 50 rps), CORS |
+| Lambda | Origin-verify middleware, input validation, content-type allowlist, safe error messages |
+| S3 | CORS locked to CloudFront domain, OAC (no public access) |
 
 ## Frontend Components
 
 | Component | Mode | Purpose |
 |-----------|------|---------|
+| `LandingPage.tsx` | Cloud | Workflow chooser (triage vs selection) |
+| `FileUploader.tsx` | Cloud (triage) | Drag-and-drop S3 upload |
+| `MediaUploader.tsx` | Cloud (selection) | File System Access API pickers + trip context |
+| `SelectionView.tsx` | Cloud (selection) | AI selection results + review with override |
+| `EnhancementView.tsx` | Cloud (selection) | Photo enhancement with feedback loop |
+| `PostGrouper.tsx` | Cloud (selection) | Drag-and-drop media grouping into posts |
+| `DownloadView.tsx` | Cloud (selection) | ZIP bundle download |
+| `DescriptionEditor.tsx` | Cloud (selection) | AI caption generation with feedback |
+| `PublishView.tsx` | Cloud (selection) | Instagram publishing |
 | `FileBrowser.tsx` | Local | Native OS file picker via Go backend |
-| `FileUploader.tsx` | Cloud (triage) | Drag-and-drop S3 upload for triage flow |
-| `MediaUploader.tsx` | Cloud (selection) | File System Access API pickers, thumbnails, trip context (DDR-029) |
-| `SelectionView.tsx` | Cloud (selection) | AI selection processing + review with override (DDR-030) |
-| `EnhancementView.tsx` | Cloud (selection) | Photo enhancement with feedback loop (DDR-031) |
-| `PostGrouper.tsx` | Cloud (selection) | Drag-and-drop media grouping into posts (DDR-033) |
-| `DownloadView.tsx` | Cloud (selection) | ZIP bundle download with speed-based video grouping (DDR-034) |
-| `LoginForm.tsx` | Cloud | Cognito authentication UI (DDR-028) |
-| `SelectedFiles.tsx` | Both | File selection confirmation |
 | `TriageView.tsx` | Both | Triage results and deletion interface |
+| `LoginForm.tsx` | Cloud | Cognito authentication UI |
+
+## CI/CD
+
+Two independent CodePipelines triggered by GitHub pushes to main:
+
+| Pipeline | Flow |
+|----------|------|
+| Frontend | Preact build -> S3 sync -> CloudFront invalidation |
+| Backend | 5 Docker builds (2 light + 3 heavy) -> 5 Lambda function updates |
+
+## Related Documents
+
+- [MEDIA-TRIAGE.md](./MEDIA-TRIAGE.md) — Triage workflow
+- [MEDIA-SELECTION.md](./MEDIA-SELECTION.md) — Selection workflow
+- [IMAGE-PROCESSING.md](./IMAGE-PROCESSING.md) — Image technical details
+- [VIDEO-PROCESSING.md](./VIDEO-PROCESSING.md) — Video technical details
+- [AUTHENTICATION.md](./AUTHENTICATION.md) — Credential management and Cognito auth
+- [DOCKER-IMAGES.md](./DOCKER-IMAGES.md) — Docker image strategy and ECR layer sharing
 
 ---
 
-## Future Extensibility
-
-### Potential Enhancements
-
-1. **Custom domain** — ACM certificate + Route 53 for a friendly URL
-2. **AWS WAF** — Web Application Firewall with managed rule sets (~$6-8/mo, see DDR-028)
-3. **Google Drive storage provider** — Triage media already uploaded to Google Drive without re-downloading
-
----
-
-**Last Updated**: 2026-02-08
-**Updated for**: DDR-035 (Multi-Lambda Deployment Architecture)
-
+**Last Updated**: 2026-02-09

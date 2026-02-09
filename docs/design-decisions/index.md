@@ -12,6 +12,7 @@ For new decisions, use [design_template.md](./design_template.md).
 
 | ID | Date | Title | Status |
 |----|------|-------|--------|
+| [DDR-000](./DDR-000-language-selection-go.md) | 2025-12-30 | Language Selection: Go over Java | Accepted |
 | [DDR-001](./DDR-001-iterative-implementation.md) | 2025-12-30 | Iterative Implementation Approach | Accepted |
 | [DDR-002](./DDR-002-logging-before-features.md) | 2025-12-30 | Logging Infrastructure First | Accepted |
 | [DDR-003](./DDR-003-gpg-credential-storage.md) | 2025-12-30 | GPG Credential Storage | Accepted |
@@ -68,4 +69,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-042)
+**Last Updated**: 2026-02-09 (DDR-000, DDR-042)
