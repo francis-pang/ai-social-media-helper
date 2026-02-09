@@ -11,9 +11,10 @@ import {
 import {
   startSelection,
   getSelectionResults,
-  openFullImage,
+  isVideoFile,
 } from "../api/client";
 import { enhancementKeys } from "./EnhancementView";
+import { openMediaPlayer } from "./MediaPlayer";
 import type {
   SelectionItem,
   ExcludedItem,
@@ -254,7 +255,7 @@ function SelectedCard({
           src={item.thumbnailUrl}
           alt={item.filename}
           loading="lazy"
-          onClick={() => openFullImage(item.key)}
+          onClick={() => openMediaPlayer(item.key, item.type, item.filename)}
           style={{
             width: "100%",
             height: "100%",
@@ -408,7 +409,13 @@ function ExcludedCard({
           src={item.thumbnailUrl}
           alt={item.filename}
           loading="lazy"
-          onClick={() => openFullImage(item.key)}
+          onClick={() =>
+            openMediaPlayer(
+              item.key,
+              isVideoFile(item.filename) ? "Video" : "Photo",
+              item.filename,
+            )
+          }
           style={{
             width: "100%",
             height: "100%",

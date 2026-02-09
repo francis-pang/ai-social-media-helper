@@ -28,6 +28,7 @@ import {
   DescriptionEditor,
   resetDescriptionState,
 } from "./components/DescriptionEditor";
+import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
 
 /** Application steps across both workflows. */
@@ -260,6 +261,9 @@ export function App() {
       {currentStep.value === "description" && isCloudMode && (
         <DescriptionEditor />
       )}
+
+      {/* Global overlay media player (DDR-038) */}
+      <MediaPlayer />
     </div>
   );
 }

@@ -49,6 +49,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-035](./DDR-035-multi-lambda-deployment.md) | 2026-02-08 | Multi-Lambda Deployment Architecture | Implementing |
 | [DDR-036](./DDR-036-ai-post-description.md) | 2026-02-08 | AI Post Description Generation with Full Media Context | Accepted |
 | [DDR-037](./DDR-037-step-navigation-and-state-invalidation.md) | 2026-02-08 | Step Navigation UI and Downstream State Invalidation | Accepted |
+| [DDR-038](./DDR-038-overlay-media-player.md) | 2026-02-08 | Overlay Media Player for Inline Previews | Accepted |
 
 ---
 
@@ -63,4 +64,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-08 (DDR-037)
+**Last Updated**: 2026-02-08 (DDR-038)

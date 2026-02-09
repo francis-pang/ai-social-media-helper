@@ -5,9 +5,10 @@ import {
   getTriageResults,
   confirmTriage,
   thumbnailUrl,
-  openFullImage,
   isCloudMode,
+  isVideoFile,
 } from "../api/client";
+import { openMediaPlayer } from "./MediaPlayer";
 import type { TriageItem, TriageResults } from "../types/api";
 
 const results = signal<TriageResults | null>(null);
@@ -158,7 +159,11 @@ function MediaCard({
           loading="lazy"
           onClick={(e) => {
             e.stopPropagation();
-            openFullImage(itemId(item));
+            openMediaPlayer(
+              itemId(item),
+              isVideoFile(item.filename) ? "Video" : "Photo",
+              item.filename,
+            );
           }}
           style={{
             width: "100%",

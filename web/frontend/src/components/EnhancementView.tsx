@@ -11,9 +11,9 @@ import {
   startEnhancement,
   getEnhancementResults,
   submitEnhancementFeedback,
-  openFullImage,
   thumbnailUrl,
 } from "../api/client";
+import { openMediaPlayer } from "./MediaPlayer";
 import { groupableMedia } from "./PostGrouper";
 import type { EnhancementItem, EnhancementResults } from "../types/api";
 
@@ -395,7 +395,7 @@ function SideBySideComparison({ item }: { item: EnhancementItem }) {
             <img
               src={originalThumb}
               alt={`Original: ${item.filename}`}
-              onClick={() => openFullImage(item.originalKey)}
+              onClick={() => openMediaPlayer(item.originalKey, "Photo", item.filename)}
               style={{
                 width: "100%",
                 height: "100%",
@@ -446,7 +446,7 @@ function SideBySideComparison({ item }: { item: EnhancementItem }) {
               <img
                 src={enhancedThumb}
                 alt={`Enhanced: ${item.filename}`}
-                onClick={() => openFullImage(item.enhancedKey)}
+                onClick={() => openMediaPlayer(item.enhancedKey, "Photo", `${item.filename} (enhanced)`)}
                 style={{
                   width: "100%",
                   height: "100%",

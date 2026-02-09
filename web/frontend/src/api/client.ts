@@ -166,18 +166,36 @@ export function fullImageUrl(pathOrKey: string): string {
 }
 
 /**
- * Open a full image. In cloud mode, fetches a presigned URL first.
- * In local mode, opens the direct URL.
+ * Resolve the full-resolution URL for a media file.
+ * In cloud mode, fetches a presigned S3 URL from the backend.
+ * In local mode, returns the direct URL synchronously (wrapped in a Promise).
  */
-export async function openFullImage(pathOrKey: string): Promise<void> {
+export async function getFullMediaUrl(pathOrKey: string): Promise<string> {
   if (isCloudMode) {
     const res = await fetchJSON<FullImageResponse>(
       `/api/media/full?key=${encodeURIComponent(pathOrKey)}`,
     );
-    window.open(res.url, "_blank");
-  } else {
-    window.open(fullImageUrl(pathOrKey), "_blank");
+    return res.url;
   }
+  return fullImageUrl(pathOrKey);
+}
+
+/**
+ * Open a full image in a new browser tab. In cloud mode, fetches a presigned URL first.
+ * In local mode, opens the direct URL.
+ */
+export async function openFullImage(pathOrKey: string): Promise<void> {
+  const url = await getFullMediaUrl(pathOrKey);
+  window.open(url, "_blank");
+}
+
+/**
+ * Check if a filename refers to a video file based on its extension.
+ * Used by components that lack an explicit media type field (e.g., TriageView).
+ */
+export function isVideoFile(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return ["mp4", "mov", "avi", "mkv", "webm", "m4v", "3gp"].includes(ext);
 }
 
 // --- Selection APIs (DDR-030) ---
