@@ -31,10 +31,10 @@
 | Document | Description |
 |----------|-------------|
 | [configuration.md](./configuration.md) | Configuration options and environment variables |
-| [cli_ux.md](./cli_ux.md) | CLI user experience design |
+| [cli-ux.md](./cli-ux.md) | CLI user experience design |
 | [docker-images.md](./docker-images.md) | Docker image strategy, ECR layer sharing |
 | [operations.md](./operations.md) | Logging, observability, and error handling |
-| [offline_latency.md](./offline_latency.md) | Offline mode and latency considerations |
+| [offline-latency.md](./offline-latency.md) | Offline mode and latency considerations |
 | [testing.md](./testing.md) | Testing strategy and coverage goals |
 
 ## Design Decisions

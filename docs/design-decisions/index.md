@@ -4,7 +4,7 @@ Historical records of design decisions made during development.
 
 Design decisions are **append-only** records documenting why decisions were made at specific points in time, including context, alternatives considered, and trade-offs accepted.
 
-For new decisions, use [design_template.md](./design_template.md).
+For new decisions, use [design-template.md](./design-template.md).
 
 ---
 

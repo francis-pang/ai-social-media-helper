@@ -112,5 +112,5 @@ gemini-cli --help
 
 - [DDR-001: Iterative Implementation](./DDR-001-iterative-implementation.md) - Iteration 8 is part of Media Uploads phase
 - [DDR-014: Thumbnail Selection Strategy](./DDR-014-thumbnail-selection-strategy.md) - Directory scanning feeds into photo selection
-- [cli_ux.md](../cli_ux.md) - CLI design patterns and conventions
+- [cli-ux.md](../cli-ux.md) - CLI design patterns and conventions
 
