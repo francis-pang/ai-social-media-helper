@@ -1,0 +1,83 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"path/filepath"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/rs/zerolog/log"
+)
+
+// --- Presigned Upload URL ---
+
+// GET /api/upload-url?sessionId=...&filename=...&contentType=...
+// Returns a presigned S3 PUT URL so the browser can upload directly to S3.
+//
+// Security (DDR-028):
+//   - sessionId must be a valid UUID
+//   - filename is sanitized and validated against safe character set
+//   - contentType must be in the allowed media type list
+//   - Presigned URL includes Content-Length constraint to enforce size limits
+func handleUploadURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	sessionID := r.URL.Query().Get("sessionId")
+	filename := r.URL.Query().Get("filename")
+	contentType := r.URL.Query().Get("contentType")
+
+	if sessionID == "" || filename == "" || contentType == "" {
+		httpError(w, http.StatusBadRequest, "sessionId, filename, and contentType are required")
+		return
+	}
+
+	// Validate sessionId is a proper UUID (DDR-028 Problem 3)
+	if err := validateSessionID(sessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Sanitize and validate filename (DDR-028 Problem 4)
+	filename = filepath.Base(filename) // strip directory components
+	if err := validateFilename(filename); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Validate content type against allowlist (DDR-028 Problem 7)
+	if !allowedContentTypes[contentType] {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type: %s", contentType))
+		return
+	}
+
+	// Enforce file size limits (DDR-028 Problem 7)
+	sizeLimit := maxPhotoSize
+	if isVideoContentType(contentType) {
+		sizeLimit = maxVideoSize
+	}
+
+	key := sessionID + "/" + filename
+
+	result, err := presigner.PresignPutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:        &mediaBucket,
+		Key:           &key,
+		ContentType:   &contentType,
+		ContentLength: aws.Int64(sizeLimit),
+	}, s3.WithPresignExpires(15*time.Minute))
+	if err != nil {
+		log.Error().Err(err).Str("key", key).Msg("Failed to generate presigned URL")
+		httpError(w, http.StatusInternalServerError, "failed to generate upload URL")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"uploadUrl": result.URL,
+		"key":       key,
+	})
+}

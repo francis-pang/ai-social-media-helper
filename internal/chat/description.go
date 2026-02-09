@@ -14,11 +14,11 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/fpang/gemini-media-cli/internal/assets"
+	"github.com/fpang/gemini-media-cli/internal/jsonutil"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 )
@@ -369,52 +369,13 @@ func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []
 
 // parseDescriptionResponse extracts and parses the JSON caption from Gemini's response.
 func parseDescriptionResponse(response string) (*DescriptionResult, error) {
-	text := strings.TrimSpace(response)
-
-	// Strip markdown code fences if present
-	if strings.HasPrefix(text, "```") {
-		lines := strings.Split(text, "\n")
-		if len(lines) >= 3 {
-			startIdx := 1
-			endIdx := len(lines) - 1
-			for i := len(lines) - 1; i >= 0; i-- {
-				if strings.TrimSpace(lines[i]) == "```" {
-					endIdx = i
-					break
-				}
-			}
-			text = strings.Join(lines[startIdx:endIdx], "\n")
-		}
+	result, err := jsonutil.ParseJSON[DescriptionResult](response)
+	if err != nil {
+		log.Error().Str("response", response).Msg("Failed to parse description response")
+		return nil, fmt.Errorf("description response: %w", err)
 	}
-
-	text = strings.TrimSpace(text)
-
-	// Find JSON object
-	if !strings.HasPrefix(text, "{") {
-		startIdx := strings.Index(text, "{")
-		if startIdx == -1 {
-			log.Error().Str("response", response).Msg("No JSON object found in description response")
-			return nil, fmt.Errorf("no JSON object found in response")
-		}
-		text = text[startIdx:]
-	}
-
-	if endIdx := strings.LastIndex(text, "}"); endIdx != -1 {
-		text = text[:endIdx+1]
-	}
-
-	var result DescriptionResult
-	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		log.Error().
-			Err(err).
-			Str("json_text", truncateString(text, 500)).
-			Msg("Failed to parse description JSON")
-		return nil, fmt.Errorf("invalid JSON in description response: %w", err)
-	}
-
 	if result.Caption == "" {
 		return nil, fmt.Errorf("empty caption in description response")
 	}
-
 	return &result, nil
 }

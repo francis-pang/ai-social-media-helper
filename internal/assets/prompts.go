@@ -58,6 +58,20 @@ var VideoEnhancementSystemPrompt string
 //go:embed prompts/video-enhancement-analysis.txt
 var VideoEnhancementAnalysisPrompt string
 
+// MediaSelectionSystemPrompt provides context for mixed media (photo + video) selection tasks.
+// See DDR-020: Mixed Media Selection Strategy.
+// See DDR-017: Francis Reference Photo for Person Identification.
+//
+//go:embed prompts/media-selection-system.txt
+var MediaSelectionSystemPrompt string
+
+// MediaSelectionJSONSystemPrompt provides context for structured JSON media selection tasks.
+// See DDR-030: Cloud Selection Backend Architecture.
+// See DDR-017: Francis Reference Photo for Person Identification.
+//
+//go:embed prompts/media-selection-json-system.txt
+var MediaSelectionJSONSystemPrompt string
+
 // DescriptionSystemPrompt provides instructions for AI-generated Instagram carousel captions.
 // See DDR-036: AI Post Description Generation with Full Media Context.
 //

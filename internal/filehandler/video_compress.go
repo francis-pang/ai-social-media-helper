@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"time"
 
+	"github.com/fpang/gemini-media-cli/internal/metrics"
 	"github.com/rs/zerolog/log"
 )
 
@@ -113,10 +115,16 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 		Msg("Running FFmpeg compression")
 
 	// Run FFmpeg with context for cancellation support
+	ffmpegStart := time.Now()
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	output, err := cmd.CombinedOutput()
+	ffmpegElapsed := time.Since(ffmpegStart)
 	if err != nil {
 		cleanup() // Clean up temp file on error
+		metrics.New("AiSocialMedia").
+			Metric("VideoCompressionMs", float64(ffmpegElapsed.Milliseconds()), metrics.UnitMilliseconds).
+			Count("VideoCompressionErrors").
+			Flush()
 		return "", 0, nil, fmt.Errorf("ffmpeg compression failed: %w\nOutput: %s", err, string(output))
 	}
 
@@ -134,12 +142,25 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 		inputSize = inputInfo.Size()
 	}
 
+	compressionRatio := float64(0)
+	if outputSize > 0 {
+		compressionRatio = float64(inputSize) / float64(outputSize)
+	}
+
+	// Emit video compression metrics
+	metrics.New("AiSocialMedia").
+		Metric("VideoCompressionMs", float64(ffmpegElapsed.Milliseconds()), metrics.UnitMilliseconds).
+		Metric("MediaFileSizeBytes", float64(inputSize), metrics.UnitBytes).
+		Metric("VideoCompressionRatio", compressionRatio, metrics.UnitNone).
+		Count("VideoCompressions").
+		Flush()
+
 	log.Info().
 		Str("input", filepath.Base(inputPath)).
 		Str("output", filepath.Base(outputPath)).
 		Int64("input_size_mb", inputSize/(1024*1024)).
 		Int64("output_size_mb", outputSize/(1024*1024)).
-		Float64("compression_ratio", float64(inputSize)/float64(outputSize)).
+		Float64("compression_ratio", compressionRatio).
 		Msg("Video compression complete")
 
 	return outputPath, outputSize, cleanup, nil

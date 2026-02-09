@@ -3,15 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/fpang/gemini-media-cli/internal/auth"
 	"github.com/fpang/gemini-media-cli/internal/chat"
+	"github.com/fpang/gemini-media-cli/internal/cli"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
 	"github.com/rs/zerolog/log"
@@ -67,77 +66,18 @@ func main() {
 func runMain(cmd *cobra.Command, args []string) {
 	logging.Init()
 
-	// Determine directory path
+	// Determine and validate directory path
 	dirPath := directoryFlag
 	if dirPath == "" {
-		dirPath = promptForDirectory()
+		dirPath = cli.PromptForDirectory()
 	}
-
-	// Validate directory exists
-	info, err := os.Stat(dirPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Fatal().Str("path", dirPath).Msg("Directory not found")
-		}
-		log.Fatal().Err(err).Str("path", dirPath).Msg("Failed to access directory")
-	}
-	if !info.IsDir() {
-		log.Fatal().Str("path", dirPath).Msg("Path is not a directory")
-	}
-
-	// Convert to absolute path for cleaner display
-	absPath, err := filepath.Abs(dirPath)
-	if err == nil {
-		dirPath = absPath
-	}
+	dirPath = cli.ValidateAndResolveDirectory(dirPath)
 
 	// Initialize Gemini client
-	apiKey, err := auth.GetAPIKey()
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to retrieve API key")
-	}
-
-	ctx := context.Background()
-	client, err := chat.NewGeminiClient(ctx, apiKey)
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to create Gemini client")
-	}
-
-	log.Info().Msg("connection successful - Gemini client initialized")
-
-	// Validate API key
-	if err := auth.ValidateAPIKey(ctx, client); err != nil {
-		handleValidationError(err)
-	}
-
-	log.Info().Msg("API key validation complete - ready for operations")
+	ctx, client := cli.InitGeminiClient()
 
 	// Run triage
 	runTriage(ctx, client, dirPath)
-}
-
-// promptForDirectory prompts the user interactively for a directory path.
-func promptForDirectory() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
-	}
-
-	fmt.Printf("Directory [%s]: ", cwd)
-
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to read input, using current directory")
-		return cwd
-	}
-
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return cwd
-	}
-
-	return input
 }
 
 // runTriage scans a directory, evaluates media quality with AI, and offers to delete unsaveable files.
@@ -235,6 +175,7 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 				aiVideoCount++
 			}
 		}
+		_ = aiImageCount // used for display
 
 		if aiVideoCount > 0 {
 			fmt.Println("Compressing videos...")
@@ -390,39 +331,4 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 		fmt.Printf(", %d error(s)", deleteErrors)
 	}
 	fmt.Printf(", reclaimed %.1f MB\n", float64(totalDiscardSize)/(1024*1024))
-}
-
-// formatDurationShort formats a duration in a short format (M:SS or H:MM:SS).
-func formatDurationShort(d time.Duration) string {
-	totalSeconds := int(d.Seconds())
-	hours := totalSeconds / 3600
-	minutes := (totalSeconds % 3600) / 60
-	seconds := totalSeconds % 60
-
-	if hours > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
-	}
-	return fmt.Sprintf("%d:%02d", minutes, seconds)
-}
-
-// handleValidationError processes validation errors and exits with appropriate messaging.
-func handleValidationError(err error) {
-	var validationErr *auth.ValidationError
-	if errors.As(err, &validationErr) {
-		switch validationErr.Type {
-		case auth.ErrTypeNoKey:
-			log.Fatal().Msg("No API key configured. Set GEMINI_API_KEY or run scripts/setup-gpg-credentials.sh")
-		case auth.ErrTypeInvalidKey:
-			log.Fatal().Err(err).Msg("Invalid API key. Please check your API key and try again")
-		case auth.ErrTypeNetworkError:
-			log.Fatal().Err(err).Msg("Network error. Please check your internet connection")
-		case auth.ErrTypeQuotaExceeded:
-			log.Fatal().Err(err).Msg("API quota exceeded. Please try again later or check your usage limits")
-		default:
-			log.Fatal().Err(err).Msg("API key validation failed")
-		}
-	} else {
-		log.Fatal().Err(err).Msg("unexpected error during API key validation")
-	}
-	os.Exit(1)
 }

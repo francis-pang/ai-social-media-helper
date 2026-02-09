@@ -8,8 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"time"
+
 	"github.com/fpang/gemini-media-cli/internal/assets"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
+	"github.com/fpang/gemini-media-cli/internal/jsonutil"
+	"github.com/fpang/gemini-media-cli/internal/metrics"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 )
@@ -237,7 +241,24 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 
 	// Generate content
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	geminiStart := time.Now()
 	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+	geminiElapsed := time.Since(geminiStart)
+
+	// Emit Gemini API metrics
+	m := metrics.New("AiSocialMedia").
+		Dimension("Operation", "triage").
+		Metric("GeminiApiLatencyMs", float64(geminiElapsed.Milliseconds()), metrics.UnitMilliseconds).
+		Count("GeminiApiCalls")
+	if err != nil {
+		m.Count("GeminiApiErrors")
+	}
+	if resp != nil && resp.UsageMetadata != nil {
+		m.Metric("GeminiInputTokens", float64(resp.UsageMetadata.PromptTokenCount), metrics.UnitCount)
+		m.Metric("GeminiOutputTokens", float64(resp.UsageMetadata.CandidatesTokenCount), metrics.UnitCount)
+	}
+	m.Flush()
+
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to generate triage from Gemini")
 		return nil, fmt.Errorf("failed to generate content: %w", err)
@@ -268,69 +289,16 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 }
 
 // parseTriageResponse extracts and parses the JSON array from Gemini's response.
-// It handles cases where Gemini wraps the JSON in markdown code fences.
 func parseTriageResponse(response string) ([]TriageResult, error) {
-	// Trim whitespace
-	text := strings.TrimSpace(response)
-
-	// Strip markdown code fences if present (```json ... ``` or ``` ... ```)
-	if strings.HasPrefix(text, "```") {
-		lines := strings.Split(text, "\n")
-		// Remove first line (```json or ```) and last line (```)
-		if len(lines) >= 3 {
-			startIdx := 1
-			endIdx := len(lines) - 1
-			// Find the closing ```
-			for i := len(lines) - 1; i >= 0; i-- {
-				if strings.TrimSpace(lines[i]) == "```" {
-					endIdx = i
-					break
-				}
-			}
-			text = strings.Join(lines[startIdx:endIdx], "\n")
-		}
+	results, err := jsonutil.ParseJSON[[]TriageResult](response)
+	if err != nil {
+		log.Error().Str("response", response).Msg("Failed to parse triage response")
+		return nil, fmt.Errorf("triage response: %w", err)
 	}
-
-	text = strings.TrimSpace(text)
-
-	// Try to find JSON array in the text if it's embedded in other text
-	if !strings.HasPrefix(text, "[") {
-		startIdx := strings.Index(text, "[")
-		if startIdx == -1 {
-			// Log the raw response for debugging
-			log.Error().Str("response", response).Msg("No JSON array found in triage response")
-			return nil, fmt.Errorf("no JSON array found in response")
-		}
-		text = text[startIdx:]
-	}
-
-	// Find the matching closing bracket
-	if endIdx := strings.LastIndex(text, "]"); endIdx != -1 {
-		text = text[:endIdx+1]
-	}
-
-	var results []TriageResult
-	if err := json.Unmarshal([]byte(text), &results); err != nil {
-		log.Error().
-			Err(err).
-			Str("json_text", text[:min(len(text), 500)]).
-			Msg("Failed to parse triage JSON")
-		return nil, fmt.Errorf("invalid JSON in triage response: %w", err)
-	}
-
 	if len(results) == 0 {
 		return nil, fmt.Errorf("empty results array in triage response")
 	}
-
 	return results, nil
-}
-
-// min returns the smaller of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // WriteTriageReport writes the triage results as a JSON file alongside the media directory.

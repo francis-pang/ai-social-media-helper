@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/fpang/gemini-media-cli/internal/metrics"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 )
@@ -51,19 +53,53 @@ func ValidateAPIKey(ctx context.Context, client *genai.Client) error {
 
 	// Use Gemini 3 Flash Preview (free tier compatible)
 	// Make a minimal request to validate the API key
+	start := time.Now()
 	resp, err := client.Models.GenerateContent(ctx, "gemini-3-flash-preview", genai.Text("hi"), nil)
+	elapsed := time.Since(start)
+
+	// Emit validation metrics
+	result := "success"
 	if err != nil {
-		return classifyError(err)
+		valErr := classifyError(err)
+		switch valErr.Type {
+		case ErrTypeInvalidKey:
+			result = "invalid"
+		case ErrTypeNetworkError:
+			result = "network_error"
+		case ErrTypeQuotaExceeded:
+			result = "quota"
+		default:
+			result = "unknown"
+		}
+
+		metrics.New("AiSocialMedia").
+			Dimension("Result", result).
+			Metric("ApiKeyValidationMs", float64(elapsed.Milliseconds()), metrics.UnitMilliseconds).
+			Count("ApiKeyValidationResult").
+			Flush()
+
+		return valErr
 	}
 
 	// Verify we got a valid response
 	if resp == nil || len(resp.Candidates) == 0 {
 		log.Warn().Msg("API key validation returned empty response")
+		metrics.New("AiSocialMedia").
+			Dimension("Result", "empty_response").
+			Metric("ApiKeyValidationMs", float64(elapsed.Milliseconds()), metrics.UnitMilliseconds).
+			Count("ApiKeyValidationResult").
+			Flush()
 		return &ValidationError{
 			Type:    ErrTypeUnknown,
 			Message: "API returned empty response",
 		}
 	}
+
+	metrics.New("AiSocialMedia").
+		Dimension("Result", result).
+		Metric("ApiKeyValidationMs", float64(elapsed.Milliseconds()), metrics.UnitMilliseconds).
+		Count("ApiKeyValidationResult").
+		Flush()
 
 	log.Info().Msg("API key validated successfully")
 	return nil
