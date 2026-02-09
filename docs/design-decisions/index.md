@@ -53,6 +53,7 @@ For new decisions, use [design_template.md](./design_template.md).
 | [DDR-039](./DDR-039-dynamodb-session-store.md) | 2026-02-09 | DynamoDB SessionStore for Persistent Multi-Step State | Implementing |
 | [DDR-040](./DDR-040-instagram-publishing-client.md) | 2026-02-09 | Instagram Publishing Client | Accepted |
 | [DDR-041](./DDR-041-container-registry-strategy.md) | 2026-02-09 | Container Registry Strategy — ECR Private + ECR Public | Accepted |
+| [DDR-042](./DDR-042-landing-page-workflow-switcher.md) | 2026-02-09 | Landing Page Workflow Switcher | Accepted |
 
 ---
 
@@ -67,4 +68,4 @@ For new decisions, use [design_template.md](./design_template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-041)
+**Last Updated**: 2026-02-09 (DDR-042)

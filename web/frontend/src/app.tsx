@@ -12,6 +12,7 @@ import {
   EnhancementView,
   resetEnhancementState,
 } from "./components/EnhancementView";
+import { LandingPage } from "./components/LandingPage";
 import { LoginForm } from "./components/LoginForm";
 import { MediaUploader } from "./components/MediaUploader";
 import {
@@ -34,14 +35,19 @@ import {
 } from "./components/PublishView";
 import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
+import { FileUploader, resetFileUploaderState } from "./components/FileUploader";
 
 /** Application steps across both workflows. */
 export type Step =
-  // Triage flow (local mode)
+  // Landing page (cloud mode — DDR-042)
+  | "landing"
+  // Triage flow (local mode or cloud triage)
   | "browse"
   | "confirm-files"
   | "processing"
   | "results"
+  // Cloud triage flow (DDR-042) — upload then triage
+  | "triage-upload"
   // Selection flow (cloud mode — DDR-029)
   | "upload"
   | "selecting"
@@ -53,7 +59,16 @@ export type Step =
   | "description"
   | "instagram-publish";
 
-export const currentStep = signal<Step>(isCloudMode ? "upload" : "browse");
+/**
+ * Active workflow — which feature the user chose from the landing page (DDR-042).
+ * - "triage": Media triage (identify unsaveable media)
+ * - "selection": Media selection pipeline (select, enhance, group, publish)
+ * - null: Not yet chosen (on landing page)
+ */
+export type Workflow = "triage" | "selection" | null;
+export const activeWorkflow = signal<Workflow>(isCloudMode ? null : "triage");
+
+export const currentStep = signal<Step>(isCloudMode ? "landing" : "browse");
 export const selectedPaths = signal<string[]>([]);
 export const triageJobId = signal<string | null>(null);
 
@@ -154,16 +169,26 @@ export async function invalidateDownstream(
   }
 }
 
-/** Application title — differs by mode. */
-const appTitle = isCloudMode ? "Media Selection" : "Media Triage";
+/** Application title — dynamic based on active workflow (DDR-042). */
+const appTitle = computed(() => {
+  if (!isCloudMode) return "Media Triage";
+  if (activeWorkflow.value === "triage") return "Media Triage";
+  if (activeWorkflow.value === "selection") return "Media Tools";
+  return "Media Tools";
+});
 
 const stepTitle = computed(() => {
   switch (currentStep.value) {
+    // Landing page
+    case "landing":
+      return "Choose a Tool";
     // Triage flow
     case "browse":
       return "Select Media";
     case "confirm-files":
       return "Confirm Selection";
+    case "triage-upload":
+      return "Upload Media";
     case "processing":
       return "Processing...";
     case "results":
@@ -190,8 +215,35 @@ const stepTitle = computed(() => {
   }
 });
 
-/** Whether the current step is part of the cloud selection flow. */
-const isCloudStep = computed(() => stepToNavIndex(currentStep.value) >= 0);
+/**
+ * Navigate back to the landing page, resetting workflow state (DDR-042).
+ * Called when user clicks the app title or "Back to Home" button.
+ */
+export function navigateToLanding() {
+  activeWorkflow.value = null;
+  currentStep.value = "landing";
+  stepHistory.value = [];
+  selectedPaths.value = [];
+  triageJobId.value = null;
+  uploadSessionId.value = null;
+  tripContext.value = "";
+  // Reset all downstream component state
+  resetSelectionState();
+  resetEnhancementState();
+  resetPostGrouperState();
+  resetDownloadState();
+  resetDescriptionState();
+  resetPublishState();
+  resetFileUploaderState();
+}
+
+/** Whether the current step is part of the cloud selection flow (shows step navigator). */
+const isSelectionStep = computed(
+  () => activeWorkflow.value === "selection" && stepToNavIndex(currentStep.value) >= 0,
+);
+
+/** Whether we're on the landing page. */
+const isOnLanding = computed(() => currentStep.value === "landing");
 
 export function App() {
   // Show loading indicator while checking existing session
@@ -208,7 +260,7 @@ export function App() {
     return (
       <div>
         <header style={{ marginBottom: "2rem" }}>
-          <h1>{appTitle}</h1>
+          <h1>{appTitle.value}</h1>
         </header>
         <LoginForm />
       </div>
@@ -219,35 +271,63 @@ export function App() {
     <div>
       <header
         style={{
-          marginBottom: isCloudStep.value ? "1rem" : "2rem",
+          marginBottom: isSelectionStep.value ? "1rem" : "2rem",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
         }}
       >
         <div>
-          <h1>{appTitle}</h1>
+          <h1
+            onClick={isCloudMode && !isOnLanding.value ? navigateToLanding : undefined}
+            style={{
+              cursor: isCloudMode && !isOnLanding.value ? "pointer" : "default",
+            }}
+            title={isCloudMode && !isOnLanding.value ? "Back to Home" : undefined}
+          >
+            {appTitle.value}
+          </h1>
           <p style={{ color: "var(--color-text-secondary)" }}>
             {stepTitle.value}
           </p>
         </div>
-        {isAuthRequired() && (
-          <button
-            class="outline"
-            onClick={() => signOut()}
-            style={{ fontSize: "0.8125rem" }}
-          >
-            Sign Out
-          </button>
-        )}
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          {/* Back to Home button — cloud mode, not on landing (DDR-042) */}
+          {isCloudMode && !isOnLanding.value && (
+            <button
+              class="outline"
+              onClick={navigateToLanding}
+              style={{ fontSize: "0.8125rem" }}
+            >
+              Home
+            </button>
+          )}
+          {isAuthRequired() && (
+            <button
+              class="outline"
+              onClick={() => signOut()}
+              style={{ fontSize: "0.8125rem" }}
+            >
+              Sign Out
+            </button>
+          )}
+        </div>
       </header>
 
-      {/* Step navigator — cloud mode only (DDR-037) */}
-      {isCloudMode && isCloudStep.value && <StepNavigator />}
+      {/* Landing page — cloud mode workflow chooser (DDR-042) */}
+      {currentStep.value === "landing" && isCloudMode && <LandingPage />}
+
+      {/* Step navigator — selection workflow only (DDR-037) */}
+      {isCloudMode && isSelectionStep.value && <StepNavigator />}
 
       {/* Triage flow — local mode */}
       {currentStep.value === "browse" && !isCloudMode && <FileBrowser />}
       {currentStep.value === "confirm-files" && <SelectedFiles />}
+
+      {/* Triage flow — cloud triage upload (DDR-042) */}
+      {currentStep.value === "triage-upload" && isCloudMode && <FileUploader />}
+
+      {/* Triage results — both local and cloud triage */}
       {(currentStep.value === "processing" ||
         currentStep.value === "results") && <TriageView />}
 

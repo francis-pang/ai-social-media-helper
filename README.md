@@ -129,10 +129,10 @@ The same triage workflow is also available as a cloud-hosted service:
 - **Backend**: Go Lambda function behind API Gateway
 - **Storage**: S3 with presigned URL uploads (files auto-expire after 24 hours)
 
-The cloud version supports two workflows:
+The cloud version presents a **landing page** where users choose between two workflows (DDR-042):
 
 - **Media Triage**: Drag-and-drop file upload → AI evaluation → delete bad files
-- **Media Selection** (new): File/folder picker → AI-powered selection → review with override (DDR-029, DDR-030)
+- **Media Selection**: File/folder picker → AI-powered selection → enhance → group → caption → publish (DDR-029, DDR-030)
 
 Files are uploaded directly to S3 via presigned PUT URLs. The selection workflow uses Chrome's File System Access API for native file/folder picking with recursive media filtering and client-side thumbnail generation. After upload, Gemini analyzes all media in a single call for comparative selection (scene detection, deduplication, content evaluation) and returns structured JSON results. The review UI displays selected/excluded items with justifications, scene groups, and user override capability.
 
@@ -241,6 +241,7 @@ ai-social-media-helper/
 │           ├── components/
 │           │   ├── FileBrowser.tsx    # Native OS picker (Phase 1)
 │           │   ├── FileUploader.tsx   # Drag-and-drop S3 upload (triage, Phase 2)
+│           │   ├── LandingPage.tsx    # Workflow chooser (DDR-042)
 │           │   ├── MediaUploader.tsx  # File System Access API upload (selection, DDR-029)
 │           │   ├── SelectedFiles.tsx  # Confirm selection (both modes)
 │           │   └── TriageView.tsx     # Results and deletion (both modes)
@@ -254,7 +255,7 @@ ai-social-media-helper/
 │   └── assets/             # Embedded prompts and reference photos
 ├── scripts/                 # Setup scripts
 ├── docs/                    # Design documentation
-│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-041)
+│   ├── design-decisions/   # Historical decision records (DDR-001 to DDR-042)
 │   ├── DOCKER-IMAGES.md    # Docker image strategy, ECR layer sharing, and registry strategy (DDR-035, DDR-041)
 │   └── ...                 # See docs/index.md
 ├── Makefile                 # Build orchestration
@@ -334,6 +335,7 @@ go test -cover ./...
 - [x] Media selection Step 3: Review selection with override, scene groups, and exclusion reasons (DDR-030)
 - [x] Multi-Lambda deployment: 5 Lambdas, 2 Step Functions, DynamoDB, 2 ECR repos, split pipelines (DDR-035)
 - [x] Container registry strategy: ECR Private for proprietary code, ECR Public for generic images (DDR-041)
+- [x] Landing page workflow switcher: choose between triage and selection in cloud mode (DDR-042)
 - [ ] Media selection Step 4-5: AI-powered media enhancement with feedback loops
 - [ ] Media selection Step 6-7: Post grouping, publishing/download
 - [x] Media selection Step 8: AI post description with full media context and iterative feedback (DDR-036)

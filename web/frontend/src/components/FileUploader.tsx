@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
-import { getUploadUrl, uploadToS3 } from "../api/client";
-import { currentStep, selectedPaths, uploadSessionId } from "../app";
+import { getUploadUrl, uploadToS3, startTriage } from "../api/client";
+import { selectedPaths, uploadSessionId, triageJobId, navigateToStep } from "../app";
 
 /** Media file MIME types accepted by the uploader. */
 const ACCEPT =
@@ -116,15 +116,34 @@ function clearAll() {
   uploadSessionId.value = null;
 }
 
-function proceedWithSelection() {
+/** Reset FileUploader state (called from navigateToLanding — DDR-042). */
+export function resetFileUploaderState() {
+  files.value = [];
+  error.value = null;
+}
+
+/** Proceed to triage: start the triage job and navigate to processing (DDR-042). */
+async function proceedToTriage() {
   const uploadedKeys = files.value
     .filter((f) => f.status === "done")
     .map((f) => f.key);
 
   if (uploadedKeys.length === 0) return;
 
+  const sessionId = uploadSessionId.value;
+  if (!sessionId) return;
+
+  error.value = null;
   selectedPaths.value = uploadedKeys;
-  currentStep.value = "confirm-files";
+
+  try {
+    // Cloud triage uses sessionId — Lambda lists S3 objects with this prefix
+    const res = await startTriage({ sessionId });
+    triageJobId.value = res.id;
+    navigateToStep("processing");
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "Failed to start triage";
+  }
 }
 
 function formatSize(bytes: number): string {
@@ -353,10 +372,10 @@ export function FileUploader() {
             </button>
             <button
               class="primary"
-              onClick={proceedWithSelection}
+              onClick={proceedToTriage}
               disabled={!allDone || doneCount === 0}
             >
-              Continue
+              Continue to Triage
             </button>
           </div>
         </div>

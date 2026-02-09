@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { currentStep, triageJobId, selectedPaths, uploadSessionId } from "../app";
+import { currentStep, triageJobId, selectedPaths, uploadSessionId, navigateToLanding } from "../app";
 import {
   getTriageResults,
   confirmTriage,
@@ -106,7 +106,12 @@ function startOver() {
   triageJobId.value = null;
   selectedPaths.value = [];
   uploadSessionId.value = null;
-  currentStep.value = "browse";
+  // In cloud mode, go back to landing page; in local mode, go back to file browser (DDR-042)
+  if (isCloudMode) {
+    navigateToLanding();
+  } else {
+    currentStep.value = "browse";
+  }
 }
 
 function formatBytes(bytes: number): string {

@@ -71,7 +71,7 @@ ai-social-media-helper/
 │   ├── design-decisions/             # Historical decision records
 │   │   ├── index.md                  # Decision index
 │   │   ├── design_template.md        # ADR template
-│   │   └── DDR-*.md                  # Individual decisions (DDR-001 through DDR-041)
+│   │   └── DDR-*.md                  # Individual decisions (DDR-001 through DDR-042)
 │   ├── authentication.md             # Auth design
 │   ├── configuration.md              # Config options
 │   ├── operations.md                 # Logging/observability

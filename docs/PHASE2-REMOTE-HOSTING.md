@@ -218,9 +218,17 @@ Infrastructure is defined in the `ai-social-media-helper-deploy` repository usin
 ## Current Limitations
 
 1. **Video triage not supported in Lambda** — no FFmpeg/FFprobe in the Lambda runtime; only images are processed. Videos uploaded to S3 are skipped during triage. Can be addressed by adding an FFmpeg Lambda layer.
-2. **No authentication** — the CloudFront distribution is publicly accessible. Single-user personal tool; add Cognito if multi-user is needed.
-3. **No custom domain** — served from `d10rlnv7vz8qt7.cloudfront.net`. Add ACM certificate + Route 53 for a friendly URL.
+2. **No custom domain** — served from `d10rlnv7vz8qt7.cloudfront.net`. Add ACM certificate + Route 53 for a friendly URL.
+
+## Landing Page (DDR-042)
+
+As of 2026-02-09, the cloud deployment shows a **landing page** that lets users choose between:
+
+- **Media Triage** — upload files, AI identifies unsaveable media, review and delete
+- **Media Selection** — full pipeline: upload, select, enhance, group, caption, publish
+
+This replaced the previous build-time `VITE_CLOUD_MODE` switching that only exposed the selection workflow in cloud mode. Both workflows are now accessible from a single deployment.
 
 ---
 
-**Last Updated**: 2026-02-07
+**Last Updated**: 2026-02-09
