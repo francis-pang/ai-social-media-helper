@@ -1,4 +1,4 @@
-.PHONY: all build-frontend build-web build-select build-triage clean
+.PHONY: all build-frontend build-web build-select build-triage clean deploy-frontend
 .PHONY: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video build-lambdas
 .PHONY: build-lambda-triage build-lambda-description build-lambda-download build-lambda-publish
 .PHONY: ecr-login push-api push-triage push-description push-download push-publish push-thumbnail push-selection push-enhance push-video push-webhook push-oauth push-all
@@ -52,6 +52,15 @@ build-lambda-publish:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bootstrap-publish ./cmd/publish-lambda
 
 build-lambdas: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video build-lambda-triage build-lambda-description build-lambda-download build-lambda-publish
+
+# Deploy frontend to S3 + CloudFront (manual deploy bypassing FrontendPipeline)
+# Usage: make deploy-frontend
+# Optional: FRONTEND_BUCKET=... CLOUDFRONT_DIST_ID=... make deploy-frontend
+FRONTEND_BUCKET ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaStorage --region us-east-1 --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' --output text 2>/dev/null || echo "ai-social-media-frontend-681565534940")
+CLOUDFRONT_DIST_ID ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaFrontend --region us-east-1 --query 'Stacks[0].Outputs[?OutputKey==`DistributionId`].OutputValue' --output text 2>/dev/null || echo "EWSMFGGJI6TSW")
+deploy-frontend: build-frontend
+	aws s3 sync web/frontend/dist s3://$(FRONTEND_BUCKET) --delete
+	aws cloudfront create-invalidation --distribution-id $(CLOUDFRONT_DIST_ID) --paths "/*"
 
 # Development: run Go server with API only (frontend uses Vite dev server)
 dev-api:
