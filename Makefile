@@ -1,6 +1,6 @@
 .PHONY: all build-frontend build-web build-select build-triage clean
 .PHONY: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video build-lambdas
-.PHONY: ecr-login push-api push-thumbnail push-selection push-enhance push-video push-webhook
+.PHONY: ecr-login push-api push-worker push-thumbnail push-selection push-enhance push-video push-webhook push-oauth push-all
 
 # Build all binaries
 all: build-select build-triage build-web
@@ -51,64 +51,101 @@ dev-frontend:
 # =========================================================================
 # Local Lambda Quick-Push (DDR-047: bypass CodePipeline for dev iteration)
 # Usage: make push-api  (auto-detects ACCOUNT and REGION)
+#        make push-all  (rebuild and deploy all 8 Lambdas)
+#
+# Function names are CDK-generated (stable unless construct tree changes).
+# To find current names: aws lambda list-functions --region us-east-1 \
+#   --query 'Functions[?starts_with(FunctionName,`AiSocialMedia`)].FunctionName'
 # =========================================================================
 ACCOUNT ?= $(shell aws sts get-caller-identity --query Account --output text)
 REGION  ?= us-east-1
-PRIVATE_LIGHT = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-lambda-light
-PRIVATE_HEAVY = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-lambda-heavy
+PRIVATE_LIGHT   = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-lambda-light
+PRIVATE_HEAVY   = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-lambda-heavy
 PRIVATE_WEBHOOK = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-webhook
+PRIVATE_OAUTH   = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-oauth
+
+# Lambda function names (from CDK stacks: AiSocialMediaBackend, AiSocialMediaWebhook)
+FN_API       ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`ApiLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_WORKER    ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`WorkerLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_ENHANCE   ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`EnhancementProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
+FN_THUMBNAIL ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`ThumbnailProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
+FN_SELECTION ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`SelectionProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
+FN_VIDEO     ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`VideoProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
+FN_WEBHOOK   ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaWebhook --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`WebhookLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_OAUTH     ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaWebhook --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`OAuthLambdaName`].OutputValue' --output text 2>/dev/null)
+
+# --provenance=false: required for Lambda-compatible Docker image manifest format
+DOCKER_BUILD = DOCKER_BUILDKIT=1 docker build --provenance=false
 
 ecr-login:
 	aws ecr get-login-password --region $(REGION) | \
 	  docker login --username AWS --password-stdin $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com
 
 push-api: ecr-login
-	DOCKER_BUILDKIT=1 docker build --build-arg CMD_TARGET=media-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=media-lambda \
 	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):api-dev .
 	docker push $(PRIVATE_LIGHT):api-dev
-	aws lambda update-function-code --function-name AiSocialMediaApiHandler \
+	aws lambda update-function-code --function-name $(FN_API) \
 	  --image-uri $(PRIVATE_LIGHT):api-dev --region $(REGION)
-	aws lambda wait function-updated --function-name AiSocialMediaApiHandler --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_API) --region $(REGION)
+
+push-worker: ecr-login
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=worker-lambda \
+	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):worker-dev .
+	docker push $(PRIVATE_LIGHT):worker-dev
+	aws lambda update-function-code --function-name $(FN_WORKER) \
+	  --image-uri $(PRIVATE_LIGHT):worker-dev --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_WORKER) --region $(REGION)
 
 push-thumbnail: ecr-login
-	DOCKER_BUILDKIT=1 docker build --build-arg CMD_TARGET=thumbnail-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=thumbnail-lambda \
 	  -f cmd/media-lambda/Dockerfile.heavy -t $(PRIVATE_HEAVY):thumb-dev .
 	docker push $(PRIVATE_HEAVY):thumb-dev
-	aws lambda update-function-code --function-name AiSocialMediaThumbnailProcessor \
+	aws lambda update-function-code --function-name $(FN_THUMBNAIL) \
 	  --image-uri $(PRIVATE_HEAVY):thumb-dev --region $(REGION)
-	aws lambda wait function-updated --function-name AiSocialMediaThumbnailProcessor --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_THUMBNAIL) --region $(REGION)
 
 push-selection: ecr-login
-	DOCKER_BUILDKIT=1 docker build --build-arg CMD_TARGET=selection-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=selection-lambda \
 	  -f cmd/media-lambda/Dockerfile.heavy -t $(PRIVATE_HEAVY):select-dev .
 	docker push $(PRIVATE_HEAVY):select-dev
-	aws lambda update-function-code --function-name AiSocialMediaSelectionProcessor \
+	aws lambda update-function-code --function-name $(FN_SELECTION) \
 	  --image-uri $(PRIVATE_HEAVY):select-dev --region $(REGION)
-	aws lambda wait function-updated --function-name AiSocialMediaSelectionProcessor --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_SELECTION) --region $(REGION)
 
 push-enhance: ecr-login
-	DOCKER_BUILDKIT=1 docker build --build-arg CMD_TARGET=enhance-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=enhance-lambda \
 	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):enhance-dev .
 	docker push $(PRIVATE_LIGHT):enhance-dev
-	aws lambda update-function-code --function-name AiSocialMediaEnhancementProcessor \
+	aws lambda update-function-code --function-name $(FN_ENHANCE) \
 	  --image-uri $(PRIVATE_LIGHT):enhance-dev --region $(REGION)
-	aws lambda wait function-updated --function-name AiSocialMediaEnhancementProcessor --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_ENHANCE) --region $(REGION)
 
 push-video: ecr-login
-	DOCKER_BUILDKIT=1 docker build --build-arg CMD_TARGET=video-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=video-lambda \
 	  -f cmd/media-lambda/Dockerfile.heavy -t $(PRIVATE_HEAVY):video-dev .
 	docker push $(PRIVATE_HEAVY):video-dev
-	aws lambda update-function-code --function-name AiSocialMediaVideoProcessor \
+	aws lambda update-function-code --function-name $(FN_VIDEO) \
 	  --image-uri $(PRIVATE_HEAVY):video-dev --region $(REGION)
-	aws lambda wait function-updated --function-name AiSocialMediaVideoProcessor --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_VIDEO) --region $(REGION)
 
 push-webhook: ecr-login
-	DOCKER_BUILDKIT=1 docker build --build-arg CMD_TARGET=webhook-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=webhook-lambda \
 	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_WEBHOOK):webhook-dev .
 	docker push $(PRIVATE_WEBHOOK):webhook-dev
-	aws lambda update-function-code --function-name AiSocialMediaWebhookHandler \
+	aws lambda update-function-code --function-name $(FN_WEBHOOK) \
 	  --image-uri $(PRIVATE_WEBHOOK):webhook-dev --region $(REGION)
-	aws lambda wait function-updated --function-name AiSocialMediaWebhookHandler --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_WEBHOOK) --region $(REGION)
+
+push-oauth: ecr-login
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=oauth-lambda \
+	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_OAUTH):oauth-dev .
+	docker push $(PRIVATE_OAUTH):oauth-dev
+	aws lambda update-function-code --function-name $(FN_OAUTH) \
+	  --image-uri $(PRIVATE_OAUTH):oauth-dev --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_OAUTH) --region $(REGION)
+
+push-all: push-api push-worker push-enhance push-webhook push-oauth push-thumbnail push-selection push-video
 
 clean:
 	rm -f media-select media-triage media-web

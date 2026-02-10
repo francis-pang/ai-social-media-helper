@@ -76,9 +76,11 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Debug().Int("keyCount", len(req.Keys)).Msg("All keys validated successfully")
 
-	// Separate photos and videos for the enhancement pipeline
-	var photoKeys []string
-	var videoKeys []string
+	// Separate photos and videos for the enhancement pipeline.
+	// Use initialized slices (not nil) so JSON marshal produces [] not null,
+	// which Step Functions Map states require for ItemsPath.
+	photoKeys := make([]string, 0)
+	videoKeys := make([]string, 0)
 	for _, key := range req.Keys {
 		ext := strings.ToLower(filepath.Ext(key))
 		if filehandler.IsImage(ext) {
@@ -99,10 +101,22 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 
 	// Write pending job to DynamoDB (DDR-050).
 	if sessionStore != nil {
+		// Pre-populate Items so the enhance-lambda can update by index.
+		allKeys := append(photoKeys, videoKeys...)
+		items := make([]store.EnhancementItem, len(allKeys))
+		for i, k := range allKeys {
+			items[i] = store.EnhancementItem{
+				Key:         k,
+				OriginalKey: k,
+				Filename:    filepath.Base(k),
+				Phase:       "pending",
+			}
+		}
 		pendingJob := &store.EnhancementJob{
 			ID:         jobID,
 			Status:     "pending",
 			TotalCount: len(photoKeys) + len(videoKeys),
+			Items:      items,
 		}
 		if err := sessionStore.PutEnhancementJob(context.Background(), req.SessionID, pendingJob); err != nil {
 			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to persist pending enhancement job")
