@@ -27,7 +27,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -170,14 +169,16 @@ func init() {
 		return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(12)))
 	})
 
-	log.Info().
-		Str("function", "worker-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Str("table", dynamoTableName).
-		Bool("instagramEnabled", igClient != nil).
-		Dur("initDuration", time.Since(initStart)).
-		Msg("Worker Lambda init complete")
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("worker-lambda").
+		InitDuration(time.Since(initStart)).
+		S3Bucket("mediaBucket", mediaBucket).
+		DynamoTable("sessions", dynamoTableName).
+		SSMParam("geminiApiKey", logging.EnvOrDefault("SSM_API_KEY_PARAM", "/ai-social-media/prod/gemini-api-key")).
+		SSMParam("instagramToken", logging.EnvOrDefault("SSM_INSTAGRAM_TOKEN_PARAM", "/ai-social-media/prod/instagram-access-token")).
+		SSMParam("instagramUserId", logging.EnvOrDefault("SSM_INSTAGRAM_USER_ID_PARAM", "/ai-social-media/prod/instagram-user-id")).
+		Feature("instagram", igClient != nil).
+		Log()
 }
 
 func main() {

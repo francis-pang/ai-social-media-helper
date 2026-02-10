@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -60,12 +59,11 @@ func init() {
 		log.Fatal().Msg("MEDIA_BUCKET_NAME environment variable is required")
 	}
 
-	log.Info().
-		Str("function", "thumbnail-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Dur("initDuration", time.Since(initStart)).
-		Msg("Thumbnail Lambda init complete")
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("thumbnail-lambda").
+		InitDuration(time.Since(initStart)).
+		S3Bucket("mediaBucket", mediaBucket).
+		Log()
 }
 
 // ThumbnailEvent is the input payload from Step Functions.
@@ -156,12 +154,16 @@ func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error)
 	// Generate thumbnail.
 	thumbData, _, err := filehandler.GenerateThumbnail(mf, thumbnailMaxDimension)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to generate thumbnail")
+		// Soft failure: return success=false but no function error.
+		// This prevents the Step Functions Map from failing when ffmpeg
+		// is unavailable for video thumbnails. The selection Lambda will
+		// proceed without the thumbnail for this file.
+		logger.Warn().Err(err).Msg("Thumbnail generation failed (soft failure — pipeline will continue)")
 		return ThumbnailResult{
 			OriginalKey: event.Key,
 			Success:     false,
 			Error:       fmt.Sprintf("thumbnail generation failed: %v", err),
-		}, err
+		}, nil
 	}
 	logger.Debug().Int("thumbnailSize", len(thumbData)).Msg("Thumbnail generated")
 

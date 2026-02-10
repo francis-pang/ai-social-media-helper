@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -90,13 +89,13 @@ func init() {
 		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
 
-	log.Info().
-		Str("function", "video-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Str("table", tableName).
-		Dur("initDuration", time.Since(initStart)).
-		Msg("Video Lambda init complete")
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("video-lambda").
+		InitDuration(time.Since(initStart)).
+		S3Bucket("mediaBucket", mediaBucket).
+		DynamoTable("sessions", tableName).
+		SSMParam("geminiApiKey", logging.EnvOrDefault("SSM_API_KEY_PARAM", "/ai-social-media/prod/gemini-api-key")).
+		Log()
 }
 
 // VideoEvent is the input payload from Step Functions.

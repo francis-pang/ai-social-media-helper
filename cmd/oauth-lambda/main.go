@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -128,12 +127,16 @@ func init() {
 		userIDParam = "/ai-social-media/prod/instagram-user-id"
 	}
 
-	log.Info().
-		Str("function", "oauth-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Dur("initDuration", time.Since(initStart)).
-		Msg("OAuth Lambda init complete")
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("oauth-lambda").
+		InitDuration(time.Since(initStart)).
+		SSMParam("appId", logging.EnvOrDefault("SSM_APP_ID_PARAM", "/ai-social-media/prod/instagram-app-id")).
+		SSMParam("appSecret", logging.EnvOrDefault("SSM_APP_SECRET_PARAM", "/ai-social-media/prod/instagram-app-secret")).
+		SSMParam("redirectUri", logging.EnvOrDefault("SSM_REDIRECT_URI_PARAM", "/ai-social-media/prod/instagram-oauth-redirect-uri")).
+		SSMParam("tokenStore", tokenParam).
+		SSMParam("userIdStore", userIDParam).
+		Config("redirectURI", redirectURI).
+		Log()
 }
 
 func main() {

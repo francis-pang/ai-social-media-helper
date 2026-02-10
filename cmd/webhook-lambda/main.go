@@ -17,7 +17,6 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -86,12 +85,13 @@ func init() {
 	}
 
 	webhookHandler = webhook.NewHandler(verifyToken, appSecret)
-	log.Info().
-		Str("function", "webhook-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Dur("initDuration", time.Since(initStart)).
-		Msg("Webhook Lambda init complete")
+
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("webhook-lambda").
+		InitDuration(time.Since(initStart)).
+		SSMParam("webhookVerifyToken", logging.EnvOrDefault("SSM_WEBHOOK_VERIFY_TOKEN_PARAM", "/ai-social-media/prod/instagram-webhook-verify-token")).
+		SSMParam("appSecret", logging.EnvOrDefault("SSM_APP_SECRET_PARAM", "/ai-social-media/prod/instagram-app-secret")).
+		Log()
 }
 
 func main() {

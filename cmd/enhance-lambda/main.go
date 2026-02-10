@@ -23,7 +23,6 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -96,13 +95,13 @@ func init() {
 		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
 
-	log.Info().
-		Str("function", "enhance-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Str("table", tableName).
-		Dur("initDuration", time.Since(initStart)).
-		Msg("Enhance Lambda init complete")
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("enhance-lambda").
+		InitDuration(time.Since(initStart)).
+		S3Bucket("mediaBucket", mediaBucket).
+		DynamoTable("sessions", tableName).
+		SSMParam("geminiApiKey", logging.EnvOrDefault("SSM_API_KEY_PARAM", "/ai-social-media/prod/gemini-api-key")).
+		Log()
 }
 
 // EnhanceEvent is the input payload from Step Functions.
@@ -313,6 +312,9 @@ func updateItemError(ctx context.Context, event EnhanceEvent, errMsg string) {
 		job.Items[event.ItemIndex].Phase = chat.PhaseError
 		job.Items[event.ItemIndex].Error = errMsg
 		job.CompletedCount++
+		if job.CompletedCount >= job.TotalCount {
+			job.Status = "complete"
+		}
 		if err := sessionStore.PutEnhancementJob(ctx, event.SessionID, job); err != nil {
 			log.Warn().Err(err).Msg("Failed to update enhancement job with error")
 		}
@@ -358,6 +360,9 @@ func updateItemComplete(ctx context.Context, event EnhanceEvent, enhancedKey, en
 			}
 		}
 		job.CompletedCount++
+		if job.CompletedCount >= job.TotalCount {
+			job.Status = "complete"
+		}
 		if err := sessionStore.PutEnhancementJob(ctx, event.SessionID, job); err != nil {
 			log.Warn().Err(err).Msg("Failed to update enhancement job with completion")
 		}

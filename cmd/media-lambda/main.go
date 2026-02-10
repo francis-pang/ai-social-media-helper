@@ -33,7 +33,6 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -165,18 +164,21 @@ func init() {
 		log.Warn().Msg("Instagram credentials not configured — publishing disabled")
 	}
 
-	log.Info().
-		Str("function", "media-lambda").
-		Str("goVersion", runtime.Version()).
-		Str("region", cfg.Region).
-		Bool("dynamoEnabled", sessionStore != nil).
-		Bool("workerEnabled", workerLambdaArn != "").
-		Bool("selectionSfnEnabled", selectionSfnArn != "").
-		Bool("enhancementSfnEnabled", enhancementSfnArn != "").
-		Bool("instagramEnabled", igClient != nil).
-		Bool("originVerifyEnabled", originVerifySecret != "").
-		Dur("initDuration", time.Since(initStart)).
-		Msg("API Lambda init complete")
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("media-lambda").
+		InitDuration(time.Since(initStart)).
+		S3Bucket("mediaBucket", mediaBucket).
+		DynamoTable("sessions", dynamoTableName).
+		SSMParam("geminiApiKey", logging.EnvOrDefault("SSM_API_KEY_PARAM", "/ai-social-media/prod/gemini-api-key")).
+		SSMParam("instagramToken", logging.EnvOrDefault("SSM_INSTAGRAM_TOKEN_PARAM", "/ai-social-media/prod/instagram-access-token")).
+		SSMParam("instagramUserId", logging.EnvOrDefault("SSM_INSTAGRAM_USER_ID_PARAM", "/ai-social-media/prod/instagram-user-id")).
+		StateMachine("selectionPipeline", selectionSfnArn).
+		StateMachine("enhancementPipeline", enhancementSfnArn).
+		LambdaFunc("workerLambda", workerLambdaArn).
+		Feature("instagram", igClient != nil).
+		Feature("originVerify", originVerifySecret != "").
+		Feature("dynamodb", sessionStore != nil).
+		Log()
 }
 
 func main() {
