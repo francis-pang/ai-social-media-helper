@@ -67,6 +67,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-052](./DDR-052-step-functions-polling-for-long-running-ops.md) | 2026-02-10 | Step Functions Polling for Long-Running Operations | Accepted |
 | [DDR-053](./DDR-053-granular-lambda-split.md) | 2026-02-10 | Granular Lambda Split — Worker → Domain-Specific Lambdas | Accepted |
 | [DDR-054](./DDR-054-s3-multipart-upload-acceleration.md) | 2026-02-10 | S3 Multipart Upload Acceleration | Accepted |
+| [DDR-055](./DDR-055-deployment-automation.md) | 2026-02-10 | Deployment Automation — Hybrid Pipeline Triggers and Full Validation | Accepted |
 
 ---
 
@@ -81,4 +82,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-10 (DDR-054)
+**Last Updated**: 2026-02-10 (DDR-055)

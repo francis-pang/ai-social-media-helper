@@ -1,0 +1,240 @@
+# A4: Hybrid — CodeStar + GitHub Actions
+# CodeStar triggers BOTH pipelines on every push (triggerOnPush: true).
+# This workflow adds intelligence: it detects what changed and stops
+# the unnecessary pipeline to avoid wasted builds.
+#
+# See: docs/design-decisions/DDR-055-deployment-automation.md
+
+name: Intelligent Pipeline Trigger
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pipeline:
+        description: "Which pipeline(s) to trigger"
+        required: true
+        type: choice
+        options:
+          - auto-detect
+          - backend-only
+          - frontend-only
+          - both
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  BACKEND_PIPELINE: AiSocialMediaBackendPipeline
+  FRONTEND_PIPELINE: AiSocialMediaFrontendPipeline
+
+jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      scope: ${{ steps.changes.outputs.scope }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need parent commit for diff
+
+      - name: Analyze changed files
+        id: changes
+        run: |
+          # For workflow_dispatch, respect the manual choice
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "${{ inputs.pipeline }}" in
+              backend-only)
+                echo "backend=true" >> "$GITHUB_OUTPUT"
+                echo "frontend=false" >> "$GITHUB_OUTPUT"
+                echo "scope=backend-only" >> "$GITHUB_OUTPUT"
+                ;;
+              frontend-only)
+                echo "backend=false" >> "$GITHUB_OUTPUT"
+                echo "frontend=true" >> "$GITHUB_OUTPUT"
+                echo "scope=frontend-only" >> "$GITHUB_OUTPUT"
+                ;;
+              both)
+                echo "backend=true" >> "$GITHUB_OUTPUT"
+                echo "frontend=true" >> "$GITHUB_OUTPUT"
+                echo "scope=both" >> "$GITHUB_OUTPUT"
+                ;;
+              auto-detect)
+                ;; # Fall through to auto-detection below
+            esac
+            # Exit early if not auto-detect
+            if [ "${{ inputs.pipeline }}" != "auto-detect" ]; then
+              exit 0
+            fi
+          fi
+
+          # Auto-detect: compare HEAD with its parent
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "=== Changed files ==="
+          echo "$CHANGED_FILES"
+          echo ""
+
+          BACKEND=false
+          FRONTEND=false
+
+          # Frontend paths: web/
+          if echo "$CHANGED_FILES" | grep -qE '^web/'; then
+            FRONTEND=true
+          fi
+
+          # Backend paths: cmd/, internal/, go.mod, go.sum, Dockerfile*
+          if echo "$CHANGED_FILES" | grep -qE '^(cmd/|internal/|go\.(mod|sum)$|.*Dockerfile)'; then
+            BACKEND=true
+          fi
+
+          # Determine scope
+          if [ "$BACKEND" = "true" ] && [ "$FRONTEND" = "true" ]; then
+            SCOPE="both"
+          elif [ "$BACKEND" = "true" ]; then
+            SCOPE="backend-only"
+          elif [ "$FRONTEND" = "true" ]; then
+            SCOPE="frontend-only"
+          else
+            SCOPE="none"
+          fi
+
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "scope=$SCOPE" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "=== Detection result ==="
+          echo "Backend changed: $BACKEND"
+          echo "Frontend changed: $FRONTEND"
+          echo "Scope: $SCOPE"
+
+  manage-pipelines:
+    name: Manage Pipelines (${{ needs.detect-changes.outputs.scope }})
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Handle pipeline executions
+        env:
+          BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend }}
+          FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend }}
+          SCOPE: ${{ needs.detect-changes.outputs.scope }}
+        run: |
+          echo "=== Pipeline Management ==="
+          echo "Scope: $SCOPE"
+          echo "Backend changed: $BACKEND_CHANGED"
+          echo "Frontend changed: $FRONTEND_CHANGED"
+          echo ""
+
+          # Helper: stop the most recent execution of a pipeline
+          stop_pipeline() {
+            local pipeline_name=$1
+            local reason=$2
+            echo "Stopping $pipeline_name..."
+
+            # Wait briefly for CodeStar to trigger the pipeline
+            sleep 10
+
+            # Get the most recent execution
+            EXEC_ID=$(aws codepipeline list-pipeline-executions \
+              --pipeline-name "$pipeline_name" \
+              --max-results 1 \
+              --query 'pipelineExecutionSummaries[0].pipelineExecutionId' \
+              --output text 2>/dev/null)
+
+            EXEC_STATUS=$(aws codepipeline list-pipeline-executions \
+              --pipeline-name "$pipeline_name" \
+              --max-results 1 \
+              --query 'pipelineExecutionSummaries[0].status' \
+              --output text 2>/dev/null)
+
+            if [ "$EXEC_ID" = "None" ] || [ -z "$EXEC_ID" ]; then
+              echo "  No active execution found for $pipeline_name"
+              return 0
+            fi
+
+            echo "  Latest execution: $EXEC_ID (status: $EXEC_STATUS)"
+
+            # Only stop if the execution is InProgress or Stopping
+            if [ "$EXEC_STATUS" = "InProgress" ] || [ "$EXEC_STATUS" = "Stopping" ]; then
+              aws codepipeline stop-pipeline-execution \
+                --pipeline-name "$pipeline_name" \
+                --pipeline-execution-id "$EXEC_ID" \
+                --abandon \
+                --reason "$reason" 2>/dev/null || true
+              echo "  Stopped execution $EXEC_ID"
+            else
+              echo "  Execution not in progress ($EXEC_STATUS), skipping stop"
+            fi
+          }
+
+          # Helper: start a pipeline manually (for workflow_dispatch)
+          start_pipeline() {
+            local pipeline_name=$1
+            echo "Starting $pipeline_name..."
+            aws codepipeline start-pipeline-execution \
+              --pipeline-name "$pipeline_name" \
+              --query 'pipelineExecutionId' \
+              --output text
+            echo "  Pipeline started"
+          }
+
+          # For push events: CodeStar triggers both pipelines. Stop the unnecessary one(s).
+          if [ "${{ github.event_name }}" = "push" ]; then
+            case "$SCOPE" in
+              frontend-only)
+                echo ">>> Frontend-only change: stopping backend pipeline"
+                stop_pipeline "$BACKEND_PIPELINE" "GH Actions: frontend-only change, no backend rebuild needed"
+                echo ">>> Frontend pipeline: running (CodeStar triggered)"
+                ;;
+              backend-only)
+                echo ">>> Backend-only change: stopping frontend pipeline"
+                stop_pipeline "$FRONTEND_PIPELINE" "GH Actions: backend-only change, no frontend rebuild needed"
+                echo ">>> Backend pipeline: running (CodeStar triggered)"
+                ;;
+              both)
+                echo ">>> Both changed: letting both pipelines run (CodeStar triggered)"
+                ;;
+              none)
+                echo ">>> No backend/frontend changes detected: stopping both pipelines"
+                stop_pipeline "$BACKEND_PIPELINE" "GH Actions: no backend/frontend changes (docs/config only)"
+                stop_pipeline "$FRONTEND_PIPELINE" "GH Actions: no backend/frontend changes (docs/config only)"
+                ;;
+            esac
+          fi
+
+          # For workflow_dispatch: manually start the selected pipeline(s)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "$BACKEND_CHANGED" = "true" ]; then
+              start_pipeline "$BACKEND_PIPELINE"
+            fi
+            if [ "$FRONTEND_CHANGED" = "true" ]; then
+              start_pipeline "$FRONTEND_PIPELINE"
+            fi
+          fi
+
+      - name: Summary
+        env:
+          SCOPE: ${{ needs.detect-changes.outputs.scope }}
+        run: |
+          echo "## Pipeline Trigger Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Trigger** | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | ${{ github.sha }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Scope** | $SCOPE |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Backend pipeline** | ${{ needs.detect-changes.outputs.backend == 'true' && 'RUNNING' || 'STOPPED' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Frontend pipeline** | ${{ needs.detect-changes.outputs.frontend == 'true' && 'RUNNING' || 'STOPPED' }} |" >> "$GITHUB_STEP_SUMMARY"
