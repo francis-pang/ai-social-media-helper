@@ -46,6 +46,7 @@ go.work.sum
 # Environment variables
 .env
 .env.local
+.env.production
 
 # GPG passphrase (for non-interactive decryption)
 .gpg-passphrase
