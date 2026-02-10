@@ -142,10 +142,13 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 	prompt := BuildMediaTriagePrompt(files)
 
 	// Configure model with triage system instruction
+	// MaxOutputTokens must be set high enough for large batches — each media item
+	// produces ~80-100 tokens of JSON output, and the default limit can truncate responses.
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{
 			Parts: []*genai.Part{{Text: assets.TriageSystemPrompt}},
 		},
+		MaxOutputTokens: 65536,
 	}
 
 	// Build parts: media files then prompt (no reference photo for triage)
