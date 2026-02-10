@@ -93,12 +93,13 @@ func handleDescriptionGenerate(w http.ResponseWriter, r *http.Request) {
 		Str("groupLabel", req.GroupLabel).
 		Msg("Job dispatched to description-lambda")
 	if err := invokeAsync(context.Background(), descriptionLambdaArn, payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke description-lambda")
+		log.Error().Err(err).Str("jobId", jobID).Str("lambdaArn", descriptionLambdaArn).Msg("Failed to invoke description-lambda")
+		errDetail := fmt.Sprintf("failed to start processing: %v", err)
 		if sessionStore != nil {
-			errJob := &store.DescriptionJob{ID: jobID, Status: "error", Error: "failed to start processing"}
+			errJob := &store.DescriptionJob{ID: jobID, Status: "error", Error: errDetail}
 			sessionStore.PutDescriptionJob(context.Background(), req.SessionID, errJob)
 		}
-		httpError(w, http.StatusInternalServerError, "failed to start processing")
+		httpError(w, http.StatusInternalServerError, errDetail)
 		return
 	}
 

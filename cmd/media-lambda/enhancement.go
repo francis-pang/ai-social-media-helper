@@ -146,12 +146,13 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 			Name:            aws.String(jobID),
 		})
 		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start enhancement pipeline")
+			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", enhancementSfnArn).Msg("Failed to start enhancement pipeline")
+			errDetail := fmt.Sprintf("failed to start processing: %v", err)
 			if sessionStore != nil {
-				errJob := &store.EnhancementJob{ID: jobID, Status: "error", Error: "failed to start processing pipeline"}
+				errJob := &store.EnhancementJob{ID: jobID, Status: "error", Error: errDetail}
 				sessionStore.PutEnhancementJob(context.Background(), req.SessionID, errJob)
 			}
-			httpError(w, http.StatusInternalServerError, "failed to start processing")
+			httpError(w, http.StatusInternalServerError, errDetail)
 			return
 		}
 	}

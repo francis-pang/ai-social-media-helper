@@ -103,12 +103,13 @@ func handleDownloadStart(w http.ResponseWriter, r *http.Request) {
 		Str("groupLabel", req.GroupLabel).
 		Msg("Job dispatched to download-lambda")
 	if err := invokeAsync(context.Background(), downloadLambdaArn, payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke download-lambda")
+		log.Error().Err(err).Str("jobId", jobID).Str("lambdaArn", downloadLambdaArn).Msg("Failed to invoke download-lambda")
+		errDetail := fmt.Sprintf("failed to start processing: %v", err)
 		if sessionStore != nil {
-			errJob := &store.DownloadJob{ID: jobID, Status: "error", Error: "failed to start processing"}
+			errJob := &store.DownloadJob{ID: jobID, Status: "error", Error: errDetail}
 			sessionStore.PutDownloadJob(context.Background(), req.SessionID, errJob)
 		}
-		httpError(w, http.StatusInternalServerError, "failed to start processing")
+		httpError(w, http.StatusInternalServerError, errDetail)
 		return
 	}
 

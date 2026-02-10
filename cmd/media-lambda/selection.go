@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -118,13 +119,13 @@ func handleSelectionStart(w http.ResponseWriter, r *http.Request) {
 			Name:            aws.String(jobID),
 		})
 		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start selection pipeline")
-			// Update DynamoDB with error
+			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", selectionSfnArn).Msg("Failed to start selection pipeline")
+			errDetail := fmt.Sprintf("failed to start processing: %v", err)
 			if sessionStore != nil {
-				errJob := &store.SelectionJob{ID: jobID, Status: "error", Error: "failed to start processing pipeline"}
+				errJob := &store.SelectionJob{ID: jobID, Status: "error", Error: errDetail}
 				sessionStore.PutSelectionJob(context.Background(), req.SessionID, errJob)
 			}
-			httpError(w, http.StatusInternalServerError, "failed to start processing")
+			httpError(w, http.StatusInternalServerError, errDetail)
 			return
 		}
 	}

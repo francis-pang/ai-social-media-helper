@@ -131,12 +131,13 @@ func handlePublishStart(w http.ResponseWriter, r *http.Request) {
 			Name:            aws.String(jobID),
 		})
 		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start publish pipeline")
+			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", publishSfnArn).Msg("Failed to start publish pipeline")
+			errDetail := fmt.Sprintf("failed to start processing: %v", err)
 			if sessionStore != nil {
-				errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: "failed to start processing"}
+				errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: errDetail}
 				sessionStore.PutPublishJob(context.Background(), req.SessionID, errJob)
 			}
-			httpError(w, http.StatusInternalServerError, "failed to start processing")
+			httpError(w, http.StatusInternalServerError, errDetail)
 			return
 		}
 	}
