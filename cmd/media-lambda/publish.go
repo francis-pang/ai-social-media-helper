@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/fpang/gemini-media-cli/internal/jobs"
 	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
-// --- Publish Endpoints (DDR-040, DDR-050: DynamoDB + async Worker Lambda) ---
+// --- Publish Endpoints (DDR-040, DDR-050, DDR-052: DynamoDB + Step Functions) ---
 
 // POST /api/publish/start
 // Body: {"sessionId": "uuid", "groupId": "group-1", "keys": [...], "caption": "...", "hashtags": [...]}
@@ -106,29 +108,37 @@ func handlePublishStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch to Worker Lambda asynchronously (DDR-050).
-	payload := map[string]interface{}{
-		"type":      "publish",
-		"sessionId": req.SessionID,
-		"jobId":     jobID,
-		"groupId":   req.GroupID,
-		"keys":      req.Keys,
-		"caption":   fullCaption,
-	}
-	log.Info().
-		Str("jobId", jobID).
-		Str("sessionId", req.SessionID).
-		Str("groupId", req.GroupID).
-		Int("keyCount", len(req.Keys)).
-		Msg("Job dispatched")
-	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for publish")
-		if sessionStore != nil {
-			errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: "failed to start processing"}
-			sessionStore.PutPublishJob(context.Background(), req.SessionID, errJob)
+	// Dispatch to Publish Pipeline Step Functions (DDR-052).
+	if sfnClient != nil && publishSfnArn != "" {
+		sfnInput, _ := json.Marshal(map[string]interface{}{
+			"type":      "publish-create-containers",
+			"sessionId": req.SessionID,
+			"jobId":     jobID,
+			"groupId":   req.GroupID,
+			"keys":      req.Keys,
+			"caption":   fullCaption,
+		})
+		log.Info().
+			Str("jobId", jobID).
+			Str("sessionId", req.SessionID).
+			Str("groupId", req.GroupID).
+			Int("keyCount", len(req.Keys)).
+			Str("sfnArn", publishSfnArn).
+			Msg("Job dispatched to Publish Pipeline")
+		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+			StateMachineArn: aws.String(publishSfnArn),
+			Input:           aws.String(string(sfnInput)),
+			Name:            aws.String(jobID),
+		})
+		if err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start publish pipeline")
+			if sessionStore != nil {
+				errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: "failed to start processing"}
+				sessionStore.PutPublishJob(context.Background(), req.SessionID, errJob)
+			}
+			httpError(w, http.StatusInternalServerError, "failed to start processing")
+			return
 		}
-		httpError(w, http.StatusInternalServerError, "failed to start processing")
-		return
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{

@@ -64,6 +64,8 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-049](./DDR-049-aws-resource-tagging.md) | 2026-02-09 | AWS Resource Tagging for Cost Tracking | Accepted |
 | [DDR-050](./DDR-050-replace-goroutines-with-async-dispatch.md) | 2026-02-09 | Replace Goroutines with DynamoDB + Step Functions / Async Lambda | Accepted |
 | [DDR-051](./DDR-051-comprehensive-logging-overhaul.md) | 2026-02-09 | Comprehensive Logging Overhaul for Production Troubleshooting | Accepted |
+| [DDR-052](./DDR-052-step-functions-polling-for-long-running-ops.md) | 2026-02-10 | Step Functions Polling for Long-Running Operations | Accepted |
+| [DDR-053](./DDR-053-granular-lambda-split.md) | 2026-02-10 | Granular Lambda Split — Worker → Domain-Specific Lambdas | Accepted |
 
 ---
 
@@ -78,4 +80,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-09 (DDR-051)
+**Last Updated**: 2026-02-10 (DDR-053)

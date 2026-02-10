@@ -85,19 +85,26 @@ func init() {
 		log.Warn().Msg("DYNAMO_TABLE_NAME not set — DynamoDB store disabled")
 	}
 
-	// Initialize Lambda client for async Worker Lambda invocations (DDR-050).
+	// Initialize Lambda client for async invocations (DDR-050, DDR-053).
 	lambdaClient = lambdasvc.NewFromConfig(cfg)
-	workerLambdaArn = os.Getenv("WORKER_LAMBDA_ARN")
-	if workerLambdaArn == "" {
-		log.Warn().Msg("WORKER_LAMBDA_ARN not set — async worker dispatch disabled")
+	descriptionLambdaArn = os.Getenv("DESCRIPTION_LAMBDA_ARN")
+	downloadLambdaArn = os.Getenv("DOWNLOAD_LAMBDA_ARN")
+	enhanceLambdaArn = os.Getenv("ENHANCE_LAMBDA_ARN")
+	if descriptionLambdaArn == "" || downloadLambdaArn == "" || enhanceLambdaArn == "" {
+		log.Warn().Msg("One or more Lambda ARNs not set — async dispatch may be disabled (DDR-053)")
 	}
 
-	// Initialize Step Functions client for selection/enhancement pipelines (DDR-050).
+	// Initialize Step Functions client for pipelines (DDR-050, DDR-052).
 	sfnClient = sfn.NewFromConfig(cfg)
 	selectionSfnArn = os.Getenv("SELECTION_STATE_MACHINE_ARN")
 	enhancementSfnArn = os.Getenv("ENHANCEMENT_STATE_MACHINE_ARN")
+	triageSfnArn = os.Getenv("TRIAGE_STATE_MACHINE_ARN")
+	publishSfnArn = os.Getenv("PUBLISH_STATE_MACHINE_ARN")
 	if selectionSfnArn == "" || enhancementSfnArn == "" {
-		log.Warn().Msg("State machine ARNs not set — Step Functions dispatch disabled")
+		log.Warn().Msg("Selection/Enhancement state machine ARNs not set — Step Functions dispatch disabled")
+	}
+	if triageSfnArn == "" || publishSfnArn == "" {
+		log.Warn().Msg("Triage/Publish state machine ARNs not set — Step Functions dispatch disabled (DDR-052)")
 	}
 
 	// Load Gemini API key from SSM Parameter Store if not set via env var.
@@ -174,7 +181,11 @@ func init() {
 		SSMParam("instagramUserId", logging.EnvOrDefault("SSM_INSTAGRAM_USER_ID_PARAM", "/ai-social-media/prod/instagram-user-id")).
 		StateMachine("selectionPipeline", selectionSfnArn).
 		StateMachine("enhancementPipeline", enhancementSfnArn).
-		LambdaFunc("workerLambda", workerLambdaArn).
+		StateMachine("triagePipeline", triageSfnArn).
+		StateMachine("publishPipeline", publishSfnArn).
+		LambdaFunc("descriptionLambda", descriptionLambdaArn).
+		LambdaFunc("downloadLambda", downloadLambdaArn).
+		LambdaFunc("enhanceLambda", enhanceLambdaArn).
 		Feature("instagram", igClient != nil).
 		Feature("originVerify", originVerifySecret != "").
 		Feature("dynamodb", sessionStore != nil).

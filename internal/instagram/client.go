@@ -68,8 +68,8 @@ func NewClient(accessToken, userID string) *Client {
 
 // apiResponse is the generic Instagram Graph API response.
 type apiResponse struct {
-	ID    string   `json:"id"`
-	Error *apiErr  `json:"error,omitempty"`
+	ID    string  `json:"id"`
+	Error *apiErr `json:"error,omitempty"`
 }
 
 type apiErr struct {
@@ -81,9 +81,9 @@ type apiErr struct {
 
 // containerStatusResponse is the response from GET /{container_id}?fields=status_code,status.
 type containerStatusResponse struct {
-	ID         string `json:"id"`
-	StatusCode string `json:"status_code"` // IN_PROGRESS, FINISHED, ERROR
-	Status     string `json:"status,omitempty"`
+	ID         string  `json:"id"`
+	StatusCode string  `json:"status_code"` // IN_PROGRESS, FINISHED, ERROR
+	Status     string  `json:"status,omitempty"`
 	Error      *apiErr `json:"error,omitempty"`
 }
 
@@ -296,7 +296,7 @@ func (c *Client) WaitForContainer(ctx context.Context, containerID string, timeo
 // postForm sends a POST request with form-encoded parameters to the Instagram API.
 func (c *Client) postForm(ctx context.Context, endpoint string, params url.Values) (*apiResponse, error) {
 	startTime := time.Now()
-	
+
 	// Log form parameter names (not values) at Trace level
 	paramNames := make([]string, 0, len(params))
 	for key := range params {

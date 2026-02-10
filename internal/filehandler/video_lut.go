@@ -240,7 +240,6 @@ func ApplyLUTToFrames(ctx context.Context, framePaths []string, lutContent strin
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-
 	// Apply LUT to each frame using ffmpeg
 	startTime := time.Now()
 	for i, framePath := range framePaths {

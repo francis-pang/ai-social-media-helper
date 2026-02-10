@@ -78,7 +78,7 @@ func handleDescriptionGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch to Worker Lambda asynchronously (DDR-050).
+	// Dispatch to Description Lambda asynchronously (DDR-053).
 	payload := map[string]interface{}{
 		"type":        "description",
 		"sessionId":   req.SessionID,
@@ -91,9 +91,9 @@ func handleDescriptionGenerate(w http.ResponseWriter, r *http.Request) {
 		Str("jobId", jobID).
 		Str("sessionId", req.SessionID).
 		Str("groupLabel", req.GroupLabel).
-		Msg("Job dispatched")
-	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for description")
+		Msg("Job dispatched to description-lambda")
+	if err := invokeAsync(context.Background(), descriptionLambdaArn, payload); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke description-lambda")
 		if sessionStore != nil {
 			errJob := &store.DescriptionJob{ID: jobID, Status: "error", Error: "failed to start processing"}
 			sessionStore.PutDescriptionJob(context.Background(), req.SessionID, errJob)
@@ -226,7 +226,7 @@ func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, jobID str
 		sessionStore.PutDescriptionJob(context.Background(), req.SessionID, job)
 	}
 
-	// Dispatch feedback processing to Worker Lambda (DDR-050).
+	// Dispatch feedback processing to Description Lambda (DDR-053).
 	payload := map[string]interface{}{
 		"type":      "description-feedback",
 		"sessionId": req.SessionID,
@@ -237,9 +237,9 @@ func handleDescriptionFeedback(w http.ResponseWriter, r *http.Request, jobID str
 		Str("jobId", jobID).
 		Str("sessionId", req.SessionID).
 		Int("feedbackLength", len(req.Feedback)).
-		Msg("Job dispatched")
-	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for description feedback")
+		Msg("Job dispatched to description-lambda")
+	if err := invokeAsync(context.Background(), descriptionLambdaArn, payload); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke description-lambda for feedback")
 		httpError(w, http.StatusInternalServerError, "failed to start feedback processing")
 		return
 	}

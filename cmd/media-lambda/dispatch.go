@@ -11,37 +11,38 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// invokeWorkerAsync sends an event to the Worker Lambda asynchronously (DDR-050).
+// invokeAsync sends an event to the specified Lambda function asynchronously (DDR-053).
 // Uses InvocationType=Event so the API Lambda returns immediately without
-// waiting for the Worker Lambda to process the job.
-func invokeWorkerAsync(ctx context.Context, event map[string]interface{}) error {
-	if lambdaClient == nil || workerLambdaArn == "" {
-		log.Warn().Msg("Worker Lambda client not configured")
-		return fmt.Errorf("worker lambda not configured")
+// waiting for the target Lambda to process the job.
+func invokeAsync(ctx context.Context, functionArn string, event map[string]interface{}) error {
+	if lambdaClient == nil || functionArn == "" {
+		log.Warn().Str("functionArn", functionArn).Msg("Lambda client not configured for async dispatch")
+		return fmt.Errorf("lambda not configured: %s", functionArn)
 	}
 
 	payload, err := json.Marshal(event)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal worker event")
-		return fmt.Errorf("marshal worker event: %w", err)
+		log.Error().Err(err).Msg("Failed to marshal event")
+		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	log.Debug().Int("payloadSize", len(payload)).Msg("Invoking Worker Lambda asynchronously")
+	log.Debug().Int("payloadSize", len(payload)).Str("functionArn", functionArn).Msg("Invoking Lambda asynchronously")
 
 	_, err = lambdaClient.Invoke(ctx, &lambdasvc.InvokeInput{
-		FunctionName:   aws.String(workerLambdaArn),
+		FunctionName:   aws.String(functionArn),
 		InvocationType: lambdatypes.InvocationTypeEvent, // async — returns 202 immediately
 		Payload:        payload,
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to invoke Worker Lambda")
-		return fmt.Errorf("invoke worker lambda: %w", err)
+		log.Error().Err(err).Str("functionArn", functionArn).Msg("Failed to invoke Lambda")
+		return fmt.Errorf("invoke lambda: %w", err)
 	}
 
 	log.Debug().
 		Str("type", fmt.Sprintf("%v", event["type"])).
 		Str("jobId", fmt.Sprintf("%v", event["jobId"])).
-		Msg("Worker Lambda invoked asynchronously")
+		Str("functionArn", functionArn).
+		Msg("Lambda invoked asynchronously")
 
 	return nil
 }

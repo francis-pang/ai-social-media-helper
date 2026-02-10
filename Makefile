@@ -1,6 +1,7 @@
 .PHONY: all build-frontend build-web build-select build-triage clean
 .PHONY: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video build-lambdas
-.PHONY: ecr-login push-api push-worker push-thumbnail push-selection push-enhance push-video push-webhook push-oauth push-all
+.PHONY: build-lambda-triage build-lambda-description build-lambda-download build-lambda-publish
+.PHONY: ecr-login push-api push-triage push-description push-download push-publish push-thumbnail push-selection push-enhance push-video push-webhook push-oauth push-all
 
 # Build all binaries
 all: build-select build-triage build-web
@@ -38,7 +39,19 @@ build-lambda-enhance:
 build-lambda-video:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bootstrap-video ./cmd/video-lambda
 
-build-lambdas: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video
+build-lambda-triage:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bootstrap-triage ./cmd/triage-lambda
+
+build-lambda-description:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bootstrap-description ./cmd/description-lambda
+
+build-lambda-download:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bootstrap-download ./cmd/download-lambda
+
+build-lambda-publish:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bootstrap-publish ./cmd/publish-lambda
+
+build-lambdas: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video build-lambda-triage build-lambda-description build-lambda-download build-lambda-publish
 
 # Development: run Go server with API only (frontend uses Vite dev server)
 dev-api:
@@ -66,7 +79,10 @@ PRIVATE_OAUTH   = $(ACCOUNT).dkr.ecr.$(REGION).amazonaws.com/ai-social-media-oau
 
 # Lambda function names (from CDK stacks: AiSocialMediaBackend, AiSocialMediaWebhook)
 FN_API       ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`ApiLambdaName`].OutputValue' --output text 2>/dev/null)
-FN_WORKER    ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`WorkerLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_TRIAGE    ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`TriageLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_DESC      ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`DescriptionLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_DOWNLOAD  ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`DownloadLambdaName`].OutputValue' --output text 2>/dev/null)
+FN_PUBLISH   ?= $(shell aws cloudformation describe-stacks --stack-name AiSocialMediaBackend --region $(REGION) --query 'Stacks[0].Outputs[?OutputKey==`PublishLambdaName`].OutputValue' --output text 2>/dev/null)
 FN_ENHANCE   ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`EnhancementProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
 FN_THUMBNAIL ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`ThumbnailProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
 FN_SELECTION ?= $(shell aws lambda list-functions --region $(REGION) --query 'Functions[?contains(FunctionName,`SelectionProcessor`)].FunctionName|[0]' --output text 2>/dev/null)
@@ -89,13 +105,37 @@ push-api: ecr-login
 	  --image-uri $(PRIVATE_LIGHT):api-dev --region $(REGION)
 	aws lambda wait function-updated --function-name $(FN_API) --region $(REGION)
 
-push-worker: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=worker-lambda \
-	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):worker-dev .
-	docker push $(PRIVATE_LIGHT):worker-dev
-	aws lambda update-function-code --function-name $(FN_WORKER) \
-	  --image-uri $(PRIVATE_LIGHT):worker-dev --region $(REGION)
-	aws lambda wait function-updated --function-name $(FN_WORKER) --region $(REGION)
+push-triage: ecr-login
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=triage-lambda \
+	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):triage-dev .
+	docker push $(PRIVATE_LIGHT):triage-dev
+	aws lambda update-function-code --function-name $(FN_TRIAGE) \
+	  --image-uri $(PRIVATE_LIGHT):triage-dev --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_TRIAGE) --region $(REGION)
+
+push-description: ecr-login
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=description-lambda \
+	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):desc-dev .
+	docker push $(PRIVATE_LIGHT):desc-dev
+	aws lambda update-function-code --function-name $(FN_DESC) \
+	  --image-uri $(PRIVATE_LIGHT):desc-dev --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_DESC) --region $(REGION)
+
+push-download: ecr-login
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=download-lambda \
+	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):download-dev .
+	docker push $(PRIVATE_LIGHT):download-dev
+	aws lambda update-function-code --function-name $(FN_DOWNLOAD) \
+	  --image-uri $(PRIVATE_LIGHT):download-dev --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_DOWNLOAD) --region $(REGION)
+
+push-publish: ecr-login
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=publish-lambda \
+	  -f cmd/media-lambda/Dockerfile.light -t $(PRIVATE_LIGHT):publish-dev .
+	docker push $(PRIVATE_LIGHT):publish-dev
+	aws lambda update-function-code --function-name $(FN_PUBLISH) \
+	  --image-uri $(PRIVATE_LIGHT):publish-dev --region $(REGION)
+	aws lambda wait function-updated --function-name $(FN_PUBLISH) --region $(REGION)
 
 push-thumbnail: ecr-login
 	$(DOCKER_BUILD) --build-arg CMD_TARGET=thumbnail-lambda \
@@ -145,10 +185,10 @@ push-oauth: ecr-login
 	  --image-uri $(PRIVATE_OAUTH):oauth-dev --region $(REGION)
 	aws lambda wait function-updated --function-name $(FN_OAUTH) --region $(REGION)
 
-push-all: push-api push-worker push-enhance push-webhook push-oauth push-thumbnail push-selection push-video
+push-all: push-api push-triage push-description push-download push-publish push-enhance push-webhook push-oauth push-thumbnail push-selection push-video
 
 clean:
 	rm -f media-select media-triage media-web
-	rm -f bootstrap-api bootstrap-thumbnail bootstrap-selection bootstrap-enhance bootstrap-video
+	rm -f bootstrap-api bootstrap-thumbnail bootstrap-selection bootstrap-enhance bootstrap-video bootstrap-triage bootstrap-description bootstrap-download bootstrap-publish
 	rm -rf web/frontend/dist
 	rm -rf web/frontend/node_modules

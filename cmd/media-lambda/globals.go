@@ -19,14 +19,20 @@ var (
 	// DynamoDB session store for persistent job state (DDR-050).
 	sessionStore *store.DynamoStore
 
-	// Lambda client for async Worker Lambda invocations (DDR-050).
-	lambdaClient    *lambda.Client
-	workerLambdaArn string
+	// Lambda client for async Lambda invocations (DDR-050, DDR-053).
+	lambdaClient *lambda.Client
 
-	// Step Functions client for selection/enhancement pipelines (DDR-050).
+	// Domain-specific Lambda ARNs for async dispatch (DDR-053).
+	descriptionLambdaArn string
+	downloadLambdaArn    string
+	enhanceLambdaArn     string
+
+	// Step Functions client for pipelines (DDR-050, DDR-052).
 	sfnClient         *sfn.Client
 	selectionSfnArn   string
 	enhancementSfnArn string
+	triageSfnArn      string // DDR-052: Triage Pipeline
+	publishSfnArn     string // DDR-052: Publish Pipeline
 
 	// Instagram client for publishing (DDR-040).
 	// nil if Instagram credentials are not configured (publishing disabled).

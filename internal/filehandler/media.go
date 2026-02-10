@@ -193,14 +193,13 @@ func CoordinatesToDMS(lat, lon float64) string {
 
 	latDeg := int(lat)
 	latMin := int((lat - float64(latDeg)) * 60)
-	latSec := ((lat - float64(latDeg)) * 60 - float64(latMin)) * 60
+	latSec := ((lat-float64(latDeg))*60 - float64(latMin)) * 60
 
 	lonDeg := int(lon)
 	lonMin := int((lon - float64(lonDeg)) * 60)
-	lonSec := ((lon - float64(lonDeg)) * 60 - float64(lonMin)) * 60
+	lonSec := ((lon-float64(lonDeg))*60 - float64(lonMin)) * 60
 
 	return fmt.Sprintf("%d°%d'%.2f\"%s, %d°%d'%.2f\"%s",
 		latDeg, latMin, latSec, latDir,
 		lonDeg, lonMin, lonSec, lonDir)
 }
-

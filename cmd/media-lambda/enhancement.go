@@ -256,7 +256,7 @@ func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, jobID string)
 		return
 	}
 
-	// Dispatch enhancement feedback to Worker Lambda (DDR-050).
+	// Dispatch enhancement feedback to Enhance Lambda (DDR-053).
 	payload := map[string]interface{}{
 		"type":      "enhancement-feedback",
 		"sessionId": req.SessionID,
@@ -268,9 +268,9 @@ func handleEnhanceFeedback(w http.ResponseWriter, r *http.Request, jobID string)
 		Str("jobId", jobID).
 		Str("sessionId", req.SessionID).
 		Str("key", req.Key).
-		Msg("Job dispatched")
-	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for enhancement feedback")
+		Msg("Job dispatched to enhance-lambda")
+	if err := invokeAsync(context.Background(), enhanceLambdaArn, payload); err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke enhance-lambda for feedback")
 		httpError(w, http.StatusInternalServerError, "failed to start feedback processing")
 		return
 	}

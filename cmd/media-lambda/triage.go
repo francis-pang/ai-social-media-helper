@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/jobs"
 	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
 
-// --- Triage Endpoints (DDR-050: DynamoDB + async Worker Lambda) ---
+// --- Triage Endpoints (DDR-050, DDR-052: DynamoDB + Step Functions) ---
 
 // POST /api/triage/start
 // Body: {"sessionId": "uuid", "model": "optional-model-name"}
@@ -71,26 +73,34 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch to Worker Lambda asynchronously (DDR-050).
-	payload := map[string]interface{}{
-		"type":      "triage",
-		"sessionId": req.SessionID,
-		"jobId":     jobID,
-		"model":     model,
-	}
-	log.Info().
-		Str("jobId", jobID).
-		Str("sessionId", req.SessionID).
-		Str("model", model).
-		Msg("Job dispatched")
-	if err := invokeWorkerAsync(context.Background(), payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to invoke worker for triage")
-		if sessionStore != nil {
-			errJob := &store.TriageJob{ID: jobID, Status: "error", Error: "failed to start processing"}
-			sessionStore.PutTriageJob(context.Background(), req.SessionID, errJob)
+	// Dispatch to Triage Pipeline Step Functions (DDR-052).
+	if sfnClient != nil && triageSfnArn != "" {
+		sfnInput, _ := json.Marshal(map[string]interface{}{
+			"type":      "triage-prepare",
+			"sessionId": req.SessionID,
+			"jobId":     jobID,
+			"model":     model,
+		})
+		log.Info().
+			Str("jobId", jobID).
+			Str("sessionId", req.SessionID).
+			Str("model", model).
+			Str("sfnArn", triageSfnArn).
+			Msg("Job dispatched to Triage Pipeline")
+		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+			StateMachineArn: aws.String(triageSfnArn),
+			Input:           aws.String(string(sfnInput)),
+			Name:            aws.String(jobID),
+		})
+		if err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start triage pipeline")
+			if sessionStore != nil {
+				errJob := &store.TriageJob{ID: jobID, Status: "error", Error: "failed to start processing"}
+				sessionStore.PutTriageJob(context.Background(), req.SessionID, errJob)
+			}
+			httpError(w, http.StatusInternalServerError, "failed to start processing")
+			return
 		}
-		httpError(w, http.StatusInternalServerError, "failed to start processing")
-		return
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{

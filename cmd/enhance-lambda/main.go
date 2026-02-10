@@ -1,9 +1,8 @@
-// Package main provides a Lambda entry point for per-photo AI enhancement.
+// Package main provides a Lambda entry point for per-photo AI enhancement (DDR-053).
 //
-// This Lambda is invoked by the Step Functions EnhancementPipeline Map state —
-// one invocation per photo. It downloads a single photo from S3, runs the
-// multi-phase Gemini enhancement pipeline, uploads the enhanced version,
-// and updates the enhancement job in DynamoDB.
+// This Lambda handles both initial enhancement and feedback-driven re-enhancement:
+//   - Step Functions invocation: EnhancementPipeline Map state (one per photo)
+//   - Async invocation: enhancement-feedback from the API Lambda
 //
 // Container: Light (Dockerfile.light — no ffmpeg needed for photo enhancement)
 // Memory: 2 GB
@@ -12,11 +11,13 @@
 // See DDR-031: Multi-Step Photo Enhancement Pipeline
 // See DDR-035: Multi-Lambda Deployment Architecture
 // See DDR-043: Step Functions Lambda Entrypoints
+// See DDR-053: Granular Lambda Split (absorbed enhancement-feedback)
 package main
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -27,17 +28,14 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/rs/zerolog/log"
 
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
+	"github.com/fpang/gemini-media-cli/internal/lambdaboot"
 	"github.com/fpang/gemini-media-cli/internal/logging"
 	"github.com/fpang/gemini-media-cli/internal/store"
-	"github.com/rs/zerolog/log"
 )
 
 // thumbnailMaxDimension is the max width/height for enhanced photo thumbnails.
@@ -46,7 +44,7 @@ const thumbnailMaxDimension = 400
 // AWS clients and configuration initialized at cold start.
 var (
 	s3Client     *s3.Client
-	sessionStore store.SessionStore
+	sessionStore *store.DynamoStore
 	mediaBucket  string
 )
 
@@ -56,62 +54,31 @@ func init() {
 	initStart := time.Now()
 	logging.Init()
 
-	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to load AWS config")
-	}
-	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
+	aws := lambdaboot.InitAWS()
+	s3s := lambdaboot.InitS3(aws.Config, "MEDIA_BUCKET_NAME")
+	s3Client = s3s.Client
+	mediaBucket = s3s.Bucket
+	sessionStore = lambdaboot.InitDynamo(aws.Config, "DYNAMO_TABLE_NAME")
+	lambdaboot.LoadGeminiKey(aws.SSM)
 
-	s3Client = s3.NewFromConfig(cfg)
-	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
-	if mediaBucket == "" {
-		log.Fatal().Msg("MEDIA_BUCKET_NAME environment variable is required")
-	}
-
-	// Initialize DynamoDB store.
-	tableName := os.Getenv("DYNAMO_TABLE_NAME")
-	if tableName == "" {
-		tableName = "media-selection-sessions"
-	}
-	ddbClient := dynamodb.NewFromConfig(cfg)
-	sessionStore = store.NewDynamoStore(ddbClient, tableName)
-
-	// Load Gemini API key from SSM Parameter Store if not set.
-	if os.Getenv("GEMINI_API_KEY") == "" {
-		ssmClient := ssm.NewFromConfig(cfg)
-		paramName := os.Getenv("SSM_API_KEY_PARAM")
-		if paramName == "" {
-			paramName = "/ai-social-media/prod/gemini-api-key"
-		}
-		ssmStart := time.Now()
-		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
-			Name:           &paramName,
-			WithDecryption: aws.Bool(true),
-		})
-		if err != nil {
-			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
-		}
-		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
-	}
-
-	// Emit consolidated cold-start log for troubleshooting.
-	logging.NewStartupLogger("enhance-lambda").
-		InitDuration(time.Since(initStart)).
+	lambdaboot.StartupLog("enhance-lambda", initStart).
 		S3Bucket("mediaBucket", mediaBucket).
-		DynamoTable("sessions", tableName).
+		DynamoTable("sessions", os.Getenv("DYNAMO_TABLE_NAME")).
 		SSMParam("geminiApiKey", logging.EnvOrDefault("SSM_API_KEY_PARAM", "/ai-social-media/prod/gemini-api-key")).
 		Log()
 }
 
-// EnhanceEvent is the input payload from Step Functions.
-// The Map state iterates over selected photo keys and sends one event per photo.
+// EnhanceEvent is the input payload from Step Functions or async invocation.
+// For Step Functions (initial enhancement): type is empty, key + itemIndex are set.
+// For async feedback (DDR-053): type is "enhancement-feedback", key + feedback are set.
 type EnhanceEvent struct {
+	Type      string `json:"type,omitempty"`
 	SessionID string `json:"sessionId"`
 	JobID     string `json:"jobId"`
 	Key       string `json:"key"`
 	ItemIndex int    `json:"itemIndex"`
 	Bucket    string `json:"bucket,omitempty"`
+	Feedback  string `json:"feedback,omitempty"` // DDR-053: enhancement feedback text
 }
 
 // EnhanceResult is the output returned to Step Functions.
@@ -125,12 +92,37 @@ type EnhanceResult struct {
 	Error            string `json:"error,omitempty"`
 }
 
-func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
-	handlerStart := time.Now()
+// rawHandler accepts raw JSON to route between enhancement and feedback handlers.
+func rawHandler(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 	if coldStart {
 		coldStart = false
 		log.Info().Str("function", "enhance-lambda").Msg("Cold start — first invocation")
 	}
+
+	// Peek at the "type" field to route.
+	var peek struct {
+		Type string `json:"type"`
+	}
+	json.Unmarshal(raw, &peek)
+
+	if peek.Type == "enhancement-feedback" {
+		var event EnhanceEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return nil, fmt.Errorf("unmarshal feedback event: %w", err)
+		}
+		return nil, handleEnhancementFeedback(ctx, event)
+	}
+
+	// Default: Step Functions enhancement invocation.
+	var event EnhanceEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return nil, fmt.Errorf("unmarshal enhance event: %w", err)
+	}
+	return handleEnhance(ctx, event)
+}
+
+func handleEnhance(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
+	handlerStart := time.Now()
 	bucket := mediaBucket
 	if event.Bucket != "" {
 		bucket = event.Bucket
@@ -294,7 +286,7 @@ func handler(ctx context.Context, event EnhanceEvent) (EnhanceResult, error) {
 }
 
 func main() {
-	lambda.Start(handler)
+	lambda.Start(rawHandler)
 }
 
 // --- DynamoDB Helpers ---
@@ -440,4 +432,145 @@ func generateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension 
 	}
 
 	return filehandler.GenerateThumbnail(mf, maxDimension)
+}
+
+// ===== Enhancement Feedback Handler (DDR-053: absorbed from Worker Lambda) =====
+
+// handleEnhancementFeedback applies user feedback to an already-enhanced photo.
+// Invoked asynchronously by the API Lambda (not via Step Functions).
+func handleEnhancementFeedback(ctx context.Context, event EnhanceEvent) error {
+	jobStart := time.Now()
+	job, err := sessionStore.GetEnhancementJob(ctx, event.SessionID, event.JobID)
+	if err != nil || job == nil {
+		log.Error().Err(err).Str("jobId", event.JobID).Msg("Enhancement job not found for feedback")
+		return nil
+	}
+
+	// Find the target item.
+	var targetIdx int = -1
+	for i, item := range job.Items {
+		if item.Key == event.Key || item.EnhancedKey == event.Key {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx == -1 {
+		log.Error().Str("key", event.Key).Str("jobId", event.JobID).Msg("Item not found in enhancement job")
+		return nil
+	}
+	item := job.Items[targetIdx]
+
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		log.Error().Str("jobId", event.JobID).Msg("GEMINI_API_KEY not configured for feedback")
+		return nil
+	}
+
+	genaiClient, err := chat.NewGeminiClient(ctx, apiKey)
+	if err != nil {
+		log.Error().Err(err).Str("jobId", event.JobID).Msg("Failed to create Gemini client for feedback")
+		return nil
+	}
+	geminiImageClient := chat.NewGeminiImageClient(genaiClient)
+
+	enhancedKey := item.EnhancedKey
+	if enhancedKey == "" {
+		enhancedKey = item.Key
+	}
+
+	tmpPath, cleanup, err := downloadFromS3(ctx, mediaBucket, enhancedKey)
+	if err != nil {
+		log.Error().Err(err).Str("key", enhancedKey).Msg("Failed to download enhanced image for feedback")
+		return nil
+	}
+	defer cleanup()
+
+	imageData, err := os.ReadFile(tmpPath)
+	if err != nil {
+		log.Error().Err(err).Str("key", enhancedKey).Msg("Failed to read downloaded file for feedback")
+		return nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(enhancedKey))
+	mime := "image/jpeg"
+	if m, ok := filehandler.SupportedImageExtensions[ext]; ok {
+		mime = m
+	}
+
+	imgConfig, _, err := image.DecodeConfig(bytes.NewReader(imageData))
+	imageWidth, imageHeight := 1024, 1024
+	if err == nil {
+		imageWidth = imgConfig.Width
+		imageHeight = imgConfig.Height
+	}
+
+	var imagenClient *chat.ImagenClient
+	vertexProject := os.Getenv("VERTEX_AI_PROJECT")
+	vertexRegion := os.Getenv("VERTEX_AI_REGION")
+	vertexToken := os.Getenv("VERTEX_AI_TOKEN")
+	if vertexProject != "" && vertexRegion != "" && vertexToken != "" {
+		imagenClient = chat.NewImagenClient(vertexProject, vertexRegion, vertexToken)
+	}
+
+	// Convert store feedback history to chat format.
+	var feedbackHistory []chat.FeedbackEntry
+	for _, fe := range item.FeedbackHistory {
+		feedbackHistory = append(feedbackHistory, chat.FeedbackEntry{
+			UserFeedback:  fe.UserFeedback,
+			ModelResponse: fe.ModelResponse,
+			Method:        fe.Method,
+			Success:       fe.Success,
+		})
+	}
+
+	resultData, resultMIME, feedbackEntry, err := chat.ProcessFeedback(
+		ctx, geminiImageClient, imagenClient,
+		imageData, mime, event.Feedback,
+		feedbackHistory, imageWidth, imageHeight,
+	)
+	if err != nil {
+		log.Warn().Err(err).Msg("Feedback processing failed")
+	}
+
+	if resultData != nil && len(resultData) > 0 {
+		feedbackKey := fmt.Sprintf("%s/enhanced/%s", event.SessionID, filepath.Base(item.Key))
+		contentType := resultMIME
+		_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: &mediaBucket, Key: &feedbackKey,
+			Body: bytes.NewReader(resultData), ContentType: &contentType,
+		})
+		if uploadErr != nil {
+			log.Error().Err(uploadErr).Str("key", feedbackKey).Msg("Failed to upload feedback result")
+			return nil
+		}
+
+		// Generate and upload thumbnail.
+		thumbKey := fmt.Sprintf("%s/thumbnails/enhanced-%s.jpg", event.SessionID,
+			strings.TrimSuffix(filepath.Base(item.Key), filepath.Ext(item.Key)))
+		thumbData, _, thumbErr := generateThumbnailFromBytes(resultData, resultMIME, thumbnailMaxDimension)
+		if thumbErr == nil {
+			thumbContentType := "image/jpeg"
+			s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket: &mediaBucket, Key: &thumbKey,
+				Body: bytes.NewReader(thumbData), ContentType: &thumbContentType,
+			})
+		}
+
+		// Update DynamoDB.
+		job.Items[targetIdx].EnhancedKey = feedbackKey
+		job.Items[targetIdx].EnhancedThumbKey = thumbKey
+		job.Items[targetIdx].Phase = chat.PhaseFeedback
+		if feedbackEntry != nil {
+			job.Items[targetIdx].FeedbackHistory = append(job.Items[targetIdx].FeedbackHistory, store.FeedbackEntry{
+				UserFeedback:  feedbackEntry.UserFeedback,
+				ModelResponse: feedbackEntry.ModelResponse,
+				Method:        feedbackEntry.Method,
+				Success:       feedbackEntry.Success,
+			})
+		}
+		sessionStore.PutEnhancementJob(ctx, event.SessionID, job)
+		log.Info().Str("jobId", event.JobID).Str("feedbackKey", feedbackKey).Dur("duration", time.Since(jobStart)).Msg("Enhancement feedback complete")
+	}
+
+	return nil
 }

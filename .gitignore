@@ -12,6 +12,18 @@
 /media-triage
 /media-web
 /media-lambda
+/triage-lambda
+/description-lambda
+/download-lambda
+/publish-lambda
+/enhance-lambda
+/thumbnail-lambda
+/selection-lambda
+/video-lambda
+/worker-lambda
+/webhook-lambda
+/oauth-lambda
+/main
 /bootstrap
 /function.zip
 

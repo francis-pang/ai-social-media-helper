@@ -180,4 +180,3 @@ func (m *ImageMetadata) FormatMetadataContext() string {
 
 	return sb.String()
 }
-

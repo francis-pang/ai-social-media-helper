@@ -218,13 +218,13 @@ func ReassembleVideo(ctx context.Context, frameDir string, originalVideoPath str
 		"-framerate", fmt.Sprintf("%.2f", fps),
 		"-i", framePattern,
 		"-i", originalVideoPath,
-		"-map", "0:v",       // Video from enhanced frames
-		"-map", "1:a?",      // Audio from original (optional - ? handles no-audio videos)
-		"-c:v", "libx264",   // H.264 video codec
+		"-map", "0:v", // Video from enhanced frames
+		"-map", "1:a?", // Audio from original (optional - ? handles no-audio videos)
+		"-c:v", "libx264", // H.264 video codec
 		"-crf", strconv.Itoa(ReassemblyH264CRF),
 		"-preset", ReassemblyH264Preset,
 		"-pix_fmt", "yuv420p", // Broad compatibility
-		"-c:a", "copy",       // Copy audio without re-encoding
+		"-c:a", "copy", // Copy audio without re-encoding
 		"-movflags", "+faststart", // Enable streaming playback
 		"-y", outputPath,
 	}

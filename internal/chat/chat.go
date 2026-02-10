@@ -133,7 +133,7 @@ func AskMediaQuestion(ctx context.Context, client *genai.Client, mediaFile *file
 	uploadFile := &filehandler.MediaFile{
 		Path:     uploadPath,
 		MIMEType: uploadMIME,
-		Size:     mediaFile.Size, // Original size for logging (actual upload size is different)
+		Size:     mediaFile.Size,     // Original size for logging (actual upload size is different)
 		Metadata: mediaFile.Metadata, // Keep original metadata for prompt building!
 	}
 

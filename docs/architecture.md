@@ -11,7 +11,10 @@ graph TD
         MediaTriage["media-triage\n(CLI)"]
         MediaWeb["media-web\n(local web server)"]
         MediaLambda["media-lambda\n(AWS Lambda)"]
-        WorkerLambdaBin["worker-lambda\n(AWS Lambda, DDR-050)"]
+        TriageLambdaBin["triage-lambda\n(DDR-053)"]
+        DescLambdaBin["description-lambda\n(DDR-053)"]
+        DownloadLambdaBin["download-lambda\n(DDR-053)"]
+        PublishLambdaBin["publish-lambda\n(DDR-053)"]
         WebhookLambda["webhook-lambda\n(AWS Lambda)"]
         OAuthLambda["oauth-lambda\n(AWS Lambda)"]
     end
@@ -20,6 +23,7 @@ graph TD
         Auth["auth\n(API key, Cognito)"]
         Chat["chat\n(Gemini API: selection,\ntriage, enhancement)"]
         FileHandler["filehandler\n(EXIF, thumbnails,\ncompression)"]
+        LambdaBoot["lambdaboot\n(shared init, DDR-053)"]
         Logging["logging\n(zerolog)"]
         Assets["assets\n(prompts, reference photos)"]
         Store["store\n(DynamoDB sessions)"]
@@ -39,14 +43,16 @@ graph TD
     MediaWeb --> Chat
     MediaWeb --> FileHandler
     MediaWeb --> PreactSPA
-    MediaLambda --> Chat
-    MediaLambda --> FileHandler
     MediaLambda --> Store
     MediaLambda --> Instagram
-    WorkerLambdaBin --> Chat
-    WorkerLambdaBin --> FileHandler
-    WorkerLambdaBin --> Store
-    WorkerLambdaBin --> Instagram
+    TriageLambdaBin --> Chat
+    TriageLambdaBin --> FileHandler
+    TriageLambdaBin --> LambdaBoot
+    DescLambdaBin --> Chat
+    DescLambdaBin --> LambdaBoot
+    DownloadLambdaBin --> LambdaBoot
+    PublishLambdaBin --> Instagram
+    PublishLambdaBin --> LambdaBoot
     WebhookLambda --> Webhook
     OAuthLambda --> Instagram
     PreactSPA --> MediaWeb
@@ -104,18 +110,22 @@ graph TD
     subgraph aws [AWS Backend]
         APIGW["API Gateway HTTP API\n(JWT authorizer via Cognito)"]
         APILambda["API Lambda\n(256MB, 30s)"]
-        WorkerLambda["Worker Lambda\n(2GB, 10min, DDR-050)"]
+        TriageLambda["Triage Lambda\n(2GB, 10min, DDR-053)"]
+        DescriptionLambda["Description Lambda\n(2GB, 5min, DDR-053)"]
+        DownloadLambda["Download Lambda\n(2GB, 10min, DDR-053)"]
+        PublishLambda["Publish Lambda\n(256MB, 5min, DDR-053)"]
         ThumbLambda["Thumbnail Lambda\n(512MB, 2min)"]
         SelectionLambda["Selection Lambda\n(4GB, 15min)"]
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
         VideoLambda["Video Lambda\n(4GB, 15min)"]
-        StepFn["Step Functions\n(SelectionPipeline,\nEnhancementPipeline)"]
+        StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish)"]
         DynamoDB["DynamoDB\n(session state, TTL 24h)"]
     end
 
     S3Media["S3 Media Bucket\n(24h auto-expiration)"]
     S3Frontend["S3 Frontend Bucket"]
     GeminiAPI["Gemini API"]
+    InstagramAPI["Instagram Graph API"]
     SSM["SSM Parameter Store\n(API keys, credentials)"]
     Cognito["Cognito User Pool"]
 
@@ -125,16 +135,21 @@ graph TD
     APIGW --> Cognito
     APIGW --> APILambda
     APILambda --> StepFn
-    APILambda -->|"async invoke"| WorkerLambda
+    APILambda -->|"async invoke"| DescriptionLambda
+    APILambda -->|"async invoke"| DownloadLambda
+    APILambda -->|"async invoke"| EnhancementLambda
     APILambda --> DynamoDB
     APILambda --> S3Media
-    WorkerLambda --> DynamoDB
-    WorkerLambda --> S3Media
-    WorkerLambda --> GeminiAPI
+    DescriptionLambda --> GeminiAPI
+    DownloadLambda --> S3Media
+    StepFn --> TriageLambda
+    StepFn --> PublishLambda
     StepFn --> ThumbLambda
     StepFn --> SelectionLambda
     StepFn --> EnhancementLambda
     StepFn --> VideoLambda
+    TriageLambda --> GeminiAPI
+    PublishLambda --> InstagramAPI
     ThumbLambda --> S3Media
     SelectionLambda --> GeminiAPI
     EnhancementLambda --> GeminiAPI
@@ -157,20 +172,23 @@ See [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md) for the
 
 Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functions for parallel orchestration:
 
-| Lambda | Purpose | Container | Memory | Timeout |
-|--------|---------|-----------|--------|---------|
-| API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s |
-| Worker | Triage, description, download, publish processing (DDR-050) | Light | 2 GB | 10 min |
-| Thumbnail | Per-file thumbnail generation | Heavy (ffmpeg) | 512 MB | 2 min |
-| Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min |
-| Enhancement | Per-photo Gemini image editing | Light | 2 GB | 5 min |
-| Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min |
-| Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s |
-| OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s |
+| Lambda | Purpose | Container | Memory | Timeout | Credentials |
+|--------|---------|-----------|--------|---------|-------------|
+| API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s | Gemini + Instagram |
+| Triage | Triage pipeline: prepare, poll Gemini, run (DDR-053) | Light | 2 GB | 10 min | Gemini |
+| Description | Caption generation + feedback (DDR-053) | Light | 2 GB | 5 min | Gemini |
+| Download | ZIP bundle creation (DDR-053) | Light | 2 GB | 10 min | None |
+| Publish | Publish pipeline: containers, poll Instagram, finalize (DDR-053) | Light | 256 MB | 5 min | Instagram |
+| Thumbnail | Per-file thumbnail generation | Heavy (ffmpeg) | 512 MB | 2 min | Gemini |
+| Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min | Gemini |
+| Enhancement | Per-photo Gemini image editing + feedback (DDR-053) | Light | 2 GB | 5 min | Gemini |
+| Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min | Gemini |
+| Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s | None |
+| OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s | Instagram |
 
-"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. Webhook and OAuth Lambdas are deployed in a separate WebhookStack with their own CloudFront distribution (DDR-044, DDR-048). See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md) and [docker-images.md](./docker-images.md).
+"Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. Webhook and OAuth Lambdas are deployed in a separate WebhookStack with their own CloudFront distribution (DDR-044, DDR-048). See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md), [DDR-053](./design-decisions/DDR-053-granular-lambda-split.md), and [docker-images.md](./docker-images.md).
 
-### Async Job Dispatch (DDR-050)
+### Async Job Dispatch (DDR-050, DDR-052)
 
 The API Lambda dispatches all long-running work asynchronously — **no background goroutines**. This avoids Lambda's execution freeze problem where goroutines stall between invocations.
 
@@ -178,26 +196,32 @@ The API Lambda dispatches all long-running work asynchronously — **no backgrou
 |----------|----------|-----------|
 | Selection | Step Functions `StartExecution` | Thumbnail → Selection pipeline |
 | Enhancement | Step Functions `StartExecution` | Enhancement + Video pipeline |
-| Triage | `lambda:Invoke` (async) | Worker Lambda |
-| Description | `lambda:Invoke` (async) | Worker Lambda |
-| Download | `lambda:Invoke` (async) | Worker Lambda |
-| Publish | `lambda:Invoke` (async) | Worker Lambda |
+| Triage | Step Functions `StartExecution` (DDR-052) | Triage Lambda (prepare → poll Gemini → run) |
+| Publish | Step Functions `StartExecution` (DDR-052) | Publish Lambda (containers → poll Instagram → finalize) |
+| Description | `lambda:Invoke` (async) | Description Lambda (DDR-053) |
+| Download | `lambda:Invoke` (async) | Download Lambda (DDR-053) |
+| Enhancement feedback | `lambda:Invoke` (async) | Enhancement Lambda (DDR-053) |
+
+Each domain has a dedicated Lambda with its own CloudWatch log group for easier troubleshooting (DDR-053). Download Lambda has no AI or Instagram dependencies (smallest binary). Publish Lambda needs only Instagram credentials.
 
 All job state is stored in DynamoDB. The API Lambda writes a pending job, dispatches processing, and polls DynamoDB for results.
 
 ### Processing Lambda Entrypoints
 
-The API Lambda uses HTTP request/response via API Gateway. The processing Lambdas (Thumbnail, Selection, Enhancement, Video) are **directly invoked** by Step Functions with typed JSON events. The Worker Lambda is invoked asynchronously by the API Lambda. Each handler follows `func(ctx, Event) (Result, error)`:
+The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambdas are either invoked by Step Functions or asynchronously by the API Lambda. Each handler follows `func(ctx, Event) (Result, error)`:
 
-| Lambda | Entrypoint | Input | Output |
-|--------|-----------|-------|--------|
-| Worker | `cmd/worker-lambda` | `{type, sessionId, jobId, ...payload}` | writes to DynamoDB |
-| Thumbnail | `cmd/thumbnail-lambda` | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
-| Selection | `cmd/selection-lambda` | `{sessionId, jobId, tripContext, mediaKeys[]}` | `{selectedCount, excludedCount}` |
-| Enhancement | `cmd/enhance-lambda` | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
-| Video | `cmd/video-lambda` | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
+| Lambda | Entrypoint | Invocation | Input | Output |
+|--------|-----------|------------|-------|--------|
+| Triage | `cmd/triage-lambda` | Step Functions | `{type, sessionId, jobId, model}` | returns JSON + writes DynamoDB |
+| Description | `cmd/description-lambda` | Async invoke | `{type, sessionId, jobId, keys[], ...}` | writes to DynamoDB |
+| Download | `cmd/download-lambda` | Async invoke | `{type, sessionId, jobId, keys[]}` | writes to DynamoDB |
+| Publish | `cmd/publish-lambda` | Step Functions | `{type, sessionId, jobId, groupId, ...}` | returns JSON + writes DynamoDB |
+| Thumbnail | `cmd/thumbnail-lambda` | Step Functions | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
+| Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, mediaKeys[]}` | `{selectedCount, excludedCount}` |
+| Enhancement | `cmd/enhance-lambda` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
+| Video | `cmd/video-lambda` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
 
-Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch (Gemini needs the full set for comparative selection). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
+Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
 
 ## Security Architecture
 
@@ -242,7 +266,7 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 | Pipeline | Flow |
 |----------|------|
 | Frontend | Preact build -> S3 sync -> CloudFront invalidation |
-| Backend | 8 parallel Docker builds (5 light + 3 heavy) with BuildKit caching -> 8 Lambda function updates |
+| Backend | 11 parallel Docker builds (8 light + 3 heavy) with BuildKit caching -> 11 Lambda function updates |
 
 ECR repositories are owned by a dedicated RegistryStack (DDR-046), deployed before any application stack. This breaks the chicken-and-egg dependency where `DockerImageFunction` requires an image that the pipeline hasn't pushed yet. See [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md).
 
@@ -286,7 +310,9 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-047](./design-decisions/DDR-047-cdk-deploy-optimization.md) — CDK deploy optimization
 - [DDR-049](./design-decisions/DDR-049-aws-resource-tagging.md) — AWS resource tagging for cost tracking
 - [DDR-050](./design-decisions/DDR-050-replace-goroutines-with-async-dispatch.md) — Replace goroutines with DynamoDB + Step Functions / async Lambda
+- [DDR-052](./design-decisions/DDR-052-step-functions-polling-for-long-running-ops.md) — Step Functions polling for long-running operations (triage, publish)
+- [DDR-053](./design-decisions/DDR-053-granular-lambda-split.md) — Granular Lambda split: Worker Lambda → 4 domain-specific Lambdas + shared bootstrap
 
 ---
 
-**Last Updated**: 2026-02-09
+**Last Updated**: 2026-02-10

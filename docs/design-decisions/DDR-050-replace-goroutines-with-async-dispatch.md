@@ -145,3 +145,5 @@ The API Lambda writes `pending`, the processing Lambda/Step Function updates to 
 - [DDR-035](./DDR-035-multi-lambda-deployment.md): Multi-Lambda Deployment Architecture — defines Step Functions and dedicated Lambdas
 - [DDR-039](./DDR-039-dynamodb-session-store.md): DynamoDB SessionStore — the store being wired into the API Lambda
 - [DDR-043](./DDR-043-step-functions-lambda-entrypoints.md): Step Functions Lambda Entrypoints — the processing Lambdas that Step Functions invokes
+- [DDR-052](./DDR-052-step-functions-polling-for-long-running-ops.md): Step Functions Polling — refines this DDR by moving triage and publish from Worker Lambda to Step Functions with Wait states
+- [DDR-053](./DDR-053-granular-lambda-split.md): Granular Lambda Split — replaces the monolithic Worker Lambda with 4 domain-specific Lambdas (triage, description, download, publish) and merges enhancement-feedback into enhance-lambda
