@@ -17,20 +17,59 @@ import { signal } from "@preact/signals";
 import { isCloudMode } from "../api/client";
 
 // Cognito User Pool configuration — injected at build time via Vite env vars.
-// Set VITE_COGNITO_USER_POOL_ID and VITE_COGNITO_CLIENT_ID in the build environment.
-const USER_POOL_ID = import.meta.env.VITE_COGNITO_USER_POOL_ID || "";
-const CLIENT_ID = import.meta.env.VITE_COGNITO_CLIENT_ID || "";
+// Supports multiple comma-separated pool/client ID pairs for resilience across
+// redeployments. The first valid pair is used; on pool-not-found errors during
+// sign-in, the next pair is tried automatically.
+const POOL_IDS = (import.meta.env.VITE_COGNITO_USER_POOL_ID || "")
+  .split(",")
+  .map((s: string) => s.trim())
+  .filter(Boolean);
+const CLIENT_IDS = (import.meta.env.VITE_COGNITO_CLIENT_ID || "")
+  .split(",")
+  .map((s: string) => s.trim())
+  .filter(Boolean);
 
-let userPool: CognitoUserPool | null = null;
+interface PoolConfig {
+  userPoolId: string;
+  clientId: string;
+}
 
-function getUserPool(): CognitoUserPool {
-  if (!userPool) {
-    userPool = new CognitoUserPool({
-      UserPoolId: USER_POOL_ID,
-      ClientId: CLIENT_ID,
-    });
+/** Ordered list of pool/client pairs to try. */
+const POOL_CONFIGS: PoolConfig[] = POOL_IDS.map(
+  (id: string, i: number): PoolConfig => ({
+    userPoolId: id,
+    clientId: CLIENT_IDS[i] || "",
+  }),
+).filter((c: PoolConfig) => c.userPoolId && c.clientId);
+
+/** Index of the currently active pool config. */
+let activeConfigIndex = 0;
+
+const userPools = new Map<number, CognitoUserPool>();
+
+function getUserPool(configIndex?: number): CognitoUserPool {
+  const idx = configIndex ?? activeConfigIndex;
+  if (!userPools.has(idx)) {
+    const cfg = POOL_CONFIGS[idx];
+    userPools.set(
+      idx,
+      new CognitoUserPool({
+        UserPoolId: cfg.userPoolId,
+        ClientId: cfg.clientId,
+      }),
+    );
   }
-  return userPool;
+  return userPools.get(idx)!;
+}
+
+/** Returns true if the error indicates the pool or client no longer exists. */
+function isPoolNotFoundError(err: Error): boolean {
+  const msg = err.message || "";
+  return (
+    msg.includes("does not exist") ||
+    msg.includes("User pool client") ||
+    msg.includes("ResourceNotFoundException")
+  );
 }
 
 /** Whether the user is currently authenticated. */
@@ -47,34 +86,43 @@ export const authLoading = signal<boolean>(true);
  * In local mode, auth is never required.
  */
 export function isAuthRequired(): boolean {
-  return isCloudMode && USER_POOL_ID !== "" && CLIENT_ID !== "";
+  return isCloudMode && POOL_CONFIGS.length > 0;
 }
 
 /**
  * Get the current valid JWT ID token for API requests.
+ * Checks each configured pool for a current user session.
  * Returns null if not authenticated or token cannot be refreshed.
  */
 export function getIdToken(): Promise<string | null> {
   if (!isAuthRequired()) return Promise.resolve(null);
 
-  return new Promise((resolve) => {
-    const pool = getUserPool();
-    const user = pool.getCurrentUser();
-    if (!user) {
-      resolve(null);
-      return;
-    }
+  // Try each pool config — the user session is stored per-pool in localStorage.
+  function tryPool(idx: number): Promise<string | null> {
+    if (idx >= POOL_CONFIGS.length) return Promise.resolve(null);
 
-    user.getSession(
-      (err: Error | null, session: CognitoUserSession | null) => {
-        if (err || !session || !session.isValid()) {
-          resolve(null);
-          return;
-        }
-        resolve(session.getIdToken().getJwtToken());
-      },
-    );
-  });
+    return new Promise<string | null>((resolve) => {
+      const pool = getUserPool(idx);
+      const user = pool.getCurrentUser();
+      if (!user) {
+        resolve(tryPool(idx + 1));
+        return;
+      }
+
+      user.getSession(
+        (err: Error | null, session: CognitoUserSession | null) => {
+          if (err || !session || !session.isValid()) {
+            resolve(tryPool(idx + 1));
+            return;
+          }
+          activeConfigIndex = idx;
+          resolve(session.getIdToken().getJwtToken());
+        },
+      );
+    });
+  }
+
+  return tryPool(0);
 }
 
 /**
@@ -100,55 +148,79 @@ export async function checkExistingSession(): Promise<void> {
 
 /**
  * Sign in with email and password.
+ * Tries each configured pool/client pair in order; if a pool-not-found error
+ * occurs, automatically falls through to the next configuration.
  */
 export function signIn(email: string, password: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const pool = getUserPool();
-    const user = new CognitoUser({
-      Username: email,
-      Pool: pool,
-    });
+  authError.value = null;
 
-    const authDetails = new AuthenticationDetails({
-      Username: email,
-      Password: password,
-    });
+  function tryConfig(configIndex: number): Promise<void> {
+    if (configIndex >= POOL_CONFIGS.length) {
+      const err = new Error(
+        "Authentication failed: none of the configured Cognito pools are reachable.",
+      );
+      isAuthenticated.value = false;
+      authError.value = err.message;
+      return Promise.reject(err);
+    }
 
-    authError.value = null;
+    return new Promise<void>((resolve, reject) => {
+      const pool = getUserPool(configIndex);
+      const user = new CognitoUser({
+        Username: email,
+        Pool: pool,
+      });
 
-    user.authenticateUser(authDetails, {
-      onSuccess: () => {
-        isAuthenticated.value = true;
-        authError.value = null;
-        resolve();
-      },
-      onFailure: (err: Error) => {
-        isAuthenticated.value = false;
-        authError.value = err.message || "Authentication failed";
-        reject(err);
-      },
-      newPasswordRequired: () => {
-        // First-time login after admin-create-user requires a password change.
-        // For simplicity, we'll handle this in the login form.
-        isAuthenticated.value = false;
-        authError.value =
-          "Password change required. Please use the AWS CLI to set a permanent password.";
-        reject(new Error("NEW_PASSWORD_REQUIRED"));
-      },
+      const authDetails = new AuthenticationDetails({
+        Username: email,
+        Password: password,
+      });
+
+      user.authenticateUser(authDetails, {
+        onSuccess: () => {
+          activeConfigIndex = configIndex;
+          isAuthenticated.value = true;
+          authError.value = null;
+          resolve();
+        },
+        onFailure: (err: Error) => {
+          if (
+            isPoolNotFoundError(err) &&
+            configIndex + 1 < POOL_CONFIGS.length
+          ) {
+            // Pool/client no longer exists — try the next config.
+            tryConfig(configIndex + 1).then(resolve, reject);
+            return;
+          }
+          isAuthenticated.value = false;
+          authError.value = err.message || "Authentication failed";
+          reject(err);
+        },
+        newPasswordRequired: () => {
+          isAuthenticated.value = false;
+          authError.value =
+            "Password change required. Please use the AWS CLI to set a permanent password.";
+          reject(new Error("NEW_PASSWORD_REQUIRED"));
+        },
+      });
     });
-  });
+  }
+
+  return tryConfig(0);
 }
 
 /**
- * Sign out and clear tokens.
+ * Sign out and clear tokens from all configured pools.
  */
 export function signOut(): void {
   if (!isAuthRequired()) return;
 
-  const pool = getUserPool();
-  const user = pool.getCurrentUser();
-  if (user) {
-    user.signOut();
+  for (let i = 0; i < POOL_CONFIGS.length; i++) {
+    const pool = getUserPool(i);
+    const user = pool.getCurrentUser();
+    if (user) {
+      user.signOut();
+    }
   }
   isAuthenticated.value = false;
 }
