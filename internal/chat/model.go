@@ -53,4 +53,3 @@ func GetModelName() string {
 	}
 	return DefaultModelName
 }
-

@@ -138,7 +138,7 @@ push-publish: ecr-login
 	aws lambda wait function-updated --function-name $(FN_PUBLISH) --region $(REGION)
 
 push-thumbnail: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=thumbnail-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=thumbnail-lambda --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
 	  -f cmd/media-lambda/Dockerfile.heavy -t $(PRIVATE_HEAVY):thumb-dev .
 	docker push $(PRIVATE_HEAVY):thumb-dev
 	aws lambda update-function-code --function-name $(FN_THUMBNAIL) \
@@ -146,7 +146,7 @@ push-thumbnail: ecr-login
 	aws lambda wait function-updated --function-name $(FN_THUMBNAIL) --region $(REGION)
 
 push-selection: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=selection-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=selection-lambda --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
 	  -f cmd/media-lambda/Dockerfile.heavy -t $(PRIVATE_HEAVY):select-dev .
 	docker push $(PRIVATE_HEAVY):select-dev
 	aws lambda update-function-code --function-name $(FN_SELECTION) \
@@ -162,7 +162,7 @@ push-enhance: ecr-login
 	aws lambda wait function-updated --function-name $(FN_ENHANCE) --region $(REGION)
 
 push-video: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=video-lambda \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=video-lambda --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
 	  -f cmd/media-lambda/Dockerfile.heavy -t $(PRIVATE_HEAVY):video-dev .
 	docker push $(PRIVATE_HEAVY):video-dev
 	aws lambda update-function-code --function-name $(FN_VIDEO) \

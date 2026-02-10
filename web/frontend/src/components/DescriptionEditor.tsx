@@ -163,6 +163,7 @@ async function pollForResults(jobId: string, sessionId: string) {
       }
     } catch (err) {
       // Continue polling on transient errors
+      // eslint-disable-next-line no-console
       console.warn("Poll error:", err);
     }
   }

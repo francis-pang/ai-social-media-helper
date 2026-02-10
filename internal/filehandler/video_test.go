@@ -227,13 +227,13 @@ func TestVideoMetadataNoGPS(t *testing.T) {
 
 func TestVideoMetadataGetters(t *testing.T) {
 	tests := []struct {
-		name      string
-		meta      *VideoMetadata
-		wantType  string
-		wantGPS   bool
-		wantDate  bool
-		wantLat   float64
-		wantLon   float64
+		name     string
+		meta     *VideoMetadata
+		wantType string
+		wantGPS  bool
+		wantDate bool
+		wantLat  float64
+		wantLon  float64
 	}{
 		{
 			name: "Full metadata",
@@ -400,4 +400,3 @@ func floatEquals(a, b, tolerance float64) bool {
 	}
 	return diff < tolerance
 }
-

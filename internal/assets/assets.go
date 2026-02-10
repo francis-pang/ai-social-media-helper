@@ -14,4 +14,3 @@ var FrancisReferencePhoto []byte
 
 // FrancisReferenceMIMEType is the MIME type of the Francis reference photo.
 const FrancisReferenceMIMEType = "image/jpeg"
-

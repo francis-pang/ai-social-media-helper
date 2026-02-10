@@ -68,4 +68,3 @@ func TestGetFromGPGFileNotFound(t *testing.T) {
 		t.Error("expected error when credentials file does not exist")
 	}
 }
-

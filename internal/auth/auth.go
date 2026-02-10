@@ -117,4 +117,3 @@ func getPassphrasePath() (string, error) {
 	passphrasePath = filepath.Join(cwd, ".gpg-passphrase")
 	return passphrasePath, nil
 }
-

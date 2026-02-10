@@ -137,6 +137,7 @@ export async function invalidateDownstream(
 
   // Fire backend invalidation (best-effort — don't block on it)
   invalidateSession({ sessionId, fromStep }).catch((err) => {
+    // eslint-disable-next-line no-console
     console.warn("Backend invalidation failed (non-blocking):", err);
   });
 

@@ -259,6 +259,7 @@ export async function uploadToS3Multipart(
       while (nextIndex < partUrls.length) {
         const idx = nextIndex++;
         const part = partUrls[idx];
+        if (!part) continue;
         const start = idx * chunkSize;
         const end = Math.min(start + chunkSize, fileSize);
         const blob = file.slice(start, end);
@@ -303,6 +304,7 @@ export async function uploadToS3Multipart(
     try {
       await abortMultipartUpload({ sessionId, key, uploadId });
     } catch (abortErr) {
+      // eslint-disable-next-line no-console
       console.error("Failed to abort multipart upload:", abortErr);
     }
     throw err;

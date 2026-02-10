@@ -38,7 +38,20 @@ echo ""
 
 FAILED=0
 
-# --- 1. Go vet ---
+# --- 1. Go formatting (gofmt) ---
+info "Checking gofmt..."
+UNFORMATTED=$(gofmt -l . 2>&1)
+if [ -z "$UNFORMATTED" ]; then
+  info "gofmt: PASSED"
+else
+  error "gofmt: FAILED — the following files need formatting:"
+  echo "$UNFORMATTED"
+  error "Run: gofmt -w ."
+  FAILED=1
+fi
+echo ""
+
+# --- 2. Go vet ---
 info "Running go vet..."
 if go vet ./... 2>&1; then
   info "go vet: PASSED"
@@ -48,7 +61,7 @@ else
 fi
 echo ""
 
-# --- 2. Go build (all Lambda entrypoints) ---
+# --- 3. Go build (all Lambda entrypoints) ---
 info "Running go build ./cmd/..."
 if go build ./cmd/... 2>&1; then
   info "go build: PASSED"
@@ -58,7 +71,7 @@ else
 fi
 echo ""
 
-# --- 3. Frontend build ---
+# --- 4. Frontend build ---
 FRONTEND_DIR="web/frontend"
 if [ -d "$FRONTEND_DIR" ]; then
   info "Running frontend build..."
@@ -82,7 +95,7 @@ else
 fi
 echo ""
 
-# --- 4. Secret detection ---
+# --- 5. Secret detection ---
 info "Scanning for secrets in staged files..."
 SECRET_PATTERNS=(
   'AKIA[0-9A-Z]{16}'            # AWS Access Key ID

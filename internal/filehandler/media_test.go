@@ -166,4 +166,3 @@ func TestCoordinatesToDMS(t *testing.T) {
 		})
 	}
 }
-

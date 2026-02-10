@@ -14,6 +14,8 @@
 # See also: docs/DOCKER-IMAGES.md for layer sharing strategy
 
 ARG CMD_TARGET=thumbnail-lambda
+# ECR_ACCOUNT_ID must be global for FROM; pass --build-arg ECR_ACCOUNT_ID=$ACCOUNT for local builds
+ARG ECR_ACCOUNT_ID=123456789012
 
 # Stage 1: Build the Go binary
 # BuildKit cache mounts persist Go module + build caches across builds (DDR-047)
@@ -29,7 +31,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -o /handler ./cmd/${CMD_TARGET}
 
-# Stage 2: Runtime — AL2023 base + ffmpeg + Go binary
+# Stage 2: ffmpeg cache — variable expansion in FROM is supported, not in COPY --from
+FROM ${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 AS ffmpeg-cache
+
+# Stage 3: Runtime — AL2023 base + ffmpeg + Go binary
 # AWS base image is proactively cached on Lambda workers for faster cold starts.
 # Static ffmpeg includes libsvtav1 (AV1) and libopus (Opus) codecs (DDR-018).
 #
@@ -38,10 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 #   2. ffmpeg binaries (shared by ALL Lambda images in this repo)
 #   3. Go binary (unique per Lambda — last layer for optimal caching)
 FROM public.ecr.aws/lambda/provided:al2023
-# ffmpeg cached in ECR to avoid Docker Hub rate limits (DDR-041)
-# Pass --build-arg ECR_ACCOUNT_ID=$AWS_ACCOUNT_ID for CI/CD (see backend-pipeline buildspec)
-ARG ECR_ACCOUNT_ID=123456789012
-COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffmpeg /usr/local/bin/
-COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffprobe /usr/local/bin/
+COPY --from=ffmpeg-cache /ffmpeg /usr/local/bin/
+COPY --from=ffmpeg-cache /ffprobe /usr/local/bin/
 COPY --from=builder /handler /var/runtime/bootstrap
 ENTRYPOINT ["/var/runtime/bootstrap"]

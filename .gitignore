@@ -11,6 +11,7 @@
 /media-select
 /media-triage
 /media-web
+/media-triage-eval
 /media-lambda
 /triage-lambda
 /description-lambda
@@ -69,6 +70,7 @@ sessions/*.json
 # Frontend (Node.js / Vite)
 web/frontend/node_modules/
 web/frontend/dist/
+web/frontend/test-results/
 
 # Build artifacts
 dist/
