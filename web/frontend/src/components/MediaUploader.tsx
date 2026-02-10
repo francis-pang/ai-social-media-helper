@@ -318,11 +318,77 @@ function clearAll() {
 // Drag-and-drop (supplementary input method)
 // ---------------------------------------------------------------------------
 
-function handleDrop(e: DragEvent) {
+/** Read all entries from a FileSystemDirectoryReader (handles batching). */
+function readAllEntries(
+  reader: FileSystemDirectoryReader,
+): Promise<FileSystemEntry[]> {
+  return new Promise((resolve, reject) => {
+    const results: FileSystemEntry[] = [];
+    function readBatch() {
+      reader.readEntries((entries) => {
+        if (entries.length === 0) {
+          resolve(results);
+        } else {
+          results.push(...entries);
+          readBatch(); // readEntries may return results in batches
+        }
+      }, reject);
+    }
+    readBatch();
+  });
+}
+
+/** Convert a FileSystemFileEntry to a File. */
+function entryToFile(entry: FileSystemFileEntry): Promise<File> {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+/** Recursively collect all File objects from a FileSystemEntry tree. */
+async function collectFilesFromEntry(
+  entry: FileSystemEntry,
+): Promise<File[]> {
+  if (entry.isFile) {
+    try {
+      const file = await entryToFile(entry as FileSystemFileEntry);
+      return [file];
+    } catch {
+      return [];
+    }
+  }
+  if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const children = await readAllEntries(reader);
+    const nested = await Promise.all(children.map(collectFilesFromEntry));
+    return nested.flat();
+  }
+  return [];
+}
+
+/** Extract files from a DataTransfer, recursively walking dropped directories. */
+async function getFilesFromDataTransfer(
+  dataTransfer: DataTransfer,
+): Promise<File[]> {
+  const items = Array.from(dataTransfer.items);
+  const entries = items
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter((e): e is FileSystemEntry => e != null);
+
+  // If webkitGetAsEntry is not supported, fall back to dataTransfer.files
+  if (entries.length === 0) {
+    return Array.from(dataTransfer.files);
+  }
+
+  const nested = await Promise.all(entries.map(collectFilesFromEntry));
+  return nested.flat();
+}
+
+async function handleDrop(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
-  if (!e.dataTransfer?.files) return;
-  const mediaFiles = Array.from(e.dataTransfer.files).filter(isMediaFile);
+  if (!e.dataTransfer) return;
+
+  const allFiles = await getFilesFromDataTransfer(e.dataTransfer);
+  const mediaFiles = allFiles.filter(isMediaFile);
   if (mediaFiles.length > 0) {
     addFiles(mediaFiles);
   }
@@ -563,14 +629,17 @@ export function MediaUploader() {
                   flexShrink: 0,
                   minWidth: "3.5rem",
                   textAlign: "right",
+                  position: "relative",
+                  cursor: f.status === "error" ? "help" : "default",
                 }}
+                title={f.status === "error" ? (f.error || "Upload failed") : undefined}
               >
                 {f.status === "uploading"
                   ? `${f.progress}%`
                   : f.status === "done"
                     ? "Uploaded"
                     : f.status === "error"
-                      ? f.error || "Failed"
+                      ? (<>Failed <span style={{ fontSize: "0.625rem", opacity: 0.8 }}>ⓘ</span></>)
                       : "Pending"}
               </span>
 
