@@ -50,7 +50,7 @@ const userPools = new Map<number, CognitoUserPool>();
 function getUserPool(configIndex?: number): CognitoUserPool {
   const idx = configIndex ?? activeConfigIndex;
   if (!userPools.has(idx)) {
-    const cfg = POOL_CONFIGS[idx];
+    const cfg = POOL_CONFIGS[idx]!;
     userPools.set(
       idx,
       new CognitoUserPool({
