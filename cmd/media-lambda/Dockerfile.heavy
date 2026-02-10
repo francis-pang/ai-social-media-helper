@@ -39,7 +39,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 #   3. Go binary (unique per Lambda — last layer for optimal caching)
 FROM public.ecr.aws/lambda/provided:al2023
 # ffmpeg cached in ECR to avoid Docker Hub rate limits (DDR-041)
-COPY --from=123456789012.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffmpeg /usr/local/bin/
-COPY --from=123456789012.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffprobe /usr/local/bin/
+# Pass --build-arg ECR_ACCOUNT_ID=$AWS_ACCOUNT_ID for CI/CD (see backend-pipeline buildspec)
+ARG ECR_ACCOUNT_ID=123456789012
+COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffmpeg /usr/local/bin/
+COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffprobe /usr/local/bin/
 COPY --from=builder /handler /var/runtime/bootstrap
 ENTRYPOINT ["/var/runtime/bootstrap"]
