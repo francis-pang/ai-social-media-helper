@@ -84,6 +84,56 @@ export interface UploadUrlResponse {
   key: string;
 }
 
+// --- Multipart Upload types (DDR-054) ---
+
+/** Request body for POST /api/upload-multipart/init. */
+export interface MultipartInitRequest {
+  sessionId: string;
+  filename: string;
+  contentType: string;
+  fileSize: number;
+  chunkSize: number;
+}
+
+/** A single presigned part URL returned by the init endpoint. */
+export interface MultipartPartUrl {
+  partNumber: number;
+  url: string;
+}
+
+/** Response from POST /api/upload-multipart/init. */
+export interface MultipartInitResponse {
+  uploadId: string;
+  key: string;
+  partUrls: MultipartPartUrl[];
+}
+
+/** A completed part with its ETag, used in the complete request. */
+export interface MultipartCompletedPart {
+  partNumber: number;
+  etag: string;
+}
+
+/** Request body for POST /api/upload-multipart/complete. */
+export interface MultipartCompleteRequest {
+  sessionId: string;
+  key: string;
+  uploadId: string;
+  parts: MultipartCompletedPart[];
+}
+
+/** Response from POST /api/upload-multipart/complete. */
+export interface MultipartCompleteResponse {
+  key: string;
+}
+
+/** Request body for POST /api/upload-multipart/abort. */
+export interface MultipartAbortRequest {
+  sessionId: string;
+  key: string;
+  uploadId: string;
+}
+
 /** Response from GET /api/media/full when returning presigned URL (Phase 2). */
 export interface FullImageResponse {
   url: string;

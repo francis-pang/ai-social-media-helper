@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import { getUploadUrl, uploadToS3, startTriage } from "../api/client";
+import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, startTriage } from "../api/client";
 import { selectedPaths, uploadSessionId, triageJobId, navigateToStep } from "../app";
 
 /** Media file MIME types accepted by the uploader. */
@@ -150,15 +150,22 @@ async function uploadFile(sessionId: string, filename: string, file: File) {
   updateFile(filename, { status: "uploading", progress: 0 });
 
   try {
-    const { uploadUrl, key } = await getUploadUrl(
-      sessionId,
-      filename,
-      file.type,
-    );
+    let key: string;
 
-    await uploadToS3(uploadUrl, file, (loaded, total) => {
-      updateFile(filename, { progress: Math.round((loaded / total) * 100) });
-    });
+    if (file.size > MULTIPART_THRESHOLD) {
+      // Large file: use S3 multipart upload with parallel chunks (DDR-054)
+      key = await uploadToS3Multipart(sessionId, file, (loaded, total) => {
+        updateFile(filename, { progress: Math.round((loaded / total) * 100) });
+      });
+    } else {
+      // Small file: use single presigned PUT (existing path)
+      const res = await getUploadUrl(sessionId, filename, file.type);
+      key = res.key;
+
+      await uploadToS3(res.uploadUrl, file, (loaded, total) => {
+        updateFile(filename, { progress: Math.round((loaded / total) * 100) });
+      });
+    }
 
     updateFile(filename, { status: "done", progress: 100, key });
   } catch (e) {

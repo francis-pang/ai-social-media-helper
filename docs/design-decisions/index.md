@@ -66,6 +66,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-051](./DDR-051-comprehensive-logging-overhaul.md) | 2026-02-09 | Comprehensive Logging Overhaul for Production Troubleshooting | Accepted |
 | [DDR-052](./DDR-052-step-functions-polling-for-long-running-ops.md) | 2026-02-10 | Step Functions Polling for Long-Running Operations | Accepted |
 | [DDR-053](./DDR-053-granular-lambda-split.md) | 2026-02-10 | Granular Lambda Split — Worker → Domain-Specific Lambdas | Accepted |
+| [DDR-054](./DDR-054-s3-multipart-upload-acceleration.md) | 2026-02-10 | S3 Multipart Upload Acceleration | Accepted |
 
 ---
 
@@ -80,4 +81,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-10 (DDR-053)
+**Last Updated**: 2026-02-10 (DDR-054)

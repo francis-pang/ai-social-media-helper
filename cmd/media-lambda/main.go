@@ -14,6 +14,9 @@
 //
 //	GET  /api/health               — health check (no auth required)
 //	GET  /api/upload-url           — presigned S3 PUT URL for browser upload
+//	POST /api/upload-multipart/init     — create S3 multipart upload + presign part URLs (DDR-054)
+//	POST /api/upload-multipart/complete — complete S3 multipart upload with ETags (DDR-054)
+//	POST /api/upload-multipart/abort    — abort S3 multipart upload (DDR-054)
 //	POST /api/triage/start         — start triage from uploaded S3 files
 //	GET  /api/triage/{id}/results  — poll triage results
 //	POST /api/triage/{id}/confirm  — delete confirmed files from S3
@@ -197,6 +200,9 @@ func main() {
 
 	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/upload-url", handleUploadURL)
+	mux.HandleFunc("/api/upload-multipart/init", handleMultipartInit)         // DDR-054
+	mux.HandleFunc("/api/upload-multipart/complete", handleMultipartComplete) // DDR-054
+	mux.HandleFunc("/api/upload-multipart/abort", handleMultipartAbort)       // DDR-054
 	mux.HandleFunc("/api/triage/start", handleTriageStart)
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
 	mux.HandleFunc("/api/selection/start", handleSelectionStart)

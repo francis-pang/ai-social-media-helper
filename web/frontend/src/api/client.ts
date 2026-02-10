@@ -28,6 +28,12 @@ import type {
   PublishStartRequest,
   PublishStartResponse,
   PublishStatus,
+  MultipartInitRequest,
+  MultipartInitResponse,
+  MultipartCompleteRequest,
+  MultipartCompleteResponse,
+  MultipartAbortRequest,
+  MultipartCompletedPart,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -120,6 +126,187 @@ export async function uploadToS3(
     xhr.onerror = () => reject(new Error("Upload failed: network error"));
     xhr.send(file);
   });
+}
+
+// --- S3 Multipart Upload (DDR-054) ---
+
+/** Threshold in bytes: files larger than this use multipart upload. */
+export const MULTIPART_THRESHOLD = 10 * 1024 * 1024; // 10 MB
+
+/** Default chunk size for multipart uploads. */
+export const MULTIPART_CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB
+
+/** Maximum concurrent chunk uploads (matches browser per-origin connection limit). */
+const MULTIPART_CONCURRENCY = 6;
+
+/** Initialize a multipart upload and get presigned part URLs. */
+export function initMultipartUpload(
+  req: MultipartInitRequest,
+): Promise<MultipartInitResponse> {
+  return fetchJSON<MultipartInitResponse>("/api/upload-multipart/init", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Complete a multipart upload by assembling parts with their ETags. */
+export function completeMultipartUpload(
+  req: MultipartCompleteRequest,
+): Promise<MultipartCompleteResponse> {
+  return fetchJSON<MultipartCompleteResponse>(
+    "/api/upload-multipart/complete",
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+  );
+}
+
+/** Abort a multipart upload, cleaning up uploaded parts. */
+export function abortMultipartUpload(
+  req: MultipartAbortRequest,
+): Promise<void> {
+  return fetchJSON<void>("/api/upload-multipart/abort", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/**
+ * Upload a single chunk to S3 using a presigned PUT URL.
+ * Returns the ETag from the response headers (required for CompleteMultipartUpload).
+ */
+function uploadChunk(
+  url: string,
+  blob: Blob,
+  onProgress?: (loaded: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+
+    if (onProgress) {
+      xhr.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) onProgress(e.loaded);
+      });
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const etag = xhr.getResponseHeader("ETag");
+        if (!etag) {
+          reject(
+            new Error(
+              "Upload succeeded but ETag header missing (check S3 CORS exposedHeaders)",
+            ),
+          );
+          return;
+        }
+        resolve(etag);
+      } else {
+        reject(new Error(`Chunk upload failed: ${xhr.status} ${xhr.statusText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Chunk upload failed: network error"));
+    xhr.send(blob);
+  });
+}
+
+/**
+ * Upload a large file to S3 using multipart upload with parallel chunks (DDR-054).
+ *
+ * 1. Calls init to create the multipart upload and get presigned part URLs.
+ * 2. Slices the file into chunks and uploads them in parallel (up to MULTIPART_CONCURRENCY).
+ * 3. Tracks aggregate progress across all chunks.
+ * 4. On success, calls complete with all ETags.
+ * 5. On failure, calls abort to clean up orphaned parts.
+ */
+export async function uploadToS3Multipart(
+  sessionId: string,
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<string> {
+  const chunkSize = MULTIPART_CHUNK_SIZE;
+  const fileSize = file.size;
+
+  // 1. Initialize multipart upload and get presigned URLs for all parts.
+  const initRes = await initMultipartUpload({
+    sessionId,
+    filename: file.name,
+    contentType: file.type,
+    fileSize,
+    chunkSize,
+  });
+
+  const { uploadId, key, partUrls } = initRes;
+  const completedParts: MultipartCompletedPart[] = [];
+
+  // Track bytes uploaded per chunk for aggregate progress reporting.
+  const chunkProgress = new Array<number>(partUrls.length).fill(0);
+
+  function reportProgress() {
+    if (onProgress) {
+      const totalLoaded = chunkProgress.reduce((sum, v) => sum + v, 0);
+      onProgress(totalLoaded, fileSize);
+    }
+  }
+
+  try {
+    // 2. Upload chunks in parallel with a concurrency pool.
+    let nextIndex = 0;
+
+    async function uploadNext(): Promise<void> {
+      while (nextIndex < partUrls.length) {
+        const idx = nextIndex++;
+        const part = partUrls[idx];
+        const start = idx * chunkSize;
+        const end = Math.min(start + chunkSize, fileSize);
+        const blob = file.slice(start, end);
+
+        const etag = await uploadChunk(part.url, blob, (loaded) => {
+          chunkProgress[idx] = loaded;
+          reportProgress();
+        });
+
+        // Mark chunk as fully uploaded for progress.
+        chunkProgress[idx] = end - start;
+        reportProgress();
+
+        completedParts.push({
+          partNumber: part.partNumber,
+          etag,
+        });
+      }
+    }
+
+    // Launch concurrent workers.
+    const workers = Array.from(
+      { length: Math.min(MULTIPART_CONCURRENCY, partUrls.length) },
+      () => uploadNext(),
+    );
+    await Promise.all(workers);
+
+    // 3. Sort parts by part number (S3 requires ascending order).
+    completedParts.sort((a, b) => a.partNumber - b.partNumber);
+
+    // 4. Complete the multipart upload.
+    await completeMultipartUpload({
+      sessionId,
+      key,
+      uploadId,
+      parts: completedParts,
+    });
+
+    return key;
+  } catch (err) {
+    // 5. On failure, abort to clean up orphaned parts.
+    try {
+      await abortMultipartUpload({ sessionId, key, uploadId });
+    } catch (abortErr) {
+      console.error("Failed to abort multipart upload:", abortErr);
+    }
+    throw err;
+  }
 }
 
 // --- Common APIs (work in both modes) ---
