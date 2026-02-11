@@ -144,39 +144,65 @@ jobs:
             local reason=$2
             echo "Stopping $pipeline_name..."
 
-            # Wait briefly for CodeStar to trigger the pipeline
-            sleep 10
-
-            # Get the most recent execution
-            EXEC_ID=$(aws codepipeline list-pipeline-executions \
+            # Record the current latest execution BEFORE CodeStar triggers
+            local before_id
+            before_id=$(aws codepipeline list-pipeline-executions \
               --pipeline-name "$pipeline_name" \
               --max-results 1 \
               --query 'pipelineExecutionSummaries[0].pipelineExecutionId' \
-              --output text 2>/dev/null)
+              --output text 2>/dev/null || echo "NONE")
+            echo "  Existing latest execution: $before_id"
 
-            EXEC_STATUS=$(aws codepipeline list-pipeline-executions \
-              --pipeline-name "$pipeline_name" \
-              --max-results 1 \
-              --query 'pipelineExecutionSummaries[0].status' \
-              --output text 2>/dev/null)
+            # Poll for a new CodeStar-triggered execution (up to ~40s)
+            local exec_id=""
+            local exec_status=""
+            local max_polls=4
+            local poll_interval=10
+            for i in $(seq 1 $max_polls); do
+              sleep $poll_interval
+              exec_id=$(aws codepipeline list-pipeline-executions \
+                --pipeline-name "$pipeline_name" \
+                --max-results 1 \
+                --query 'pipelineExecutionSummaries[0].pipelineExecutionId' \
+                --output text 2>/dev/null)
+              exec_status=$(aws codepipeline list-pipeline-executions \
+                --pipeline-name "$pipeline_name" \
+                --max-results 1 \
+                --query 'pipelineExecutionSummaries[0].status' \
+                --output text 2>/dev/null)
+              echo "  Poll $i/$max_polls: execution=$exec_id status=$exec_status"
 
-            if [ "$EXEC_ID" = "None" ] || [ -z "$EXEC_ID" ]; then
-              echo "  No active execution found for $pipeline_name"
+              # Break early if a new execution appeared or existing one is now InProgress
+              if [ "$exec_id" != "$before_id" ] && [ -n "$exec_id" ] && [ "$exec_id" != "None" ]; then
+                break
+              fi
+              if [ "$exec_status" = "InProgress" ]; then
+                break
+              fi
+            done
+
+            # No execution at all
+            if [ "$exec_id" = "None" ] || [ -z "$exec_id" ]; then
+              echo "  No execution found for $pipeline_name"
               return 0
             fi
 
-            echo "  Latest execution: $EXEC_ID (status: $EXEC_STATUS)"
+            # No new execution and existing one isn't in-progress
+            if [ "$exec_id" = "$before_id" ] && [ "$exec_status" != "InProgress" ]; then
+              echo "  No new execution appeared after $((max_polls * poll_interval))s; nothing to stop"
+              return 0
+            fi
 
-            # Only stop if the execution is InProgress or Stopping
-            if [ "$EXEC_STATUS" = "InProgress" ] || [ "$EXEC_STATUS" = "Stopping" ]; then
+            echo "  Target execution: $exec_id (status: $exec_status)"
+            if [ "$exec_status" = "InProgress" ] || [ "$exec_status" = "Stopping" ]; then
               aws codepipeline stop-pipeline-execution \
                 --pipeline-name "$pipeline_name" \
-                --pipeline-execution-id "$EXEC_ID" \
+                --pipeline-execution-id "$exec_id" \
                 --abandon \
                 --reason "$reason" 2>/dev/null || true
-              echo "  Stopped execution $EXEC_ID"
+              echo "  Stopped execution $exec_id"
             else
-              echo "  Execution not in progress ($EXEC_STATUS), skipping stop"
+              echo "  Execution not in progress ($exec_status), skipping stop"
             fi
           }
 
