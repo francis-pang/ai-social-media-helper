@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { currentStep, triageJobId, selectedPaths, uploadSessionId, navigateToLanding, setStep } from "../app";
+import { triageJobId, selectedPaths, uploadSessionId, navigateToLanding, setStep } from "../app";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   getTriageResults,
