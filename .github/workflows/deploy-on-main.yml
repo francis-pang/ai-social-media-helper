@@ -127,22 +127,28 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Handle pipeline executions
+        id: pipelines
         env:
           BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend }}
           FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend }}
           SCOPE: ${{ needs.detect-changes.outputs.scope }}
         run: |
           echo "=== Pipeline Management ==="
-          echo "Scope: $SCOPE"
-          echo "Backend changed: $BACKEND_CHANGED"
-          echo "Frontend changed: $FRONTEND_CHANGED"
+          echo "Scope: $SCOPE | Backend changed: $BACKEND_CHANGED | Frontend changed: $FRONTEND_CHANGED"
           echo ""
 
+          # Track outcomes for the summary step
+          BACKEND_RESULT="n/a"
+          FRONTEND_RESULT="n/a"
+
           # Helper: stop the most recent execution of a pipeline
+          # Sets STOP_RESULT: stopped | not_triggered | no_execution | failed
           stop_pipeline() {
             local pipeline_name=$1
             local reason=$2
-            echo "Stopping $pipeline_name..."
+            STOP_RESULT=""
+
+            echo "::group::Polling $pipeline_name for new execution"
 
             # Record the current latest execution BEFORE CodeStar triggers
             local before_id
@@ -151,13 +157,11 @@ jobs:
               --max-results 1 \
               --query 'pipelineExecutionSummaries[0].pipelineExecutionId' \
               --output text 2>/dev/null || echo "NONE")
-            echo "  Existing latest execution: $before_id"
+            echo "Baseline execution: $before_id"
 
             # Poll for a new CodeStar-triggered execution (up to ~40s)
-            local exec_id=""
-            local exec_status=""
-            local max_polls=4
-            local poll_interval=10
+            local exec_id="" exec_status=""
+            local max_polls=4 poll_interval=10
             for i in $(seq 1 $max_polls); do
               sleep $poll_interval
               exec_id=$(aws codepipeline list-pipeline-executions \
@@ -170,7 +174,7 @@ jobs:
                 --max-results 1 \
                 --query 'pipelineExecutionSummaries[0].status' \
                 --output text 2>/dev/null)
-              echo "  Poll $i/$max_polls: execution=$exec_id status=$exec_status"
+              echo "Poll $i/$max_polls: id=$exec_id status=$exec_status"
 
               # Break early if a new execution appeared or existing one is now InProgress
               if [ "$exec_id" != "$before_id" ] && [ -n "$exec_id" ] && [ "$exec_id" != "None" ]; then
@@ -181,86 +185,146 @@ jobs:
               fi
             done
 
+            echo "::endgroup::"
+
             # No execution at all
             if [ "$exec_id" = "None" ] || [ -z "$exec_id" ]; then
-              echo "  No execution found for $pipeline_name"
+              echo "::notice::$pipeline_name: no execution exists, nothing to stop"
+              STOP_RESULT="no_execution"
               return 0
             fi
 
             # No new execution and existing one isn't in-progress
             if [ "$exec_id" = "$before_id" ] && [ "$exec_status" != "InProgress" ]; then
-              echo "  No new execution appeared after $((max_polls * poll_interval))s; nothing to stop"
+              echo "::notice::$pipeline_name: no new execution was triggered (latest: $exec_status), nothing to stop"
+              STOP_RESULT="not_triggered"
               return 0
             fi
 
-            echo "  Target execution: $exec_id (status: $exec_status)"
+            # New or in-progress execution found — stop it
             if [ "$exec_status" = "InProgress" ] || [ "$exec_status" = "Stopping" ]; then
-              aws codepipeline stop-pipeline-execution \
+              if aws codepipeline stop-pipeline-execution \
                 --pipeline-name "$pipeline_name" \
                 --pipeline-execution-id "$exec_id" \
                 --abandon \
-                --reason "$reason" 2>/dev/null || true
-              echo "  Stopped execution $exec_id"
+                --reason "$reason" 2>/dev/null; then
+                echo "::notice::$pipeline_name: stopped execution $exec_id"
+                STOP_RESULT="stopped"
+              else
+                echo "::error::$pipeline_name: FAILED to stop execution $exec_id"
+                STOP_RESULT="failed"
+                return 1
+              fi
             else
-              echo "  Execution not in progress ($exec_status), skipping stop"
+              echo "::notice::$pipeline_name: execution already $exec_status, no stop needed"
+              STOP_RESULT="not_triggered"
             fi
           }
 
           # Helper: start a pipeline manually (for workflow_dispatch)
+          # Sets START_RESULT: started | failed
           start_pipeline() {
             local pipeline_name=$1
-            echo "Starting $pipeline_name..."
-            aws codepipeline start-pipeline-execution \
+            START_RESULT=""
+            local new_exec_id
+            if new_exec_id=$(aws codepipeline start-pipeline-execution \
               --pipeline-name "$pipeline_name" \
               --query 'pipelineExecutionId' \
-              --output text
-            echo "  Pipeline started"
+              --output text); then
+              echo "::notice::$pipeline_name: started execution $new_exec_id"
+              START_RESULT="started"
+            else
+              echo "::error::$pipeline_name: FAILED to start pipeline"
+              START_RESULT="failed"
+              return 1
+            fi
           }
 
-          # For push events: CodeStar triggers both pipelines. Stop the unnecessary one(s).
+          # ── Push events: CodeStar triggers both pipelines. Stop the unnecessary one(s). ──
           if [ "${{ github.event_name }}" = "push" ]; then
             case "$SCOPE" in
               frontend-only)
-                echo ">>> Frontend-only change: stopping backend pipeline"
                 stop_pipeline "$BACKEND_PIPELINE" "GH Actions: frontend-only change, no backend rebuild needed"
-                echo ">>> Frontend pipeline: running (CodeStar triggered)"
+                BACKEND_RESULT="stop:$STOP_RESULT"
+                FRONTEND_RESULT="running"
                 ;;
               backend-only)
-                echo ">>> Backend-only change: stopping frontend pipeline"
                 stop_pipeline "$FRONTEND_PIPELINE" "GH Actions: backend-only change, no frontend rebuild needed"
-                echo ">>> Backend pipeline: running (CodeStar triggered)"
+                FRONTEND_RESULT="stop:$STOP_RESULT"
+                BACKEND_RESULT="running"
                 ;;
               both)
-                echo ">>> Both changed: letting both pipelines run (CodeStar triggered)"
+                echo "::notice::Both changed — letting both pipelines run (CodeStar triggered)"
+                BACKEND_RESULT="running"
+                FRONTEND_RESULT="running"
                 ;;
               none)
-                echo ">>> No backend/frontend changes detected: stopping both pipelines"
                 stop_pipeline "$BACKEND_PIPELINE" "GH Actions: no backend/frontend changes (docs/config only)"
+                BACKEND_RESULT="stop:$STOP_RESULT"
                 stop_pipeline "$FRONTEND_PIPELINE" "GH Actions: no backend/frontend changes (docs/config only)"
+                FRONTEND_RESULT="stop:$STOP_RESULT"
                 ;;
             esac
           fi
 
-          # For workflow_dispatch: manually start the selected pipeline(s)
+          # ── Manual dispatch: start the selected pipeline(s). ──
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ "$BACKEND_CHANGED" = "true" ]; then
               start_pipeline "$BACKEND_PIPELINE"
+              BACKEND_RESULT="start:$START_RESULT"
             fi
             if [ "$FRONTEND_CHANGED" = "true" ]; then
               start_pipeline "$FRONTEND_PIPELINE"
+              FRONTEND_RESULT="start:$START_RESULT"
             fi
           fi
 
+          # Export results for the summary step
+          echo "backend_result=$BACKEND_RESULT" >> "$GITHUB_OUTPUT"
+          echo "frontend_result=$FRONTEND_RESULT" >> "$GITHUB_OUTPUT"
+
       - name: Summary
+        if: always()
         env:
           SCOPE: ${{ needs.detect-changes.outputs.scope }}
+          BACKEND_RESULT: ${{ steps.pipelines.outputs.backend_result }}
+          FRONTEND_RESULT: ${{ steps.pipelines.outputs.frontend_result }}
         run: |
-          echo "## Pipeline Trigger Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Trigger** | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Commit** | ${{ github.sha }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Scope** | $SCOPE |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Backend pipeline** | ${{ needs.detect-changes.outputs.backend == 'true' && 'RUNNING' || 'STOPPED' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Frontend pipeline** | ${{ needs.detect-changes.outputs.frontend == 'true' && 'RUNNING' || 'STOPPED' }} |" >> "$GITHUB_STEP_SUMMARY"
+          # Map result codes to human-friendly labels with status icons
+          format_result() {
+            case "$1" in
+              running)              echo "🟢 Running (CodeStar)" ;;
+              stop:stopped)         echo "🔴 Stopped" ;;
+              stop:not_triggered)   echo "⚪ Not triggered (no stop needed)" ;;
+              stop:no_execution)    echo "⚪ No execution found" ;;
+              stop:failed)          echo "❌ Stop FAILED" ;;
+              start:started)        echo "🟢 Started (manual)" ;;
+              start:failed)         echo "❌ Start FAILED" ;;
+              n/a)                  echo "⚪ N/A" ;;
+              *)                    echo "❓ Unknown ($1)" ;;
+            esac
+          }
+
+          BE=$(format_result "$BACKEND_RESULT")
+          FE=$(format_result "$FRONTEND_RESULT")
+
+          # Determine overall status
+          if echo "$BACKEND_RESULT $FRONTEND_RESULT" | grep -q "failed"; then
+            OVERALL="❌ Completed with errors"
+          else
+            OVERALL="✅ Completed successfully"
+          fi
+
+          {
+            echo "## Pipeline Trigger Summary"
+            echo ""
+            echo "**Status: $OVERALL**"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| **Trigger** | \`${{ github.event_name }}\` |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Scope** | \`$SCOPE\` |"
+            echo "| **Backend pipeline** | $BE |"
+            echo "| **Frontend pipeline** | $FE |"
+          } >> "$GITHUB_STEP_SUMMARY"
