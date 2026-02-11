@@ -6,6 +6,7 @@ import {
   uploadSessionId,
   tripContext,
 } from "../app";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   generateDescription,
   getDescriptionResults,
@@ -378,47 +379,7 @@ function HashtagList({
   );
 }
 
-function GeneratingSpinner() {
-  return (
-    <div
-      style={{
-        textAlign: "center",
-        padding: "3rem 1rem",
-      }}
-    >
-      <div
-        style={{
-          fontSize: "1.125rem",
-          fontWeight: 500,
-          marginBottom: "0.75rem",
-        }}
-      >
-        Generating caption...
-      </div>
-      <div
-        style={{
-          fontSize: "0.8125rem",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        Analyzing your media and crafting an engaging Instagram caption
-      </div>
-      <div
-        style={{
-          marginTop: "1.5rem",
-          width: "2rem",
-          height: "2rem",
-          border: "3px solid var(--color-border)",
-          borderTop: "3px solid var(--color-primary)",
-          borderRadius: "50%",
-          animation: "spin 1s linear infinite",
-          margin: "1.5rem auto 0",
-        }}
-      />
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-}
+// GeneratingSpinner replaced by ProcessingIndicator (DDR-056)
 
 // --- Main Component ---
 
@@ -518,10 +479,16 @@ export function DescriptionEditor() {
         <MediaPreviewStrip group={group} />
       </div>
 
-      {/* Generating state */}
+      {/* Generating state — DDR-056 ProcessingIndicator */}
       {state.status === "generating" && (
-        <div class="card" style={{ marginBottom: "1rem" }}>
-          <GeneratingSpinner />
+        <div style={{ marginBottom: "1rem" }}>
+          <ProcessingIndicator
+            title="Generating Caption"
+            description="Analyzing your media and crafting an engaging Instagram caption"
+            sessionId={uploadSessionId.value ?? undefined}
+            jobId={state.jobId ?? undefined}
+            pollIntervalMs={2000}
+          />
         </div>
       )}
 

@@ -6,7 +6,9 @@ import {
   navigateToStep,
   invalidateDownstream,
   uploadSessionId,
+  setStep,
 } from "../app";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   startEnhancement,
   getEnhancementResults,
@@ -88,7 +90,7 @@ function pollResults(id: string, sessionId: string) {
       if (res.status === "complete" || res.status === "error") {
         clearInterval(interval);
         if (res.status === "complete") {
-          currentStep.value = "review-enhanced";
+          setStep("review-enhanced");
         }
       }
     } catch (e) {
@@ -635,7 +637,7 @@ export function EnhancementView() {
     }
   }, []);
 
-  // --- Processing State (Step 4) ---
+  // --- Processing State (Step 4) — DDR-056 ProcessingIndicator ---
   if (
     currentStep.value === "enhancing" &&
     (!results.value ||
@@ -644,69 +646,19 @@ export function EnhancementView() {
   ) {
     const completedCount = results.value?.completedCount ?? 0;
     const totalCount = results.value?.totalCount ?? enhancementKeys.value.length;
-    const progressPct = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
     return (
-      <div class="card" style={{ textAlign: "center", padding: "3rem" }}>
-        <div
-          style={{
-            fontSize: "1.5rem",
-            marginBottom: "1rem",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          Enhancing Photos...
-        </div>
-        <p
-          style={{
-            color: "var(--color-text-secondary)",
-            maxWidth: "32rem",
-            margin: "0 auto",
-          }}
-        >
-          Each photo goes through a multi-step AI enhancement pipeline:
-          global enhancement, professional quality analysis, and surgical edits.
-        </p>
-
-        {/* Progress bar */}
-        {totalCount > 0 && (
-          <div style={{ margin: "1.5rem auto", maxWidth: "24rem" }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                fontSize: "0.8125rem",
-                color: "var(--color-text-secondary)",
-                marginBottom: "0.375rem",
-              }}
-            >
-              <span>
-                {completedCount} of {totalCount} photos
-              </span>
-              <span>{Math.round(progressPct)}%</span>
-            </div>
-            <div
-              style={{
-                width: "100%",
-                height: "0.5rem",
-                background: "var(--color-surface-hover)",
-                borderRadius: "4px",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  width: `${progressPct}%`,
-                  height: "100%",
-                  background: "var(--color-primary)",
-                  borderRadius: "4px",
-                  transition: "width 0.3s",
-                }}
-              />
-            </div>
-          </div>
-        )}
-
+      <ProcessingIndicator
+        title="Enhancing Photos"
+        description="Each photo goes through a multi-step AI enhancement pipeline: global enhancement, professional quality analysis, and surgical edits."
+        status={results.value?.status ?? "pending"}
+        jobId={enhancementJobId.value ?? undefined}
+        sessionId={uploadSessionId.value ?? undefined}
+        pollIntervalMs={3000}
+        completedCount={completedCount}
+        totalCount={totalCount}
+        onCancel={handleBack}
+      >
         {/* Per-item status */}
         {results.value?.items && results.value.items.length > 0 && (
           <div
@@ -715,7 +667,8 @@ export function EnhancementView() {
               gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
               gap: "0.5rem",
               maxWidth: "40rem",
-              margin: "1.5rem auto 0",
+              margin: "1rem auto 0",
+              textAlign: "left",
             }}
           >
             {results.value.items.map((item) => (
@@ -743,22 +696,14 @@ export function EnhancementView() {
           <div
             style={{
               color: "var(--color-danger)",
-              marginTop: "1.5rem",
+              marginTop: "1rem",
               fontSize: "0.875rem",
             }}
           >
             {error.value}
           </div>
         )}
-
-        <button
-          class="outline"
-          onClick={handleBack}
-          style={{ marginTop: "1.5rem" }}
-        >
-          Cancel
-        </button>
-      </div>
+      </ProcessingIndicator>
     );
   }
 

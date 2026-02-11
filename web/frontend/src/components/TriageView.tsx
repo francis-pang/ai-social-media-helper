@@ -1,6 +1,7 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { currentStep, triageJobId, selectedPaths, uploadSessionId, navigateToLanding } from "../app";
+import { currentStep, triageJobId, selectedPaths, uploadSessionId, navigateToLanding, setStep } from "../app";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   getTriageResults,
   confirmTriage,
@@ -43,7 +44,7 @@ function pollResults(id: string) {
       results.value = res;
       if (res.status === "complete" || res.status === "error") {
         clearInterval(interval);
-        currentStep.value = "results";
+        setStep("results");
         if (res.discard.length > 0) {
           selectedForDeletion.value = new Set(
             res.discard.map((item) => itemId(item)),
@@ -110,7 +111,7 @@ function startOver() {
   if (isCloudMode) {
     navigateToLanding();
   } else {
-    currentStep.value = "browse";
+    setStep("browse");
   }
 }
 
@@ -263,14 +264,18 @@ export function TriageView() {
     );
   }
 
-  // Show processing state
+  // Show processing state (DDR-056 — ProcessingIndicator)
   if (!results.value || results.value.status === "pending" || results.value.status === "processing") {
     return (
-      <div class="card" style={{ textAlign: "center", padding: "3rem" }}>
-        <p style={{ color: "var(--color-text-secondary)" }}>
-          Analyzing media with AI... This may take a minute.
-        </p>
-      </div>
+      <ProcessingIndicator
+        title="Analyzing Media with AI"
+        description="Evaluating each media file for quality, duplicates, and content issues"
+        status={results.value?.status ?? "pending"}
+        jobId={triageJobId.value ?? undefined}
+        sessionId={uploadSessionId.value ?? undefined}
+        pollIntervalMs={2000}
+        fileCount={selectedPaths.value.length}
+      />
     );
   }
 

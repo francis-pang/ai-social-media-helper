@@ -7,7 +7,9 @@ import {
   invalidateDownstream,
   uploadSessionId,
   tripContext,
+  setStep,
 } from "../app";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   startSelection,
   getSelectionResults,
@@ -89,7 +91,7 @@ function pollResults(id: string, sessionId: string) {
       if (res.status === "complete" || res.status === "error") {
         clearInterval(interval);
         if (res.status === "complete") {
-          currentStep.value = "review-selection";
+          setStep("review-selection");
         }
       }
     } catch (e) {
@@ -591,7 +593,7 @@ export function SelectionView() {
     }
   }, []);
 
-  // --- Processing State (Step 2) ---
+  // --- Processing State (Step 2) — DDR-056 ProcessingIndicator ---
   if (
     currentStep.value === "selecting" ||
     (results.value &&
@@ -599,51 +601,27 @@ export function SelectionView() {
         results.value.status === "processing"))
   ) {
     return (
-      <div class="card" style={{ textAlign: "center", padding: "3rem" }}>
-        <div
-          style={{
-            fontSize: "1.5rem",
-            marginBottom: "1rem",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          Analyzing Media...
-        </div>
-        <p style={{ color: "var(--color-text-secondary)", maxWidth: "32rem", margin: "0 auto" }}>
-          The AI is analyzing your media files to select the best items for
-          posting. This includes scene detection, deduplication, and content
-          evaluation.
-        </p>
-        <p
-          style={{
-            color: "var(--color-text-secondary)",
-            fontSize: "0.8125rem",
-            marginTop: "1rem",
-          }}
-        >
-          This may take 1-3 minutes depending on the number of files...
-        </p>
-
+      <ProcessingIndicator
+        title="AI Selection in Progress"
+        description="Scene detection, deduplication, and content evaluation. This may take 1-3 minutes depending on the number of files."
+        status={results.value?.status ?? "pending"}
+        jobId={selectionJobId.value ?? undefined}
+        sessionId={uploadSessionId.value ?? undefined}
+        pollIntervalMs={3000}
+        onCancel={handleBack}
+      >
         {error.value && (
           <div
             style={{
               color: "var(--color-danger)",
-              marginTop: "1.5rem",
+              marginTop: "1rem",
               fontSize: "0.875rem",
             }}
           >
             {error.value}
           </div>
         )}
-
-        <button
-          class="outline"
-          onClick={handleBack}
-          style={{ marginTop: "1.5rem" }}
-        >
-          Cancel
-        </button>
-      </div>
+      </ProcessingIndicator>
     );
   }
 

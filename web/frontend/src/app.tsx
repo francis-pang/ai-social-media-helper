@@ -36,6 +36,7 @@ import {
 import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
 import { FileUploader, resetFileUploaderState } from "./components/FileUploader";
+import { syncUrlToStep } from "./router";
 
 /** Application steps across both workflows. */
 export type Step =
@@ -104,10 +105,20 @@ function stepToNavIndex(step: Step): number {
   );
 }
 
+/**
+ * Set the current step and sync the browser URL (DDR-056).
+ * Use this instead of `currentStep.value = ...` for direct step assignments.
+ */
+export function setStep(step: Step) {
+  currentStep.value = step;
+  syncUrlToStep(step, uploadSessionId.value);
+}
+
 /** Navigate to a new step, pushing the current step onto the history stack. */
 export function navigateToStep(step: Step) {
   stepHistory.value = [...stepHistory.value, currentStep.value];
   currentStep.value = step;
+  syncUrlToStep(step, uploadSessionId.value);
 }
 
 /** Navigate back to the previous step (pops from history stack). */
@@ -117,6 +128,7 @@ export function navigateBack() {
   const prev = history[history.length - 1]!;
   stepHistory.value = history.slice(0, -1);
   currentStep.value = prev;
+  syncUrlToStep(prev, uploadSessionId.value);
 }
 
 /**
@@ -236,6 +248,7 @@ export function navigateToLanding() {
   resetDescriptionState();
   resetPublishState();
   resetFileUploaderState();
+  syncUrlToStep("landing");
 }
 
 /** Whether the current step is part of the cloud selection flow (shows step navigator). */

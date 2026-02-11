@@ -5,6 +5,7 @@ import {
   navigateToStep,
   uploadSessionId,
 } from "../app";
+import { ElapsedTimer } from "./ProcessingIndicator";
 import {
   startPublish,
   getPublishStatus,
@@ -437,7 +438,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
         </div>
       )}
 
-      {/* Publishing progress */}
+      {/* Publishing progress — DDR-056 elapsed timer */}
       {isPublishing && (
         <div
           style={{
@@ -458,14 +459,17 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
             <span style={{ fontSize: "0.8125rem", fontWeight: 500 }}>
               {phaseLabel(state.phase)}
             </span>
-            <span
-              style={{
-                fontSize: "0.75rem",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              {state.progress.completed}/{state.progress.total}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <ElapsedTimer />
+              <span
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                {state.progress.completed}/{state.progress.total}
+              </span>
+            </div>
           </div>
           <div
             style={{
