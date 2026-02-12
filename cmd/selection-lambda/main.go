@@ -363,22 +363,22 @@ func uploadCompressedVideo(ctx context.Context, sessionID, originalKey, compress
 	// Change extension to .webm
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
 	compressedFilename := baseName + ".webm"
-	
+
 	compressedKey := fmt.Sprintf("%s/compressed/%s", sessionID, compressedFilename)
-	
+
 	log.Debug().
 		Str("original_key", originalKey).
 		Str("compressed_key", compressedKey).
 		Str("compressed_path", compressedPath).
 		Msg("Uploading compressed video to S3")
-	
+
 	// Open the compressed file
 	compressedFile, err := os.Open(compressedPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open compressed file: %w", err)
 	}
 	defer compressedFile.Close()
-	
+
 	// Upload to S3
 	contentType := "video/webm"
 	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
@@ -390,11 +390,11 @@ func uploadCompressedVideo(ctx context.Context, sessionID, originalKey, compress
 	if err != nil {
 		return "", fmt.Errorf("failed to upload compressed video to S3: %w", err)
 	}
-	
+
 	log.Info().
 		Str("compressed_key", compressedKey).
 		Msg("Compressed video uploaded to S3")
-	
+
 	return compressedKey, nil
 }
 

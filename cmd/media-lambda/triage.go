@@ -74,34 +74,42 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dispatch to Triage Pipeline Step Functions (DDR-052).
-	if sfnClient != nil && triageSfnArn != "" {
-		sfnInput, _ := json.Marshal(map[string]interface{}{
-			"type":      "triage-prepare",
-			"sessionId": req.SessionID,
-			"jobId":     jobID,
-			"model":     model,
-		})
-		log.Info().
-			Str("jobId", jobID).
-			Str("sessionId", req.SessionID).
-			Str("model", model).
-			Str("sfnArn", triageSfnArn).
-			Msg("Job dispatched to Triage Pipeline")
-		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
-			StateMachineArn: aws.String(triageSfnArn),
-			Input:           aws.String(string(sfnInput)),
-			Name:            aws.String(jobID),
-		})
-		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", triageSfnArn).Msg("Failed to start triage pipeline")
-			errDetail := fmt.Sprintf("failed to start processing: %v", err)
-			if sessionStore != nil {
-				errJob := &store.TriageJob{ID: jobID, Status: "error", Error: errDetail}
-				sessionStore.PutTriageJob(context.Background(), req.SessionID, errJob)
-			}
-			httpError(w, http.StatusInternalServerError, errDetail)
-			return
+	if sfnClient == nil || triageSfnArn == "" {
+		log.Error().Str("jobId", jobID).Msg("Triage pipeline not configured — cannot process")
+		errDetail := "triage processing is not available (pipeline not configured)"
+		if sessionStore != nil {
+			errJob := &store.TriageJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutTriageJob(context.Background(), req.SessionID, errJob)
 		}
+		httpError(w, http.StatusServiceUnavailable, errDetail)
+		return
+	}
+	sfnInput, _ := json.Marshal(map[string]interface{}{
+		"type":      "triage-prepare",
+		"sessionId": req.SessionID,
+		"jobId":     jobID,
+		"model":     model,
+	})
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Str("model", model).
+		Str("sfnArn", triageSfnArn).
+		Msg("Job dispatched to Triage Pipeline")
+	_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(triageSfnArn),
+		Input:           aws.String(string(sfnInput)),
+		Name:            aws.String(jobID),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", triageSfnArn).Msg("Failed to start triage pipeline")
+		errDetail := fmt.Sprintf("failed to start processing: %v", err)
+		if sessionStore != nil {
+			errJob := &store.TriageJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutTriageJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, errDetail)
+		return
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{

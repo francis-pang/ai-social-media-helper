@@ -98,36 +98,44 @@ func handleSelectionStart(w http.ResponseWriter, r *http.Request) {
 	log.Info().Int("count", len(mediaKeys)).Str("sessionId", req.SessionID).Msg("Found S3 objects for selection pipeline")
 
 	// Start Step Functions execution (DDR-050).
-	if sfnClient != nil && selectionSfnArn != "" {
-		sfnInput, _ := json.Marshal(map[string]interface{}{
-			"sessionId":   req.SessionID,
-			"jobId":       jobID,
-			"tripContext": req.TripContext,
-			"model":       model,
-			"mediaKeys":   mediaKeys,
-		})
-		log.Info().
-			Str("jobId", jobID).
-			Str("sessionId", req.SessionID).
-			Str("model", model).
-			Int("keyCount", len(mediaKeys)).
-			Str("sfnArn", selectionSfnArn).
-			Msg("Job dispatched")
-		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
-			StateMachineArn: aws.String(selectionSfnArn),
-			Input:           aws.String(string(sfnInput)),
-			Name:            aws.String(jobID),
-		})
-		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", selectionSfnArn).Msg("Failed to start selection pipeline")
-			errDetail := fmt.Sprintf("failed to start processing: %v", err)
-			if sessionStore != nil {
-				errJob := &store.SelectionJob{ID: jobID, Status: "error", Error: errDetail}
-				sessionStore.PutSelectionJob(context.Background(), req.SessionID, errJob)
-			}
-			httpError(w, http.StatusInternalServerError, errDetail)
-			return
+	if sfnClient == nil || selectionSfnArn == "" {
+		log.Error().Str("jobId", jobID).Msg("Selection pipeline not configured — cannot process")
+		errDetail := "selection processing is not available (pipeline not configured)"
+		if sessionStore != nil {
+			errJob := &store.SelectionJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutSelectionJob(context.Background(), req.SessionID, errJob)
 		}
+		httpError(w, http.StatusServiceUnavailable, errDetail)
+		return
+	}
+	sfnInput, _ := json.Marshal(map[string]interface{}{
+		"sessionId":   req.SessionID,
+		"jobId":       jobID,
+		"tripContext": req.TripContext,
+		"model":       model,
+		"mediaKeys":   mediaKeys,
+	})
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Str("model", model).
+		Int("keyCount", len(mediaKeys)).
+		Str("sfnArn", selectionSfnArn).
+		Msg("Job dispatched")
+	_, err = sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(selectionSfnArn),
+		Input:           aws.String(string(sfnInput)),
+		Name:            aws.String(jobID),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", selectionSfnArn).Msg("Failed to start selection pipeline")
+		errDetail := fmt.Sprintf("failed to start processing: %v", err)
+		if sessionStore != nil {
+			errJob := &store.SelectionJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutSelectionJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, errDetail)
+		return
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{

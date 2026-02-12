@@ -142,7 +142,7 @@ func handleCompressedVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := parts[0]
 	filename := filepath.Base(key)
-	
+
 	// Change extension to .webm
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
 	compressedKey := fmt.Sprintf("%s/compressed/%s.webm", sessionID, baseName)

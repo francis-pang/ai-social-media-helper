@@ -109,37 +109,45 @@ func handlePublishStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dispatch to Publish Pipeline Step Functions (DDR-052).
-	if sfnClient != nil && publishSfnArn != "" {
-		sfnInput, _ := json.Marshal(map[string]interface{}{
-			"type":      "publish-create-containers",
-			"sessionId": req.SessionID,
-			"jobId":     jobID,
-			"groupId":   req.GroupID,
-			"keys":      req.Keys,
-			"caption":   fullCaption,
-		})
-		log.Info().
-			Str("jobId", jobID).
-			Str("sessionId", req.SessionID).
-			Str("groupId", req.GroupID).
-			Int("keyCount", len(req.Keys)).
-			Str("sfnArn", publishSfnArn).
-			Msg("Job dispatched to Publish Pipeline")
-		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
-			StateMachineArn: aws.String(publishSfnArn),
-			Input:           aws.String(string(sfnInput)),
-			Name:            aws.String(jobID),
-		})
-		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", publishSfnArn).Msg("Failed to start publish pipeline")
-			errDetail := fmt.Sprintf("failed to start processing: %v", err)
-			if sessionStore != nil {
-				errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: errDetail}
-				sessionStore.PutPublishJob(context.Background(), req.SessionID, errJob)
-			}
-			httpError(w, http.StatusInternalServerError, errDetail)
-			return
+	if sfnClient == nil || publishSfnArn == "" {
+		log.Error().Str("jobId", jobID).Msg("Publish pipeline not configured — cannot process")
+		errDetail := "publishing is not available (pipeline not configured)"
+		if sessionStore != nil {
+			errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: errDetail}
+			sessionStore.PutPublishJob(context.Background(), req.SessionID, errJob)
 		}
+		httpError(w, http.StatusServiceUnavailable, errDetail)
+		return
+	}
+	sfnInput, _ := json.Marshal(map[string]interface{}{
+		"type":      "publish-create-containers",
+		"sessionId": req.SessionID,
+		"jobId":     jobID,
+		"groupId":   req.GroupID,
+		"keys":      req.Keys,
+		"caption":   fullCaption,
+	})
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Str("groupId", req.GroupID).
+		Int("keyCount", len(req.Keys)).
+		Str("sfnArn", publishSfnArn).
+		Msg("Job dispatched to Publish Pipeline")
+	_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(publishSfnArn),
+		Input:           aws.String(string(sfnInput)),
+		Name:            aws.String(jobID),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", publishSfnArn).Msg("Failed to start publish pipeline")
+		errDetail := fmt.Sprintf("failed to start processing: %v", err)
+		if sessionStore != nil {
+			errJob := &store.PublishJob{ID: jobID, GroupID: req.GroupID, Status: "error", Phase: "error", Error: errDetail}
+			sessionStore.PutPublishJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, errDetail)
+		return
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{

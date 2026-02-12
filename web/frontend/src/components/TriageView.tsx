@@ -35,10 +35,28 @@ function itemThumb(item: TriageItem): string {
   return thumbnailUrl(item.path);
 }
 
+/** Maximum time (ms) to poll before giving up — 15 minutes. */
+const POLL_TIMEOUT_MS = 15 * 60 * 1000;
+
 function pollResults(id: string) {
   // Pass sessionId for ownership verification in cloud mode (DDR-028)
   const sessionId = isCloudMode ? uploadSessionId.value ?? undefined : undefined;
+  const startTime = Date.now();
   const interval = setInterval(async () => {
+    // Give up if we've been polling longer than the timeout.
+    if (Date.now() - startTime > POLL_TIMEOUT_MS) {
+      clearInterval(interval);
+      error.value =
+        "Processing is taking too long. Please try again or check your connection.";
+      results.value = {
+        id,
+        status: "error",
+        error: "Processing timed out after 15 minutes",
+        keep: [],
+        discard: [],
+      };
+      return;
+    }
     try {
       const res = await getTriageResults(id, sessionId);
       results.value = res;
@@ -340,6 +358,7 @@ export function TriageView() {
         sessionId={uploadSessionId.value ?? undefined}
         pollIntervalMs={2000}
         fileCount={selectedPaths.value.length}
+        onCancel={startOver}
       />
     );
   }

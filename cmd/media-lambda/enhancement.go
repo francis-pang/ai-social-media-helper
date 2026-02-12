@@ -126,35 +126,43 @@ func handleEnhanceStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start Step Functions execution (DDR-050).
-	if sfnClient != nil && enhancementSfnArn != "" {
-		sfnInput, _ := json.Marshal(map[string]interface{}{
-			"sessionId": req.SessionID,
-			"jobId":     jobID,
-			"photos":    photoKeys,
-			"videos":    videoKeys,
-		})
-		log.Info().
-			Str("jobId", jobID).
-			Str("sessionId", req.SessionID).
-			Int("photos", len(photoKeys)).
-			Int("videos", len(videoKeys)).
-			Str("sfnArn", enhancementSfnArn).
-			Msg("Job dispatched")
-		_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
-			StateMachineArn: aws.String(enhancementSfnArn),
-			Input:           aws.String(string(sfnInput)),
-			Name:            aws.String(jobID),
-		})
-		if err != nil {
-			log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", enhancementSfnArn).Msg("Failed to start enhancement pipeline")
-			errDetail := fmt.Sprintf("failed to start processing: %v", err)
-			if sessionStore != nil {
-				errJob := &store.EnhancementJob{ID: jobID, Status: "error", Error: errDetail}
-				sessionStore.PutEnhancementJob(context.Background(), req.SessionID, errJob)
-			}
-			httpError(w, http.StatusInternalServerError, errDetail)
-			return
+	if sfnClient == nil || enhancementSfnArn == "" {
+		log.Error().Str("jobId", jobID).Msg("Enhancement pipeline not configured — cannot process")
+		errDetail := "enhancement processing is not available (pipeline not configured)"
+		if sessionStore != nil {
+			errJob := &store.EnhancementJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutEnhancementJob(context.Background(), req.SessionID, errJob)
 		}
+		httpError(w, http.StatusServiceUnavailable, errDetail)
+		return
+	}
+	sfnInput, _ := json.Marshal(map[string]interface{}{
+		"sessionId": req.SessionID,
+		"jobId":     jobID,
+		"photos":    photoKeys,
+		"videos":    videoKeys,
+	})
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Int("photos", len(photoKeys)).
+		Int("videos", len(videoKeys)).
+		Str("sfnArn", enhancementSfnArn).
+		Msg("Job dispatched")
+	_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(enhancementSfnArn),
+		Input:           aws.String(string(sfnInput)),
+		Name:            aws.String(jobID),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", enhancementSfnArn).Msg("Failed to start enhancement pipeline")
+		errDetail := fmt.Sprintf("failed to start processing: %v", err)
+		if sessionStore != nil {
+			errJob := &store.EnhancementJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutEnhancementJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, errDetail)
+		return
 	}
 
 	respondJSON(w, http.StatusAccepted, map[string]string{
