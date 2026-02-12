@@ -183,7 +183,8 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 		fmt.Printf("Sending %d media items to Gemini for triage...\n", len(filesToAnalyze))
 		fmt.Println()
 
-		aiResults, err = chat.AskMediaTriage(ctx, client, filesToAnalyze, modelFlag)
+		// Local mode: no sessionID, no S3 storage
+		aiResults, err = chat.AskMediaTriage(ctx, client, filesToAnalyze, modelFlag, "", nil, nil)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to get triage results from Gemini")
 		}

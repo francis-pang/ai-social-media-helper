@@ -95,7 +95,8 @@ func runTriageJob(job *triageJob, model string) {
 	}
 
 	// Use the existing AskMediaTriage function from the chat package
-	triageResults, err := chat.AskMediaTriage(ctx, client, mediaForAI, model)
+	// Local mode: no sessionID, no S3 storage
+	triageResults, err := chat.AskMediaTriage(ctx, client, mediaForAI, model, "", nil, nil)
 	if err != nil {
 		setJobError(job, fmt.Sprintf("Triage failed: %v", err))
 		return

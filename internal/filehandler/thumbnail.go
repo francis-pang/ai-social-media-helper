@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chai2010/webp"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/image/draw"
 )
@@ -22,10 +23,10 @@ const DefaultThumbnailMaxDimension = 1024
 // Returns the thumbnail bytes, MIME type, and any error.
 //
 // Strategy:
-//   - JPEG/PNG: Resize using pure Go (golang.org/x/image/draw)
-//   - HEIC/HEIF: Use ffmpeg to convert to JPEG thumbnail (cross-platform, DDR-027)
+//   - JPEG/PNG: Resize using pure Go (golang.org/x/image/draw) and encode as WebP
+//   - HEIC/HEIF: Use ffmpeg to convert to WebP thumbnail (cross-platform, DDR-027)
 //   - GIF/WebP: Return original file (typically small)
-//   - Video (MP4/MOV/AVI/WebM/MKV): Extract frame at 1s using ffmpeg (DDR-030)
+//   - Video (MP4/MOV/AVI/WebM/MKV): Extract frame at 1s using ffmpeg and encode as WebP (DDR-030)
 func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, error) {
 	ext := strings.ToLower(filepath.Ext(mediaFile.Path))
 
@@ -80,7 +81,7 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 }
 
 // GenerateVideoThumbnail extracts a frame from a video at the 1-second mark
-// and returns it as a JPEG thumbnail. Uses ffmpeg for extraction.
+// and returns it as a WebP thumbnail. Uses ffmpeg for extraction.
 // Falls back to a frame at 0s if the video is shorter than 1 second.
 // See DDR-030: Cloud Selection Backend Architecture.
 func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string, error) {
@@ -94,7 +95,8 @@ func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string,
 		return nil, "", fmt.Errorf("ffmpeg not found: video thumbnail generation requires ffmpeg")
 	}
 
-	tmpFile, err := os.CreateTemp("", "vthumb-*.jpg")
+	// Extract frame as PNG first (WebP encoding via ffmpeg may not be available)
+	tmpFile, err := os.CreateTemp("", "vthumb-*.png")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -102,7 +104,7 @@ func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string,
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	// ffmpeg -i input.mp4 -ss 1 -vframes 1 -vf "scale='min(1024,iw)':-2" -y output.jpg
+	// ffmpeg -i input.mp4 -ss 1 -vframes 1 -vf "scale='min(1024,iw)':-2" -y output.png
 	// -ss 1: seek to 1 second (avoids black/blank first frames)
 	// -vframes 1: extract single frame
 	// scale filter: downscale only if larger, preserve aspect ratio, ensure even height
@@ -132,21 +134,35 @@ func GenerateVideoThumbnail(videoPath string, maxDimension int) ([]byte, string,
 		}
 	}
 
-	data, err := os.ReadFile(tmpPath)
+	// Read the extracted frame and convert to WebP
+	frameFile, err := os.Open(tmpPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read video thumbnail: %w", err)
 	}
+	defer frameFile.Close()
 
-	if len(data) == 0 {
-		return nil, "", fmt.Errorf("ffmpeg produced empty thumbnail for %s", filepath.Base(videoPath))
+	img, err := png.Decode(frameFile)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to decode extracted frame: %w", err)
+	}
+
+	// Encode as WebP
+	var buf bytes.Buffer
+	err = webp.Encode(&buf, img, &webp.Options{Quality: 80, Lossless: false})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to encode thumbnail as WebP: %w", err)
+	}
+
+	if buf.Len() == 0 {
+		return nil, "", fmt.Errorf("WebP encoding produced empty thumbnail for %s", filepath.Base(videoPath))
 	}
 
 	log.Debug().
 		Str("path", videoPath).
-		Int("output_size", len(data)).
+		Int("output_size", buf.Len()).
 		Msg("Video thumbnail generation complete")
 
-	return data, "image/jpeg", nil
+	return buf.Bytes(), "image/webp", nil
 }
 
 // generateThumbnailPureGo resizes JPEG/PNG images using pure Go.
@@ -186,26 +202,24 @@ func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, st
 
 	newWidth, newHeight := calculateThumbnailDimensions(origWidth, origHeight, maxDimension)
 
-	// Skip resize if already smaller
+	// Skip resize if already smaller - but still convert to WebP for consistency
 	if origWidth <= maxDimension && origHeight <= maxDimension {
-		data, err := os.ReadFile(filePath)
+		// Still convert to WebP even if no resize needed
+		var buf bytes.Buffer
+		err = webp.Encode(&buf, img, &webp.Options{Quality: 80})
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to read file: %w", err)
+			return nil, "", fmt.Errorf("failed to encode thumbnail as WebP: %w", err)
 		}
-		mimeType := "image/jpeg"
-		if ext == ".png" {
-			mimeType = "image/png"
-		}
-		return data, mimeType, nil
+		return buf.Bytes(), "image/webp", nil
 	}
 
 	// Create resized image
 	resized := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 	draw.CatmullRom.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
 
-	// Encode to JPEG (smaller than PNG for thumbnails)
+	// Encode to WebP (optimized format for thumbnails)
 	var buf bytes.Buffer
-	err = jpeg.Encode(&buf, resized, &jpeg.Options{Quality: 80})
+	err = webp.Encode(&buf, resized, &webp.Options{Quality: 80})
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to encode thumbnail: %w", err)
 	}
@@ -219,10 +233,10 @@ func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, st
 		Int("output_size", buf.Len()).
 		Msg("Thumbnail generated (pure Go)")
 
-	return buf.Bytes(), "image/jpeg", nil
+	return buf.Bytes(), "image/webp", nil
 }
 
-// generateThumbnailHEIC uses ffmpeg to convert HEIC/HEIF to a JPEG thumbnail.
+// generateThumbnailHEIC uses ffmpeg to convert HEIC/HEIF to a WebP thumbnail.
 // This replaces the macOS-only sips tool (DDR-027) and works cross-platform:
 // locally (if ffmpeg is installed) and in Lambda (ffmpeg bundled in container image).
 // Falls back to returning the original HEIC file if ffmpeg is unavailable.
@@ -246,8 +260,8 @@ func generateThumbnailHEIC(filePath string, maxDimension int) ([]byte, string, e
 		return data, "image/heic", nil
 	}
 
-	// Create temp file for output
-	tmpFile, err := os.CreateTemp("", "thumb-*.jpg")
+	// Create temp file for output (PNG first, then convert to WebP)
+	tmpFile, err := os.CreateTemp("", "thumb-*.png")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -255,7 +269,7 @@ func generateThumbnailHEIC(filePath string, maxDimension int) ([]byte, string, e
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	// ffmpeg -i input.heic -vf "scale='min(1024,iw)':-2" -frames:v 1 -y output.jpg
+	// ffmpeg -i input.heic -vf "scale='min(1024,iw)':-2" -frames:v 1 -y output.png
 	// - scale filter: downscale only if larger than maxDimension, preserve aspect ratio
 	// - -2 ensures even height (required by some encoders)
 	// - -frames:v 1: extract single frame (HEIC is a single image)
@@ -283,18 +297,31 @@ func generateThumbnailHEIC(filePath string, maxDimension int) ([]byte, string, e
 		return data, "image/heic", nil
 	}
 
-	// Read the generated thumbnail
-	data, err := os.ReadFile(tmpPath)
+	// Read the extracted frame and convert to WebP
+	frameFile, err := os.Open(tmpPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read thumbnail: %w", err)
+	}
+	defer frameFile.Close()
+
+	img, err := png.Decode(frameFile)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to decode extracted frame: %w", err)
+	}
+
+	// Encode as WebP
+	var buf bytes.Buffer
+	err = webp.Encode(&buf, img, &webp.Options{Quality: 80, Lossless: false})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to encode thumbnail as WebP: %w", err)
 	}
 
 	log.Debug().
 		Str("file", filepath.Base(filePath)).
-		Int("thumb_size", len(data)).
+		Int("thumb_size", buf.Len()).
 		Msg("Thumbnail generated (ffmpeg HEIC)")
 
-	return data, "image/jpeg", nil
+	return buf.Bytes(), "image/webp", nil
 }
 
 // calculateThumbnailDimensions calculates new dimensions maintaining aspect ratio.

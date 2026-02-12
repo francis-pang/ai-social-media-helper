@@ -27,9 +27,12 @@ var MediaSelectionJSONInstruction = assets.MediaSelectionJSONSystemPrompt
 // Photos are sent as thumbnails, videos are compressed and uploaded via Files API.
 // tripContext provides optional user description of the trip/event.
 // modelName allows specifying which Gemini model to use.
+// sessionID is used for storing compressed videos in S3 (optional).
+// storeCompressed is an optional callback to store compressed videos in S3.
+// keyMapper maps local file paths to S3 keys (optional, for cloud mode).
 // Returns the structured selection with ranked list, scene grouping, and exclusion report.
 // See DDR-020: Mixed Media Selection Strategy.
-func AskMediaSelection(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, maxItems int, tripContext string, modelName string) (string, error) {
+func AskMediaSelection(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, maxItems int, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) (string, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -51,7 +54,7 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 		Msg("Starting mixed media selection with Gemini")
 
 	// Build media parts (thumbnails + uploaded videos)
-	parts, cleanup, uploadedFiles, err := buildMediaParts(ctx, client, files)
+	parts, cleanup, uploadedFiles, _, err := buildMediaParts(ctx, client, files, sessionID, storeCompressed, keyMapper)
 	defer cleanup()
 	if err != nil {
 		return "", err
@@ -126,7 +129,10 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 // AskMediaSelectionJSON sends mixed media to Gemini and returns structured selection results.
 // Unlike AskMediaSelection which returns freeform text, this returns a parsed SelectionResult.
 // No item limit — the AI selects all worthy items. See DDR-030.
-func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string) (*SelectionResult, error) {
+// sessionID is used for storing compressed videos in S3 (optional).
+// storeCompressed is an optional callback to store compressed videos in S3.
+// keyMapper maps local file paths to S3 keys (optional, for cloud mode).
+func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) (*SelectionResult, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -147,7 +153,7 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 		Msg("Starting structured JSON media selection with Gemini (DDR-030)")
 
 	// Build media parts (thumbnails + uploaded videos)
-	parts, cleanup, uploadedFiles, err := buildMediaParts(ctx, client, files)
+	parts, cleanup, uploadedFiles, _, err := buildMediaParts(ctx, client, files, sessionID, storeCompressed, keyMapper)
 	defer cleanup()
 	if err != nil {
 		return nil, err
@@ -227,12 +233,22 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	return selectionResult, nil
 }
 
+// CompressedVideoStore is a callback function for storing compressed videos in S3.
+// It receives the session ID, original S3 key (or local path), and compressed file path, and returns the S3 key for the compressed video.
+type CompressedVideoStore func(ctx context.Context, sessionID, originalKey, compressedPath string) (string, error)
+
+// KeyMapper maps a local file path to its S3 key. Returns empty string if not found or not applicable.
+type KeyMapper func(localPath string) string
+
 // buildMediaParts processes mixed media files into Gemini API parts.
 // Images are converted to thumbnails (inline data), videos are compressed and uploaded via Files API.
-// Returns the parts list, a cleanup function, the list of uploaded files, and any error.
-func buildMediaParts(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile) ([]*genai.Part, func(), []*genai.File, error) {
+// If storeCompressed is provided, compressed videos are stored in S3 before cleanup.
+// keyMapper maps local file paths to S3 keys (optional, for cloud mode).
+// Returns the parts list, a cleanup function, the list of uploaded files, compressed keys map (originalKey -> compressedKey), and any error.
+func buildMediaParts(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) ([]*genai.Part, func(), []*genai.File, map[string]string, error) {
 	var uploadedFiles []*genai.File
 	var cleanupFuncs []func()
+	compressedKeys := make(map[string]string) // originalKey -> compressedKey
 
 	cleanupAll := func() {
 		for _, fn := range cleanupFuncs {
@@ -309,6 +325,26 @@ func buildMediaParts(ctx context.Context, client *genai.Client, files []*filehan
 				Int64("compressed_mb", compressedSize/(1024*1024)).
 				Msg("Video compressed")
 
+			// Store compressed video in S3 if callback provided
+			originalKey := file.Path // Default to local path
+			if keyMapper != nil {
+				if s3Key := keyMapper(file.Path); s3Key != "" {
+					originalKey = s3Key // Use S3 key if available
+				}
+			}
+			if storeCompressed != nil && sessionID != "" {
+				compressedKey, err := storeCompressed(ctx, sessionID, originalKey, compressedPath)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to store compressed video in S3, continuing without storage")
+				} else {
+					compressedKeys[originalKey] = compressedKey
+					log.Info().
+						Str("file", filepath.Base(file.Path)).
+						Str("compressed_key", compressedKey).
+						Msg("Compressed video stored in S3")
+				}
+			}
+
 			uploadedFile, err := uploadVideoFile(ctx, client, compressedPath)
 			if err != nil {
 				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video, skipping")
@@ -325,5 +361,5 @@ func buildMediaParts(ctx context.Context, client *genai.Client, files []*filehan
 		}
 	}
 
-	return parts, cleanupAll, uploadedFiles, nil
+	return parts, cleanupAll, uploadedFiles, compressedKeys, nil
 }

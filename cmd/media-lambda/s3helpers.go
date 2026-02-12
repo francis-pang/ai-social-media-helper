@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -79,6 +80,49 @@ func downloadToFile(ctx context.Context, key, localPath string) error {
 
 	log.Debug().Str("key", key).Str("localPath", localPath).Msg("S3 download to file completed")
 	return nil
+}
+
+// uploadCompressedVideo uploads a compressed video file to S3 at {sessionId}/compressed/{filename}.webm
+// Returns the S3 key of the uploaded file.
+func uploadCompressedVideo(ctx context.Context, sessionID, originalKey, compressedPath string) (string, error) {
+	// Extract filename from original key
+	filename := filepath.Base(originalKey)
+	// Change extension to .webm
+	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
+	compressedFilename := baseName + ".webm"
+	
+	compressedKey := fmt.Sprintf("%s/compressed/%s", sessionID, compressedFilename)
+	
+	log.Debug().
+		Str("original_key", originalKey).
+		Str("compressed_key", compressedKey).
+		Str("compressed_path", compressedPath).
+		Msg("Uploading compressed video to S3")
+	
+	// Open the compressed file
+	compressedFile, err := os.Open(compressedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open compressed file: %w", err)
+	}
+	defer compressedFile.Close()
+	
+	// Upload to S3
+	contentType := "video/webm"
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &mediaBucket,
+		Key:         &compressedKey,
+		Body:        compressedFile,
+		ContentType: &contentType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload compressed video to S3: %w", err)
+	}
+	
+	log.Info().
+		Str("compressed_key", compressedKey).
+		Msg("Compressed video uploaded to S3")
+	
+	return compressedKey, nil
 }
 
 // cleanupS3Prefix deletes all objects under {sessionId}/{prefix} in the media bucket.

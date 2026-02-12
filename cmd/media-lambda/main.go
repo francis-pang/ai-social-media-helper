@@ -218,6 +218,7 @@ func main() {
 	mux.HandleFunc("/api/session/invalidate", handleSessionInvalidate) // DDR-037
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)
+	mux.HandleFunc("/api/media/compressed", handleCompressedVideo)
 
 	// Wrap with middleware chain: metrics -> origin-verify -> handler
 	handler := withMetrics(withOriginVerify(mux))

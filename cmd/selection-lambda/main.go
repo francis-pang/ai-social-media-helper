@@ -185,6 +185,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 
 	var allMediaFiles []*filehandler.MediaFile
 	var s3Keys []string
+	pathToKeyMap := make(map[string]string) // Map local path -> S3 key
 
 	for _, key := range event.MediaKeys {
 		filename := filepath.Base(key)
@@ -209,6 +210,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 
 		allMediaFiles = append(allMediaFiles, mf)
 		s3Keys = append(s3Keys, key)
+		pathToKeyMap[localPath] = key
 	}
 
 	if len(allMediaFiles) == 0 {
@@ -234,7 +236,17 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		return SelectionResult{JobID: event.JobID, Error: errMsg}, err
 	}
 
-	selResult, err := chat.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model)
+	// Create key mapper function
+	keyMapper := func(localPath string) string {
+		return pathToKeyMap[localPath]
+	}
+
+	// Create compressed video store callback
+	storeCompressed := func(ctx context.Context, sessionID, originalKey, compressedPath string) (string, error) {
+		return uploadCompressedVideo(ctx, sessionID, originalKey, compressedPath)
+	}
+
+	selResult, err := chat.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper)
 	if err != nil {
 		errMsg := fmt.Sprintf("selection failed: %v", err)
 		selJob.Status = "error"
@@ -342,6 +354,49 @@ func main() {
 }
 
 // --- S3 Helpers ---
+
+// uploadCompressedVideo uploads a compressed video file to S3 at {sessionId}/compressed/{filename}.webm
+// Returns the S3 key of the uploaded file.
+func uploadCompressedVideo(ctx context.Context, sessionID, originalKey, compressedPath string) (string, error) {
+	// Extract filename from original key
+	filename := filepath.Base(originalKey)
+	// Change extension to .webm
+	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
+	compressedFilename := baseName + ".webm"
+	
+	compressedKey := fmt.Sprintf("%s/compressed/%s", sessionID, compressedFilename)
+	
+	log.Debug().
+		Str("original_key", originalKey).
+		Str("compressed_key", compressedKey).
+		Str("compressed_path", compressedPath).
+		Msg("Uploading compressed video to S3")
+	
+	// Open the compressed file
+	compressedFile, err := os.Open(compressedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open compressed file: %w", err)
+	}
+	defer compressedFile.Close()
+	
+	// Upload to S3
+	contentType := "video/webm"
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &mediaBucket,
+		Key:         &compressedKey,
+		Body:        compressedFile,
+		ContentType: &contentType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload compressed video to S3: %w", err)
+	}
+	
+	log.Info().
+		Str("compressed_key", compressedKey).
+		Msg("Compressed video uploaded to S3")
+	
+	return compressedKey, nil
+}
 
 // downloadToFile downloads an S3 object to a specific local path.
 func downloadToFile(ctx context.Context, bucket, key, localPath string) error {

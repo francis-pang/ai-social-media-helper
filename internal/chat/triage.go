@@ -99,9 +99,12 @@ func BuildMediaTriagePrompt(files []*filehandler.MediaFile) string {
 
 // AskMediaTriage sends a batch of media files to Gemini for triage evaluation.
 // Photos are sent as thumbnails (inline blobs), videos as compressed file references.
+// sessionID is used for storing compressed videos in S3 (optional).
+// storeCompressed is an optional callback to store compressed videos in S3.
+// keyMapper maps local file paths to S3 keys (optional, for cloud mode).
 // Returns a slice of TriageResult with one verdict per media item.
 // See DDR-021: Media Triage Command with Batch AI Evaluation.
-func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string) ([]TriageResult, error) {
+func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) ([]TriageResult, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -210,6 +213,25 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 				Int64("original_mb", file.Size/(1024*1024)).
 				Int64("compressed_mb", compressedSize/(1024*1024)).
 				Msg("Video compressed for triage")
+
+			// Store compressed video in S3 if callback provided
+			originalKey := file.Path // Default to local path
+			if keyMapper != nil {
+				if s3Key := keyMapper(file.Path); s3Key != "" {
+					originalKey = s3Key // Use S3 key if available
+				}
+			}
+			if storeCompressed != nil && sessionID != "" {
+				compressedKey, err := storeCompressed(ctx, sessionID, originalKey, compressedPath)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to store compressed video in S3, continuing without storage")
+				} else {
+					log.Info().
+						Str("file", filepath.Base(file.Path)).
+						Str("compressed_key", compressedKey).
+						Msg("Compressed video stored in S3")
+				}
+			}
 
 			// Upload to Files API
 			log.Info().

@@ -359,11 +359,28 @@ export function fullImageUrl(pathOrKey: string): string {
 
 /**
  * Resolve the full-resolution URL for a media file.
+ * For videos in cloud mode, checks for compressed WebM version first.
  * In cloud mode, fetches a presigned S3 URL from the backend.
  * In local mode, returns the direct URL synchronously (wrapped in a Promise).
  */
-export async function getFullMediaUrl(pathOrKey: string): Promise<string> {
+export async function getFullMediaUrl(
+  pathOrKey: string,
+  mediaType?: "Photo" | "Video",
+): Promise<string> {
   if (isCloudMode) {
+    // For videos, try compressed endpoint first
+    if (mediaType === "Video") {
+      try {
+        const res = await fetchJSON<FullImageResponse>(
+          `/api/media/compressed?key=${encodeURIComponent(pathOrKey)}`,
+        );
+        return res.url;
+      } catch (err) {
+        // Fallback to original if compressed endpoint fails
+        console.warn("Failed to get compressed video, falling back to original", err);
+      }
+    }
+    // For photos or if compressed failed, use full endpoint
     const res = await fetchJSON<FullImageResponse>(
       `/api/media/full?key=${encodeURIComponent(pathOrKey)}`,
     );

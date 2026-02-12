@@ -44,7 +44,8 @@ export function openMediaPlayer(
   isOpen.value = true;
 
   // Resolve the full-resolution URL asynchronously
-  getFullMediaUrl(key)
+  // Pass media type to prefer compressed videos
+  getFullMediaUrl(key, type)
     .then((url) => {
       resolvedUrl.value = url;
     })

@@ -37,7 +37,8 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for pre-generated thumbnail (DDR-030): keys under /thumbnails/ are
-	// already JPEG thumbnails — serve directly from S3 without regeneration.
+	// already optimized thumbnails — serve directly from S3 without regeneration.
+	// New thumbnails are WebP format, but old JPEG thumbnails may still exist.
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) == 2 && strings.HasPrefix(parts[1], "thumbnails/") {
 		result, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
@@ -51,7 +52,14 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		}
 		defer result.Body.Close()
 
-		w.Header().Set("Content-Type", "image/jpeg")
+		// Determine content type from file extension (backward compatibility)
+		thumbExt := strings.ToLower(filepath.Ext(key))
+		contentType := "image/webp" // Default to WebP for new thumbnails
+		if thumbExt == ".jpg" || thumbExt == ".jpeg" {
+			contentType = "image/jpeg" // Legacy JPEG thumbnails
+		}
+
+		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		io.Copy(w, result.Body)
 		return
@@ -101,6 +109,82 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpError(w, http.StatusBadRequest, "unsupported file type")
+}
+
+// GET /api/media/compressed?key=sessionId/filename.mp4
+// Returns a presigned GET URL for the compressed WebM video.
+// Falls back to original video if compressed version doesn't exist.
+func handleCompressedVideo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		httpError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+
+	log.Debug().Str("key", key).Msg("Compressed video request received")
+
+	// Validate S3 key format (DDR-028 Problem 5)
+	if err := validateS3Key(key); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Extract session ID and filename
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		httpError(w, http.StatusBadRequest, "invalid key format")
+		return
+	}
+	sessionID := parts[0]
+	filename := filepath.Base(key)
+	
+	// Change extension to .webm
+	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
+	compressedKey := fmt.Sprintf("%s/compressed/%s.webm", sessionID, baseName)
+
+	// Check if compressed version exists
+	_, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+		Bucket: &mediaBucket,
+		Key:    &compressedKey,
+	})
+	if err == nil {
+		// Compressed version exists, return presigned URL
+		result, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: &mediaBucket,
+			Key:    &compressedKey,
+		}, s3.WithPresignExpires(1*time.Hour))
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, "failed to generate download URL")
+			return
+		}
+
+		log.Debug().Str("compressed_key", compressedKey).Msg("Presigned GET URL generated for compressed video")
+		respondJSON(w, http.StatusOK, map[string]string{
+			"url": result.URL,
+		})
+		return
+	}
+
+	// Compressed version doesn't exist, fall back to original
+	log.Debug().Str("compressed_key", compressedKey).Msg("Compressed video not found, falling back to original")
+	result, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: &mediaBucket,
+		Key:    &key,
+	}, s3.WithPresignExpires(1*time.Hour))
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "failed to generate download URL")
+		return
+	}
+
+	log.Debug().Str("key", key).Msg("Presigned GET URL generated for original video (fallback)")
+	respondJSON(w, http.StatusOK, map[string]string{
+		"url": result.URL,
+	})
 }
 
 // GET /api/media/full?key=sessionId/filename.jpg
