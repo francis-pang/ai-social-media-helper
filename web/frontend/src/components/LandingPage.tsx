@@ -4,7 +4,7 @@
  * Shows two cards: Media Triage and Media Selection.
  * The user picks which workflow to enter, then proceeds to upload.
  */
-import { activeWorkflow, currentStep } from "../app";
+import { activeWorkflow, navigateToStep } from "../app";
 import type { Workflow, Step } from "../app";
 
 interface WorkflowOption {
@@ -48,7 +48,7 @@ const WORKFLOWS: WorkflowOption[] = [
 
 function selectWorkflow(option: WorkflowOption) {
   activeWorkflow.value = option.id;
-  currentStep.value = option.startStep;
+  navigateToStep(option.startStep);
 }
 
 export function LandingPage() {
