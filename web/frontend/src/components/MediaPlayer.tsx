@@ -158,8 +158,8 @@ export function MediaPlayer() {
               openFullImage(mediaKey.value);
             }}
             style={{
-              fontSize: "0.75rem",
-              padding: "0.25rem 0.75rem",
+              fontSize: "0.875rem",
+              padding: "0.5rem 1rem",
               color: "#e4e6f0",
               borderColor: "rgba(255, 255, 255, 0.2)",
             }}
@@ -174,7 +174,7 @@ export function MediaPlayer() {
             }}
             style={{
               fontSize: "0.875rem",
-              padding: "0.25rem 0.625rem",
+              padding: "0.5rem 0.875rem",
               color: "#e4e6f0",
               borderColor: "rgba(255, 255, 255, 0.2)",
               fontWeight: 700,
@@ -266,7 +266,7 @@ export function MediaPlayer() {
         style={{
           position: "absolute",
           bottom: "1rem",
-          fontSize: "0.6875rem",
+          fontSize: "0.75rem",
           color: "rgba(255, 255, 255, 0.4)",
         }}
       >

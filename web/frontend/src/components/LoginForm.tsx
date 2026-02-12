@@ -68,7 +68,8 @@ export function LoginForm() {
                 border: "1px solid var(--color-border)",
                 background: "var(--color-bg)",
                 color: "var(--color-text)",
-                fontSize: "0.875rem",
+                fontSize: "1rem",
+                minHeight: "2.75rem",
                 boxSizing: "border-box",
               }}
             />
@@ -102,7 +103,8 @@ export function LoginForm() {
                 border: "1px solid var(--color-border)",
                 background: "var(--color-bg)",
                 color: "var(--color-text)",
-                fontSize: "0.875rem",
+                fontSize: "1rem",
+                minHeight: "2.75rem",
                 boxSizing: "border-box",
               }}
             />

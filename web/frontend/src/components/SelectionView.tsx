@@ -276,7 +276,7 @@ function SelectedCard({
             left: "0.375rem",
             background: "var(--color-primary)",
             color: "#fff",
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             fontWeight: 700,
             width: "1.5rem",
             height: "1.5rem",
@@ -294,7 +294,7 @@ function SelectedCard({
             position: "absolute",
             top: "0.375rem",
             right: "0.375rem",
-            fontSize: "0.5625rem",
+            fontSize: "0.75rem",
             padding: "0.125rem 0.375rem",
             borderRadius: "4px",
             background:
@@ -328,7 +328,7 @@ function SelectedCard({
         {item.scene && (
           <div
             style={{
-              fontSize: "0.6875rem",
+              fontSize: "0.75rem",
               color: "var(--color-primary)",
               marginBottom: "0.25rem",
             }}
@@ -338,7 +338,7 @@ function SelectedCard({
         )}
         <div
           style={{
-            fontSize: "0.625rem",
+            fontSize: "0.75rem",
             color: "var(--color-text-secondary)",
             lineHeight: 1.4,
           }}
@@ -348,7 +348,7 @@ function SelectedCard({
         {item.comparisonNote && (
           <div
             style={{
-              fontSize: "0.625rem",
+              fontSize: "0.75rem",
               color: "var(--color-text-secondary)",
               fontStyle: "italic",
               marginTop: "0.25rem",
@@ -364,7 +364,7 @@ function SelectedCard({
           style={{
             marginTop: "0.5rem",
             padding: "0.125rem 0.5rem",
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             width: "100%",
           }}
         >
@@ -435,7 +435,7 @@ function ExcludedCard({
             position: "absolute",
             top: "0.375rem",
             right: "0.375rem",
-            fontSize: "0.5625rem",
+            fontSize: "0.75rem",
             padding: "0.125rem 0.375rem",
             borderRadius: "4px",
             background: "rgba(255, 107, 107, 0.85)",
@@ -463,7 +463,7 @@ function ExcludedCard({
         </div>
         <div
           style={{
-            fontSize: "0.625rem",
+            fontSize: "0.75rem",
             color: "var(--color-text-secondary)",
             lineHeight: 1.4,
           }}
@@ -473,7 +473,7 @@ function ExcludedCard({
         {item.duplicateOf && (
           <div
             style={{
-              fontSize: "0.625rem",
+              fontSize: "0.75rem",
               color: "var(--color-text-secondary)",
               fontStyle: "italic",
               marginTop: "0.125rem",
@@ -488,7 +488,7 @@ function ExcludedCard({
           style={{
             marginTop: "0.5rem",
             padding: "0.125rem 0.5rem",
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             width: "100%",
           }}
         >
@@ -520,7 +520,7 @@ function SceneGroupCard({ group }: { group: SelectionSceneGroup }) {
         <strong style={{ fontSize: "0.875rem" }}>{group.name}</strong>
         <span
           style={{
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             color: "var(--color-text-secondary)",
           }}
         >
@@ -531,7 +531,7 @@ function SceneGroupCard({ group }: { group: SelectionSceneGroup }) {
       {(group.gps || group.timeRange) && (
         <div
           style={{
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             color: "var(--color-text-secondary)",
             marginBottom: "0.5rem",
           }}
@@ -544,7 +544,7 @@ function SceneGroupCard({ group }: { group: SelectionSceneGroup }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-thumb-sm), 1fr))",
           gap: "0.375rem",
         }}
       >
@@ -721,7 +721,7 @@ export function SelectionView() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
             gap: "0.75rem",
           }}
         >
@@ -782,7 +782,7 @@ export function SelectionView() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
               gap: "0.75rem",
               marginTop: "1rem",
             }}

@@ -165,7 +165,7 @@ function BundleCard({ bundle }: { bundle: DownloadBundle }) {
           {/* Type icon */}
           <span
             style={{
-              fontSize: "0.625rem",
+              fontSize: "0.75rem",
               padding: "0.125rem 0.375rem",
               borderRadius: "3px",
               background:
@@ -185,7 +185,7 @@ function BundleCard({ bundle }: { bundle: DownloadBundle }) {
 
           <span
             style={{
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               fontWeight: 500,
               fontFamily: "var(--font-mono)",
             }}
@@ -243,7 +243,7 @@ function BundleCard({ bundle }: { bundle: DownloadBundle }) {
               alignItems: "center",
               gap: "0.375rem",
               padding: "0.375rem 0.75rem",
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               fontWeight: 500,
               background: "var(--color-primary)",
               color: "#fff",
@@ -362,7 +362,7 @@ function GroupCard({ group }: { group: PostGroup }) {
             {isComplete && (
               <span
                 style={{
-                  fontSize: "0.625rem",
+                  fontSize: "0.75rem",
                   padding: "0.125rem 0.375rem",
                   borderRadius: "3px",
                   background: "rgba(108, 200, 108, 0.15)",
@@ -376,7 +376,7 @@ function GroupCard({ group }: { group: PostGroup }) {
             {isProcessing && (
               <span
                 style={{
-                  fontSize: "0.625rem",
+                  fontSize: "0.75rem",
                   padding: "0.125rem 0.375rem",
                   borderRadius: "3px",
                   background: "rgba(108, 140, 255, 0.15)",
@@ -456,7 +456,7 @@ function GroupCard({ group }: { group: PostGroup }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: "0.5625rem",
+                fontSize: "0.75rem",
                 color: "var(--color-text-secondary)",
               }}
             >
@@ -474,7 +474,7 @@ function GroupCard({ group }: { group: PostGroup }) {
                 e.stopPropagation();
                 handleDownload(group);
               }}
-              style={{ fontSize: "0.8125rem" }}
+              style={{ fontSize: "0.875rem" }}
             >
               Prepare Download
             </button>
@@ -486,7 +486,7 @@ function GroupCard({ group }: { group: PostGroup }) {
                 e.stopPropagation();
                 handleDownload(group);
               }}
-              style={{ fontSize: "0.8125rem" }}
+              style={{ fontSize: "0.875rem" }}
             >
               Retry
             </button>
@@ -646,7 +646,7 @@ export function DownloadView() {
           <button
             class="primary"
             onClick={() => navigateToStep("description")}
-            style={{ fontSize: "0.8125rem" }}
+            style={{ fontSize: "0.875rem" }}
           >
             Generate Captions
           </button>

@@ -567,7 +567,7 @@ export function MediaUploader() {
                 ) : (
                   <span
                     style={{
-                      fontSize: "0.625rem",
+                      fontSize: "0.75rem",
                       color: "var(--color-text-secondary)",
                       textTransform: "uppercase",
                     }}
@@ -581,7 +581,7 @@ export function MediaUploader() {
               <span
                 style={{
                   flex: 1,
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   fontFamily: "var(--font-mono)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -595,7 +595,7 @@ export function MediaUploader() {
               {/* Media type badge */}
               <span
                 style={{
-                  fontSize: "0.625rem",
+                  fontSize: "0.75rem",
                   padding: "0.125rem 0.375rem",
                   borderRadius: "4px",
                   background:
@@ -617,7 +617,7 @@ export function MediaUploader() {
               {/* Size */}
               <span
                 style={{
-                  fontSize: "0.6875rem",
+                  fontSize: "0.75rem",
                   color: "var(--color-text-secondary)",
                   flexShrink: 0,
                 }}
@@ -628,7 +628,7 @@ export function MediaUploader() {
               {/* Progress / Status */}
               <span
                 style={{
-                  fontSize: "0.6875rem",
+                  fontSize: "0.75rem",
                   color:
                     f.status === "error"
                       ? "var(--color-danger)"
@@ -646,7 +646,7 @@ export function MediaUploader() {
                   : f.status === "done"
                     ? "Uploaded"
                     : f.status === "error"
-                      ? (<>Failed <span style={{ fontSize: "0.625rem", opacity: 0.8 }}>ⓘ</span></>)
+                      ? (<>Failed <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>ⓘ</span></>)
                       : "Pending"}
               </span>
 
@@ -739,7 +739,7 @@ export function MediaUploader() {
         <label
           style={{
             display: "block",
-            fontSize: "0.8125rem",
+            fontSize: "0.875rem",
             fontWeight: 500,
             marginBottom: "0.5rem",
           }}

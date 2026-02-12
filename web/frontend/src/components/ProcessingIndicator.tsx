@@ -60,8 +60,8 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
       {/* Spinner */}
       <div
         style={{
-          width: "2.5rem",
-          height: "2.5rem",
+          width: "3rem",
+          height: "3rem",
           border: "3px solid var(--color-border)",
           borderTop: "3px solid var(--color-primary)",
           borderRadius: "50%",
@@ -154,7 +154,7 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
             style={{
               display: "flex",
               justifyContent: "space-between",
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               color: "var(--color-text-secondary)",
               marginBottom: "0.375rem",
             }}
@@ -207,7 +207,7 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
               background: "var(--color-bg)",
               borderRadius: "var(--radius)",
               fontFamily: "var(--font-mono)",
-              fontSize: "0.6875rem",
+              fontSize: "0.75rem",
               color: "var(--color-text-secondary)",
               textAlign: "left",
               maxWidth: "24rem",

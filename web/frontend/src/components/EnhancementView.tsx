@@ -256,7 +256,7 @@ function EnhancementCard({
             position: "absolute",
             top: "0.375rem",
             right: "0.375rem",
-            fontSize: "0.5625rem",
+            fontSize: "0.75rem",
             padding: "0.125rem 0.375rem",
             borderRadius: "4px",
             background: getPhaseColor(item.phase),
@@ -273,7 +273,7 @@ function EnhancementCard({
               position: "absolute",
               top: "0.375rem",
               left: "0.375rem",
-              fontSize: "0.6875rem",
+              fontSize: "0.75rem",
               fontWeight: 700,
               padding: "0.125rem 0.375rem",
               borderRadius: "4px",
@@ -294,7 +294,7 @@ function EnhancementCard({
               position: "absolute",
               bottom: "0.375rem",
               left: "0.375rem",
-              fontSize: "0.5625rem",
+              fontSize: "0.75rem",
               padding: "0.125rem 0.375rem",
               borderRadius: "4px",
               background: "rgba(108, 140, 255, 0.85)",
@@ -324,7 +324,7 @@ function EnhancementCard({
         {item.error && (
           <div
             style={{
-              fontSize: "0.625rem",
+              fontSize: "0.75rem",
               color: "var(--color-danger)",
               marginTop: "0.25rem",
             }}
@@ -540,7 +540,7 @@ function SideBySideComparison({ item }: { item: EnhancementItem }) {
                     {imp.imagenSuitable && (
                       <span
                         style={{
-                          fontSize: "0.625rem",
+                          fontSize: "0.75rem",
                           color: "var(--color-primary)",
                           marginLeft: "0.375rem",
                         }}
@@ -609,7 +609,7 @@ function SideBySideComparison({ item }: { item: EnhancementItem }) {
               flex: 1,
               minHeight: "2.5rem",
               resize: "vertical",
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
             }}
             disabled={feedbackLoading.value}
           />
@@ -664,7 +664,7 @@ export function EnhancementView() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
               gap: "0.5rem",
               maxWidth: "40rem",
               margin: "1rem auto 0",
@@ -675,7 +675,7 @@ export function EnhancementView() {
               <div
                 key={item.key}
                 style={{
-                  fontSize: "0.6875rem",
+                  fontSize: "0.75rem",
                   padding: "0.25rem 0.5rem",
                   borderRadius: "var(--radius)",
                   background: "var(--color-bg)",
@@ -799,7 +799,7 @@ export function EnhancementView() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
             gap: "0.75rem",
           }}
         >

@@ -66,7 +66,7 @@ export function SelectedFiles() {
             key={p}
             style={{
               padding: "0.375rem 0",
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               fontFamily: "var(--font-mono)",
               borderBottom: "1px solid var(--color-border)",
             }}

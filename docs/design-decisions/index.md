@@ -68,6 +68,8 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-053](./DDR-053-granular-lambda-split.md) | 2026-02-10 | Granular Lambda Split — Worker → Domain-Specific Lambdas | Accepted |
 | [DDR-054](./DDR-054-s3-multipart-upload-acceleration.md) | 2026-02-10 | S3 Multipart Upload Acceleration | Accepted |
 | [DDR-055](./DDR-055-deployment-automation.md) | 2026-02-10 | Deployment Automation — Hybrid Pipeline Triggers and Full Validation | Accepted |
+| [DDR-056](./DDR-056-loading-ux-and-url-routing.md) | 2026-02-10 | Loading UX and URL Routing | Accepted |
+| [DDR-057](./DDR-057-desktop-1440p-ui-optimization.md) | 2026-02-11 | Desktop 1440p UI Optimization for 1-Meter Viewing Distance | Accepted |
 
 ---
 
@@ -82,4 +84,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-10 (DDR-055)
+**Last Updated**: 2026-02-11 (DDR-057)

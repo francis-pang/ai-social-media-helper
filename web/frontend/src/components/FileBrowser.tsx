@@ -129,7 +129,7 @@ export function FileBrowser() {
               <span
                 style={{
                   flex: 1,
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   fontFamily: "var(--font-mono)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -141,7 +141,7 @@ export function FileBrowser() {
               </span>
               <span
                 style={{
-                  fontSize: "0.6875rem",
+                  fontSize: "0.75rem",
                   color: "var(--color-text-secondary)",
                   flexShrink: 0,
                   maxWidth: "50%",

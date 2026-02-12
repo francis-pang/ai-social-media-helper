@@ -309,18 +309,16 @@ export function App() {
           {/* Back to Home button — cloud mode, not on landing (DDR-042) */}
           {isCloudMode && !isOnLanding.value && (
             <button
-              class="outline"
+              class="outline text-sm"
               onClick={navigateToLanding}
-              style={{ fontSize: "0.8125rem" }}
             >
               Home
             </button>
           )}
           {isAuthRequired() && (
             <button
-              class="outline"
+              class="outline text-sm"
               onClick={() => signOut()}
-              style={{ fontSize: "0.8125rem" }}
             >
               Sign Out
             </button>

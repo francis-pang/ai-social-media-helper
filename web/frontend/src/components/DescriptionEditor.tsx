@@ -296,7 +296,7 @@ function MediaPreviewStrip({ group }: { group: PostGroup }) {
                 position: "absolute",
                 bottom: "2px",
                 right: "2px",
-                fontSize: "0.5rem",
+                fontSize: "0.75rem",
                 background: "rgba(0,0,0,0.6)",
                 color: "#fff",
                 padding: "1px 3px",
@@ -318,7 +318,7 @@ function MediaPreviewStrip({ group }: { group: PostGroup }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             color: "var(--color-text-secondary)",
             flexShrink: 0,
           }}
@@ -366,7 +366,7 @@ function HashtagList({
           #{tag}
           <span
             style={{
-              fontSize: "0.625rem",
+              fontSize: "0.75rem",
               opacity: 0.6,
               marginLeft: "0.125rem",
             }}
@@ -523,12 +523,12 @@ export function DescriptionEditor() {
                 marginBottom: "0.75rem",
               }}
             >
-              <h3 style={{ margin: 0, fontSize: "0.9375rem" }}>Caption</h3>
+              <h3 style={{ margin: 0, fontSize: "1rem" }}>Caption</h3>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 {state.feedbackRound > 0 && (
                   <span
                     style={{
-                      fontSize: "0.6875rem",
+                      fontSize: "0.75rem",
                       color: "var(--color-text-secondary)",
                       padding: "0.125rem 0.375rem",
                       background: "var(--color-surface-hover)",
@@ -603,7 +603,7 @@ export function DescriptionEditor() {
             >
               <span
                 style={{
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   color: "var(--color-text-secondary)",
                 }}
               >
@@ -611,7 +611,7 @@ export function DescriptionEditor() {
               </span>
               <span
                 style={{
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   fontWeight: 500,
                   color: "var(--color-primary)",
                 }}
@@ -626,7 +626,7 @@ export function DescriptionEditor() {
             <h3
               style={{
                 margin: "0 0 0.75rem",
-                fontSize: "0.9375rem",
+                fontSize: "1rem",
               }}
             >
               Hashtags
@@ -653,7 +653,7 @@ export function DescriptionEditor() {
             <div
               style={{
                 marginTop: "0.5rem",
-                fontSize: "0.6875rem",
+                fontSize: "0.75rem",
                 color: "var(--color-text-secondary)",
               }}
             >
@@ -663,7 +663,7 @@ export function DescriptionEditor() {
 
           {/* Feedback input */}
           <div class="card" style={{ marginBottom: "1rem" }}>
-            <h3 style={{ margin: "0 0 0.5rem", fontSize: "0.9375rem" }}>
+            <h3 style={{ margin: "0 0 0.5rem", fontSize: "1rem" }}>
               Want changes?
             </h3>
             <div
@@ -686,7 +686,7 @@ export function DescriptionEditor() {
                   minHeight: "3rem",
                   maxHeight: "6rem",
                   padding: "0.5rem 0.75rem",
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   border: "1px solid var(--color-border)",
                   borderRadius: "var(--radius)",
                   background: "var(--color-bg)",
@@ -699,7 +699,7 @@ export function DescriptionEditor() {
                 class="primary"
                 disabled={!feedbackText.value.trim()}
                 onClick={() => submitFeedback()}
-                style={{ fontSize: "0.8125rem", flexShrink: 0 }}
+                style={{ fontSize: "0.875rem", flexShrink: 0 }}
               >
                 Regenerate
               </button>
@@ -732,7 +732,7 @@ export function DescriptionEditor() {
               <button
                 class="outline"
                 onClick={() => copyToClipboard()}
-                style={{ fontSize: "0.8125rem" }}
+                style={{ fontSize: "0.875rem" }}
               >
                 {copyStatus.value === "copied"
                   ? "Copied!"
@@ -742,7 +742,7 @@ export function DescriptionEditor() {
               <button
                 class="primary"
                 onClick={() => acceptAndContinue()}
-                style={{ fontSize: "0.8125rem" }}
+                style={{ fontSize: "0.875rem" }}
               >
                 {hasMoreGroups.value
                   ? "Accept & Next Group"

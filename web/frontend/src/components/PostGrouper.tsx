@@ -282,7 +282,7 @@ function MediaThumbnail({
             position: "absolute",
             top: "0.25rem",
             left: "0.25rem",
-            fontSize: "0.5rem",
+            fontSize: "0.75rem",
             padding: "0.0625rem 0.25rem",
             borderRadius: "3px",
             background: "rgba(108, 140, 255, 0.85)",
@@ -308,7 +308,7 @@ function MediaThumbnail({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: "0.625rem",
+            fontSize: "0.75rem",
             color: "#fff",
             fontWeight: 700,
             lineHeight: 1,
@@ -322,7 +322,7 @@ function MediaThumbnail({
       <div
         style={{
           padding: "0.25rem 0.375rem",
-          fontSize: "0.5625rem",
+          fontSize: "0.75rem",
           fontFamily: "var(--font-mono)",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -402,7 +402,7 @@ function GroupIcon({
           background: "var(--color-surface-hover)",
           border: "none",
           color: "var(--color-text-secondary)",
-          fontSize: "0.625rem",
+          fontSize: "0.75rem",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -462,7 +462,7 @@ function GroupIcon({
       {/* Group name (truncated) */}
       <div
         style={{
-          fontSize: "0.6875rem",
+          fontSize: "0.75rem",
           fontWeight: 600,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -479,7 +479,7 @@ function GroupIcon({
       {/* Item count */}
       <div
         style={{
-          fontSize: "0.625rem",
+          fontSize: "0.75rem",
           textAlign: "center",
           color: isFull
             ? "var(--color-danger)"
@@ -542,7 +542,7 @@ function NewGroupButton() {
       </div>
       <div
         style={{
-          fontSize: "0.6875rem",
+          fontSize: "0.75rem",
           color: isOver
             ? "var(--color-primary)"
             : "var(--color-text-secondary)",
@@ -640,7 +640,7 @@ export function PostGrouper() {
             Ungrouped Media
             <span
               style={{
-                fontSize: "0.8125rem",
+                fontSize: "0.875rem",
                 fontWeight: 400,
                 color: "var(--color-text-secondary)",
                 marginLeft: "0.5rem",
@@ -652,7 +652,7 @@ export function PostGrouper() {
           {ungrouped.length > 0 && hasSelectedGroup && (
             <span
               style={{
-                fontSize: "0.6875rem",
+                fontSize: "0.75rem",
                 color: "var(--color-primary)",
                 fontStyle: "italic",
               }}
@@ -687,7 +687,7 @@ export function PostGrouper() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
               gap: "0.5rem",
               borderRadius: "var(--radius)",
               padding:
@@ -724,7 +724,7 @@ export function PostGrouper() {
           Post Groups
           <span
             style={{
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               fontWeight: 400,
               color: "var(--color-text-secondary)",
               marginLeft: "0.5rem",
@@ -794,7 +794,7 @@ export function PostGrouper() {
                   width: "100%",
                   minHeight: "3rem",
                   resize: "vertical",
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   background: "var(--color-bg)",
                   border: "1px solid var(--color-border)",
                   borderRadius: "var(--radius)",
@@ -806,7 +806,7 @@ export function PostGrouper() {
             </div>
             <div
               style={{
-                fontSize: "0.8125rem",
+                fontSize: "0.875rem",
                 color:
                   currentGroup.keys.length >= MAX_ITEMS_PER_GROUP
                     ? "var(--color-danger)"
@@ -837,7 +837,7 @@ export function PostGrouper() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
                 gap: "0.5rem",
               }}
             >
@@ -856,7 +856,7 @@ export function PostGrouper() {
             <div
               style={{
                 marginTop: "0.5rem",
-                fontSize: "0.6875rem",
+                fontSize: "0.75rem",
                 color: "var(--color-text-secondary)",
                 fontStyle: "italic",
               }}

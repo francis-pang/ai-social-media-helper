@@ -10,9 +10,15 @@
   --color-danger: #ff6b6b;
   --color-danger-hover: #ee5a5a;
   --color-success: #51cf66;
-  --radius: 8px;
-  --radius-lg: 12px;
+  --radius: 12px;
+  --radius-lg: 18px;
   --font-mono: "SF Mono", "Fira Code", "Fira Mono", monospace;
+
+  /* Grid track minimums — rem-based, scale with root font (DDR-057) */
+  --grid-card-lg: 21rem;    /* ~504px; landing page workflow cards */
+  --grid-card-md: 13rem;    /* ~312px; selection/triage thumbnails */
+  --grid-card-sm: 10rem;    /* ~240px; enhancement/grouper thumbnails */
+  --grid-thumb-sm: 7rem;    /* ~168px; scene group small thumbnails */
 }
 
 *,
@@ -24,7 +30,7 @@
 }
 
 html {
-  font-size: 16px;
+  font-size: 24px;  /* DDR-057: 1.5× for 1m viewing on 1440p */
 }
 
 body {
@@ -38,21 +44,40 @@ body {
 }
 
 #app {
-  max-width: 1200px;
+  max-width: 2000px;  /* DDR-057: ~78% of 2560px */
   margin: 0 auto;
   padding: 2rem 1.5rem;
 }
+
+/* --- Typography utility classes (DDR-057) --- */
+
+.text-xs   { font-size: 0.75rem; }   /* 18px — absolute minimum */
+.text-sm   { font-size: 0.875rem; }  /* 21px — secondary/metadata */
+.text-base { font-size: 1rem; }      /* 24px — body */
+.text-lg   { font-size: 1.125rem; }  /* 27px — emphasis */
+.text-xl   { font-size: 1.25rem; }   /* 30px — card titles */
+
+/* Text block width constraint for prose readability (DDR-057) */
+.text-block { max-width: 65ch; }
+
+/* --- Buttons --- */
 
 button {
   cursor: pointer;
   border: none;
   border-radius: var(--radius);
-  padding: 0.5rem 1rem;
-  font-size: 0.875rem;
+  padding: 0.625rem 1.5rem;
+  font-size: 1rem;
   font-weight: 500;
+  min-height: 2.75rem;  /* DDR-057: 66px, well above 44px Fitts threshold */
   transition:
     background-color 0.15s,
-    opacity 0.15s;
+    opacity 0.15s,
+    transform 0.15s;
+}
+
+button:hover:not(:disabled) {
+  transform: scale(1.02);  /* DDR-057: enhanced hover visibility at 1m */
 }
 
 button:disabled {
@@ -86,16 +111,17 @@ button.outline {
 
 button.outline:hover:not(:disabled) {
   background: var(--color-surface-hover);
+  border-color: var(--color-text-secondary);  /* DDR-057: higher-contrast border on hover */
 }
 
 h1 {
-  font-size: 1.5rem;
+  font-size: 1.75rem;  /* DDR-057: 42px */
   font-weight: 600;
   margin-bottom: 0.5rem;
 }
 
 h2 {
-  font-size: 1.125rem;
+  font-size: 1.25rem;  /* DDR-057: 30px */
   font-weight: 600;
   margin-bottom: 0.5rem;
 }
@@ -104,12 +130,12 @@ h2 {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 1.5rem;
+  padding: 2rem;  /* DDR-057: increased from 1.5rem */
 }
 
 code {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;  /* DDR-057: increased from 0.8125rem */
   background: var(--color-surface);
   padding: 0.125rem 0.375rem;
   border-radius: 4px;

@@ -218,7 +218,7 @@ function MediaCard({
               <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             )}
           </svg>
-          <span style={{ fontSize: "0.6875rem" }}>
+          <span style={{ fontSize: "0.75rem" }}>
             {isVideoFile(item.filename) ? item.filename : "No preview"}
           </span>
         </div>
@@ -236,7 +236,7 @@ function MediaCard({
               alignItems: "center",
               gap: "0.25rem",
               color: "#fff",
-              fontSize: "0.6875rem",
+              fontSize: "0.75rem",
               pointerEvents: "none",
             }}
           >
@@ -277,7 +277,7 @@ function MediaCard({
         </div>
         <div
           style={{
-            fontSize: "0.6875rem",
+            fontSize: "0.75rem",
             color: "var(--color-text-secondary)",
             marginTop: "0.25rem",
           }}
@@ -401,7 +401,7 @@ export function TriageView() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
             gap: "0.75rem",
           }}
         >
@@ -425,7 +425,7 @@ export function TriageView() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
             gap: "0.75rem",
           }}
         >

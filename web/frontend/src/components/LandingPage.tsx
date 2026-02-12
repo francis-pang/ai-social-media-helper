@@ -57,7 +57,7 @@ export function LandingPage() {
       <p
         style={{
           color: "var(--color-text-secondary)",
-          fontSize: "0.9375rem",
+          fontSize: "1rem",
           marginBottom: "2rem",
           lineHeight: "1.6",
         }}
@@ -69,7 +69,7 @@ export function LandingPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(var(--grid-card-lg), 1fr))",
           gap: "1.5rem",
         }}
       >
@@ -135,7 +135,7 @@ export function LandingPage() {
             <p
               style={{
                 color: "var(--color-text-secondary)",
-                fontSize: "0.9375rem",
+                fontSize: "1rem",
                 marginBottom: "1.25rem",
               }}
             >
@@ -153,7 +153,7 @@ export function LandingPage() {
                 <li
                   key={i}
                   style={{
-                    fontSize: "0.8125rem",
+                    fontSize: "0.875rem",
                     color: "var(--color-text-secondary)",
                     padding: "0.25rem 0",
                     paddingLeft: "1rem",
@@ -184,7 +184,7 @@ export function LandingPage() {
             >
               <span
                 style={{
-                  fontSize: "0.8125rem",
+                  fontSize: "0.875rem",
                   fontWeight: 500,
                   color: option.accentColor,
                   display: "flex",

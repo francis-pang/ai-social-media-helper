@@ -261,7 +261,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
             {isPublished && (
               <span
                 style={{
-                  fontSize: "0.625rem",
+                  fontSize: "0.75rem",
                   padding: "0.125rem 0.375rem",
                   borderRadius: "3px",
                   background: "rgba(108, 200, 108, 0.15)",
@@ -328,7 +328,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
                     position: "absolute",
                     bottom: "1px",
                     right: "1px",
-                    fontSize: "0.5rem",
+                    fontSize: "0.75rem",
                     background: "rgba(0,0,0,0.6)",
                     color: "#fff",
                     padding: "1px 2px",
@@ -350,7 +350,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: "0.5625rem",
+                fontSize: "0.75rem",
                 color: "var(--color-text-secondary)",
               }}
             >
@@ -368,7 +368,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
             background: "var(--color-bg)",
             borderRadius: "var(--radius)",
             border: "1px solid var(--color-border)",
-            fontSize: "0.8125rem",
+            fontSize: "0.875rem",
             lineHeight: "1.5",
             whiteSpace: "pre-wrap",
             marginBottom: "0.75rem",
@@ -414,7 +414,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
             <span
               key={`${tag}-${i}`}
               style={{
-                fontSize: "0.6875rem",
+                fontSize: "0.75rem",
                 padding: "0.125rem 0.375rem",
                 background: "rgba(108, 140, 255, 0.1)",
                 color: "var(--color-primary)",
@@ -427,7 +427,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
           {state.hashtags.length > 10 && (
             <span
               style={{
-                fontSize: "0.6875rem",
+                fontSize: "0.75rem",
                 color: "var(--color-text-secondary)",
                 padding: "0.125rem 0.25rem",
               }}
@@ -456,7 +456,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
               marginBottom: "0.5rem",
             }}
           >
-            <span style={{ fontSize: "0.8125rem", fontWeight: 500 }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>
               {phaseLabel(state.phase)}
             </span>
             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
@@ -522,7 +522,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
         >
           <span
             style={{
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               color: "var(--color-success)",
               fontWeight: 500,
             }}
@@ -535,7 +535,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
               target="_blank"
               rel="noopener noreferrer"
               style={{
-                fontSize: "0.8125rem",
+                fontSize: "0.875rem",
                 color: "var(--color-primary)",
                 textDecoration: "none",
                 fontWeight: 500,
@@ -559,7 +559,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
         >
           <div
             style={{
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               color: "var(--color-danger)",
               marginBottom: "0.5rem",
             }}
@@ -594,7 +594,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
             onClick={() => handlePublish(group)}
             disabled={!instagramConfigured.value}
             style={{
-              fontSize: "0.8125rem",
+              fontSize: "0.875rem",
               opacity: instagramConfigured.value ? 1 : 0.4,
               cursor: instagramConfigured.value ? "pointer" : "not-allowed",
             }}
@@ -708,7 +708,7 @@ export function PublishView() {
           <button
             class="outline"
             onClick={() => navigateToStep("description")}
-            style={{ fontSize: "0.8125rem" }}
+            style={{ fontSize: "0.875rem" }}
           >
             Generate Captions
           </button>
