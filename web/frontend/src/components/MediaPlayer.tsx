@@ -248,10 +248,12 @@ export function MediaPlayer() {
             src={url}
             controls
             autoPlay
+            playsInline
             style={{
-              maxWidth: "90vw",
+              width: "80vw",
               maxHeight: "80vh",
               borderRadius: "var(--radius)",
+              background: "#000",
             }}
           >
             Your browser does not support the video tag.

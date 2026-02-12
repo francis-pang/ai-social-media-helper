@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { triageJobId, selectedPaths, uploadSessionId, navigateToLanding, setStep } from "../app";
+import { triageJobId, selectedPaths, uploadSessionId, navigateToLanding, navigateBack, setStep } from "../app";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   getTriageResults,
@@ -45,7 +45,7 @@ function pollResults(id: string) {
       if (res.status === "complete" || res.status === "error") {
         clearInterval(interval);
         setStep("results");
-        if (res.discard.length > 0) {
+        if (res.discard && res.discard.length > 0) {
           selectedForDeletion.value = new Set(
             res.discard.map((item) => itemId(item)),
           );
@@ -115,6 +115,17 @@ function startOver() {
   }
 }
 
+function handleBack() {
+  results.value = null;
+  selectedForDeletion.value = new Set();
+  confirmResult.value = null;
+  error.value = null;
+  triageJobId.value = null;
+  selectedPaths.value = [];
+  uploadSessionId.value = null;
+  navigateBack();
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -148,6 +159,14 @@ function MediaCard({
       }}
     >
       <div
+        onClick={(e) => {
+          e.stopPropagation();
+          openMediaPlayer(
+            itemId(item),
+            isVideoFile(item.filename) ? "Video" : "Photo",
+            item.filename,
+          );
+        }}
         style={{
           width: "100%",
           aspectRatio: "1",
@@ -156,31 +175,77 @@ function MediaCard({
           alignItems: "center",
           justifyContent: "center",
           position: "relative",
+          cursor: "zoom-in",
         }}
       >
-        <img
-          src={itemThumb(item)}
-          alt={item.filename}
-          title={item.filename}
-          loading="lazy"
-          onClick={(e) => {
-            e.stopPropagation();
-            openMediaPlayer(
-              itemId(item),
-              isVideoFile(item.filename) ? "Video" : "Photo",
-              item.filename,
-            );
-          }}
+        {/* For photos: load thumbnail image; for videos: skip (no ffmpeg in triage pipeline) */}
+        {!isVideoFile(item.filename) ? (
+          <img
+            src={itemThumb(item)}
+            alt={item.filename}
+            title={item.filename}
+            loading="lazy"
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+            onError={(e) => {
+              const img = e.target as HTMLImageElement;
+              img.style.display = "none";
+              const fallback = img.nextElementSibling as HTMLElement | null;
+              if (fallback) fallback.style.display = "flex";
+            }}
+          />
+        ) : null}
+        {/* Fallback placeholder: always visible for videos, hidden until onError for photos */}
+        <div
           style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            cursor: "zoom-in",
+            display: isVideoFile(item.filename) ? "flex" : "none",
+            position: "absolute",
+            inset: 0,
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--color-text-secondary)",
+            gap: "0.5rem",
           }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
-        />
+        >
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            {isVideoFile(item.filename) ? (
+              <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            ) : (
+              <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            )}
+          </svg>
+          <span style={{ fontSize: "0.6875rem" }}>
+            {isVideoFile(item.filename) ? item.filename : "No preview"}
+          </span>
+        </div>
+        {/* Video play icon overlay */}
+        {isVideoFile(item.filename) && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: "0.5rem",
+              right: "0.5rem",
+              background: "rgba(0,0,0,0.65)",
+              borderRadius: "4px",
+              padding: "0.25rem 0.4rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.25rem",
+              color: "#fff",
+              fontSize: "0.6875rem",
+              pointerEvents: "none",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="6,4 20,12 6,20" />
+            </svg>
+            Video
+          </div>
+        )}
         {selectable && (
           <input
             type="checkbox"
@@ -293,8 +358,9 @@ export function TriageView() {
     );
   }
 
-  // Show results
-  const { keep, discard } = results.value;
+  // Show results (guard against null arrays from Go nil-slice JSON encoding)
+  const keep = results.value.keep ?? [];
+  const discard = results.value.discard ?? [];
 
   return (
     <div>
@@ -393,8 +459,8 @@ export function TriageView() {
           deletion
         </span>
         <div style={{ display: "flex", gap: "0.75rem" }}>
-          <button class="outline" onClick={startOver}>
-            Cancel
+          <button class="outline" onClick={handleBack}>
+            Back
           </button>
           <button
             class="danger"

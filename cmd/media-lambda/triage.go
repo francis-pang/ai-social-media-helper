@@ -163,11 +163,20 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	}
 	log.Debug().Str("jobId", jobID).Str("status", job.Status).Msg("Triage job found in DynamoDB")
 
+	// Ensure arrays are never null in JSON (Go nil slices marshal as null).
+	keepItems := job.Keep
+	if keepItems == nil {
+		keepItems = []store.TriageItem{}
+	}
+	discardItems := job.Discard
+	if discardItems == nil {
+		discardItems = []store.TriageItem{}
+	}
 	resp := map[string]interface{}{
 		"id":      job.ID,
 		"status":  job.Status,
-		"keep":    job.Keep,
-		"discard": job.Discard,
+		"keep":    keepItems,
+		"discard": discardItems,
 	}
 	if job.Error != "" {
 		resp["error"] = job.Error

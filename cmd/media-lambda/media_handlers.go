@@ -93,9 +93,9 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		fmt.Fprintf(w, `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
-			<rect width="400" height="400" fill="#1a1d27"/>
-			<polygon points="160,120 160,280 290,200" fill="#8b8fa8"/>
-			<text x="200" y="340" text-anchor="middle" fill="#8b8fa8" font-size="16" font-family="sans-serif">%s</text>
+			<rect width="400" height="400" fill="#2a2d3a"/>
+			<polygon points="160,120 160,280 290,200" fill="#c0c4d4"/>
+			<text x="200" y="340" text-anchor="middle" fill="#c0c4d4" font-size="16" font-family="sans-serif">%s</text>
 		</svg>`, filepath.Base(key))
 		return
 	}
