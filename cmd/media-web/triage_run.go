@@ -104,11 +104,13 @@ func runTriageJob(job *triageJob, model string) {
 
 	// Map results to items with paths and thumbnail URLs
 	job.mu.Lock()
+	seen := make(map[int]bool) // track which media indices got a verdict
 	for _, tr := range triageResults {
 		idx := tr.Media - 1
 		if idx < 0 || idx >= len(mediaForAI) {
 			continue
 		}
+		seen[idx] = true
 		mf := mediaForAI[idx]
 		item := triageResultItem{
 			Media:        tr.Media,
@@ -124,6 +126,25 @@ func runTriageJob(job *triageJob, model string) {
 			job.discard = append(job.discard, item)
 		}
 	}
+
+	// Safety net: any media items missing from the AI response default to "keep".
+	for i, mf := range mediaForAI {
+		if !seen[i] {
+			log.Warn().
+				Int("media", i+1).
+				Str("filename", filepath.Base(mf.Path)).
+				Msg("Media item missing from AI triage results — defaulting to keep")
+			job.keep = append(job.keep, triageResultItem{
+				Media:        i + 1,
+				Filename:     filepath.Base(mf.Path),
+				Path:         mf.Path,
+				Saveable:     true,
+				Reason:       "Not evaluated by AI — kept by default",
+				ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?path=%s", mf.Path),
+			})
+		}
+	}
+
 	job.status = "complete"
 	job.mu.Unlock()
 

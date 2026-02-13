@@ -337,11 +337,13 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 
 	// Map results to store items.
 	var keep, discard []store.TriageItem
+	seen := make(map[int]bool) // track which media indices got a verdict
 	for _, tr := range triageResults {
 		idx := tr.Media - 1
 		if idx < 0 || idx >= len(allMediaFiles) {
 			continue
 		}
+		seen[idx] = true
 		key := s3Keys[idx]
 		item := store.TriageItem{
 			Media:        tr.Media,
@@ -355,6 +357,26 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 			keep = append(keep, item)
 		} else {
 			discard = append(discard, item)
+		}
+	}
+
+	// Safety net: any media items missing from the AI response default to "keep"
+	// so that nothing is silently lost.
+	for i, mf := range allMediaFiles {
+		if !seen[i] {
+			key := s3Keys[i]
+			log.Warn().
+				Int("media", i+1).
+				Str("filename", filepath.Base(mf.Path)).
+				Msg("Media item missing from AI triage results — defaulting to keep")
+			keep = append(keep, store.TriageItem{
+				Media:        i + 1,
+				Filename:     filepath.Base(mf.Path),
+				Key:          key,
+				Saveable:     true,
+				Reason:       "Not evaluated by AI — kept by default",
+				ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?key=%s", key),
+			})
 		}
 	}
 
