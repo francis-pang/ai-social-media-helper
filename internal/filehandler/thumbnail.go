@@ -23,9 +23,9 @@ const DefaultThumbnailMaxDimension = 1024
 // Returns the thumbnail bytes, MIME type, and any error.
 //
 // Strategy:
-//   - JPEG/PNG: Resize using pure Go (golang.org/x/image/draw) and encode as WebP
+//   - JPEG/PNG/WebP: Resize using pure Go (golang.org/x/image/draw) and encode as WebP
 //   - HEIC/HEIF: Use ffmpeg to convert to WebP thumbnail (cross-platform, DDR-027)
-//   - GIF/WebP: Return original file (typically small)
+//   - GIF: Return original file (animations lose frames when re-encoded)
 //   - Video (MP4/MOV/AVI/WebM/MKV): Extract frame at 1s using ffmpeg and encode as WebP (DDR-030)
 func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, error) {
 	ext := strings.ToLower(filepath.Ext(mediaFile.Path))
@@ -42,7 +42,7 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 	method := ""
 
 	switch ext {
-	case ".jpg", ".jpeg", ".png":
+	case ".jpg", ".jpeg", ".png", ".webp":
 		data, mimeType, err = generateThumbnailPureGo(mediaFile.Path, ext, maxDimension)
 		method = "pure-go"
 
@@ -50,8 +50,8 @@ func GenerateThumbnail(mediaFile *MediaFile, maxDimension int) ([]byte, string, 
 		data, mimeType, err = generateThumbnailHEIC(mediaFile.Path, maxDimension)
 		method = "ffmpeg-heic"
 
-	case ".gif", ".webp":
-		// Return original file for small formats
+	case ".gif":
+		// Return original file for small formats (GIF animations lose frames when re-encoded)
 		data, err = os.ReadFile(mediaFile.Path)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to read file: %w", err)
@@ -187,6 +187,8 @@ func generateThumbnailPureGo(filePath, ext string, maxDimension int) ([]byte, st
 		img, err = jpeg.Decode(f)
 	case ".png":
 		img, err = png.Decode(f)
+	case ".webp":
+		img, err = webp.Decode(f)
 	default:
 		return nil, "", fmt.Errorf("unsupported format: %s", ext)
 	}
