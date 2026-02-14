@@ -175,7 +175,7 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Lambda | Purpose | Container | Memory | Timeout | Credentials |
 |--------|---------|-----------|--------|---------|-------------|
 | API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s | Gemini + Instagram |
-| Triage | Triage pipeline: prepare, poll Gemini, run, cleanup originals (DDR-053, DDR-059) | Light | 2 GB | 10 min | Gemini |
+| Triage | Triage pipeline: prepare, poll Gemini, run, cleanup originals (DDR-053, DDR-059, DDR-060) | Light | 2 GB | 10 min | Gemini |
 | Description | Caption generation + feedback (DDR-053) | Light | 2 GB | 5 min | Gemini |
 | Download | ZIP bundle creation (DDR-053) | Light | 2 GB | 10 min | None |
 | Publish | Publish pipeline: containers, poll Instagram, finalize (DDR-053) | Light | 256 MB | 5 min | Instagram |
@@ -313,6 +313,7 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-052](./design-decisions/DDR-052-step-functions-polling-for-long-running-ops.md) — Step Functions polling for long-running operations (triage, publish)
 - [DDR-053](./design-decisions/DDR-053-granular-lambda-split.md) — Granular Lambda split: Worker Lambda → 4 domain-specific Lambdas + shared bootstrap
 - [DDR-059](./design-decisions/DDR-059-frugal-triage-s3-cleanup.md) — Frugal Triage — Early S3 Cleanup via Thumbnails
+- [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
 
 ---
 

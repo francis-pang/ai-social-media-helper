@@ -66,10 +66,11 @@ type MediaMetadata interface {
 // MediaFile represents a file that can be uploaded to Gemini.
 // Note: Data is no longer populated; we always stream upload via Files API (DDR-012).
 type MediaFile struct {
-	Path     string
-	MIMEType string
-	Size     int64
-	Metadata MediaMetadata
+	Path         string
+	MIMEType     string
+	Size         int64
+	Metadata     MediaMetadata
+	PresignedURL string // S3 presigned GET URL; when set, Gemini fetches directly (DDR-060)
 }
 
 // LoadMediaFile loads a media file from disk and returns a MediaFile struct.

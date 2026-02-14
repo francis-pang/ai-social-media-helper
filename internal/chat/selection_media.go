@@ -302,62 +302,76 @@ func buildMediaParts(ctx context.Context, client *genai.Client, files []*filehan
 			})
 
 		} else if filehandler.IsVideo(ext) {
-			log.Info().
-				Str("file", filepath.Base(file.Path)).
-				Int64("size_mb", file.Size/(1024*1024)).
-				Msg("Compressing video for Gemini...")
+			if file.PresignedURL != "" {
+				// Direct S3 presigned URL — Gemini fetches from S3 (DDR-060).
+				log.Info().
+					Str("file", filepath.Base(file.Path)).
+					Msg("Using presigned URL for video (skipping compression and Files API upload)")
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						MIMEType: file.MIMEType,
+						FileURI:  file.PresignedURL,
+					},
+				})
+			} else {
+				// Fallback: compress + upload via Files API (local/CLI mode).
+				log.Info().
+					Str("file", filepath.Base(file.Path)).
+					Int64("size_mb", file.Size/(1024*1024)).
+					Msg("Compressing video for Gemini...")
 
-			var videoMeta *filehandler.VideoMetadata
-			if file.Metadata != nil {
-				videoMeta, _ = file.Metadata.(*filehandler.VideoMetadata)
-			}
-
-			compressedPath, compressedSize, cleanup, err := filehandler.CompressVideoForGemini(ctx, file.Path, videoMeta)
-			if err != nil {
-				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to compress video, skipping")
-				continue
-			}
-			cleanupFuncs = append(cleanupFuncs, cleanup)
-
-			log.Info().
-				Str("file", filepath.Base(file.Path)).
-				Int64("original_mb", file.Size/(1024*1024)).
-				Int64("compressed_mb", compressedSize/(1024*1024)).
-				Msg("Video compressed")
-
-			// Store compressed video in S3 if callback provided
-			originalKey := file.Path // Default to local path
-			if keyMapper != nil {
-				if s3Key := keyMapper(file.Path); s3Key != "" {
-					originalKey = s3Key // Use S3 key if available
+				var videoMeta *filehandler.VideoMetadata
+				if file.Metadata != nil {
+					videoMeta, _ = file.Metadata.(*filehandler.VideoMetadata)
 				}
-			}
-			if storeCompressed != nil && sessionID != "" {
-				compressedKey, err := storeCompressed(ctx, sessionID, originalKey, compressedPath)
+
+				compressedPath, compressedSize, cleanup, err := filehandler.CompressVideoForGemini(ctx, file.Path, videoMeta)
 				if err != nil {
-					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to store compressed video in S3, continuing without storage")
-				} else {
-					compressedKeys[originalKey] = compressedKey
-					log.Info().
-						Str("file", filepath.Base(file.Path)).
-						Str("compressed_key", compressedKey).
-						Msg("Compressed video stored in S3")
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to compress video, skipping")
+					continue
 				}
-			}
+				cleanupFuncs = append(cleanupFuncs, cleanup)
 
-			uploadedFile, err := uploadVideoFile(ctx, client, compressedPath)
-			if err != nil {
-				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video, skipping")
-				continue
-			}
-			uploadedFiles = append(uploadedFiles, uploadedFile)
+				log.Info().
+					Str("file", filepath.Base(file.Path)).
+					Int64("original_mb", file.Size/(1024*1024)).
+					Int64("compressed_mb", compressedSize/(1024*1024)).
+					Msg("Video compressed")
 
-			parts = append(parts, &genai.Part{
-				FileData: &genai.FileData{
-					MIMEType: uploadedFile.MIMEType,
-					FileURI:  uploadedFile.URI,
-				},
-			})
+				// Store compressed video in S3 if callback provided
+				originalKey := file.Path // Default to local path
+				if keyMapper != nil {
+					if s3Key := keyMapper(file.Path); s3Key != "" {
+						originalKey = s3Key // Use S3 key if available
+					}
+				}
+				if storeCompressed != nil && sessionID != "" {
+					compressedKey, err := storeCompressed(ctx, sessionID, originalKey, compressedPath)
+					if err != nil {
+						log.Warn().Err(err).Str("file", file.Path).Msg("Failed to store compressed video in S3, continuing without storage")
+					} else {
+						compressedKeys[originalKey] = compressedKey
+						log.Info().
+							Str("file", filepath.Base(file.Path)).
+							Str("compressed_key", compressedKey).
+							Msg("Compressed video stored in S3")
+					}
+				}
+
+				uploadedFile, err := uploadVideoFile(ctx, client, compressedPath)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video, skipping")
+					continue
+				}
+				uploadedFiles = append(uploadedFiles, uploadedFile)
+
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						MIMEType: uploadedFile.MIMEType,
+						FileURI:  uploadedFile.URI,
+					},
+				})
+			}
 		}
 	}
 

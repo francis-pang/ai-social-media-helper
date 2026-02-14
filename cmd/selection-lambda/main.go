@@ -37,9 +37,10 @@ import (
 
 // AWS clients and configuration initialized at cold start.
 var (
-	s3Client     *s3.Client
-	sessionStore store.SessionStore
-	mediaBucket  string
+	s3Client      *s3.Client
+	presignClient *s3.PresignClient
+	sessionStore  store.SessionStore
+	mediaBucket   string
 )
 
 var coldStart = true
@@ -55,6 +56,7 @@ func init() {
 	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
 
 	s3Client = s3.NewFromConfig(cfg)
+	presignClient = s3.NewPresignClient(s3Client)
 	mediaBucket = os.Getenv("MEDIA_BUCKET_NAME")
 	if mediaBucket == "" {
 		log.Fatal().Msg("MEDIA_BUCKET_NAME environment variable is required")
@@ -208,6 +210,18 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 			continue
 		}
 
+		// For videos, generate presigned URL so Gemini fetches directly from S3 (DDR-060).
+		if filehandler.IsVideo(ext) {
+			url, err := generatePresignedURL(ctx, bucket, key)
+			if err != nil {
+				logger.Warn().Err(err).Str("key", key).Msg("Failed to generate presigned URL for video")
+				// Continue without presigned URL — buildMediaParts will fall back to compress+upload
+			} else {
+				mf.PresignedURL = url
+				logger.Debug().Str("key", key).Msg("Presigned URL generated for video (DDR-060)")
+			}
+		}
+
 		allMediaFiles = append(allMediaFiles, mf)
 		s3Keys = append(s3Keys, key)
 		pathToKeyMap[localPath] = key
@@ -354,6 +368,20 @@ func main() {
 }
 
 // --- S3 Helpers ---
+
+// generatePresignedURL creates a short-lived S3 presigned GET URL for the
+// given key. Gemini fetches the file directly from S3 via this URL (DDR-060).
+func generatePresignedURL(ctx context.Context, bucket, key string) (string, error) {
+	result, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: &bucket, Key: &key,
+	}, func(opts *s3.PresignOptions) {
+		opts.Expires = 15 * time.Minute
+	})
+	if err != nil {
+		return "", fmt.Errorf("presign GetObject: %w", err)
+	}
+	return result.URL, nil
+}
 
 // uploadCompressedVideo uploads a compressed video file to S3 at {sessionId}/compressed/{filename}.webm
 // Returns the S3 key of the uploaded file.

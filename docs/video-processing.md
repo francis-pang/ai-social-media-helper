@@ -25,7 +25,9 @@ See [DDR-011](./design-decisions/DDR-011-video-metadata-and-upload.md) for the v
 
 ## Compression Pipeline
 
-All videos are compressed before upload to Gemini using AV1 video + Opus audio codecs. A 1GB video typically compresses to ~2MB while preserving AI-analyzable quality. See [DDR-018](./design-decisions/DDR-018-video-compression-gemini3.md).
+Videos are compressed before upload to Gemini using AV1 video + Opus audio codecs. A 1GB video typically compresses to ~2MB while preserving AI-analyzable quality. See [DDR-018](./design-decisions/DDR-018-video-compression-gemini3.md).
+
+**Note:** In cloud mode (triage and selection Lambdas), videos can bypass compression entirely via S3 presigned URLs — Gemini fetches the raw video directly from S3. This eliminates the need for ffmpeg in the triage Lambda's "light" container. See [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md).
 
 ```mermaid
 flowchart LR
@@ -87,7 +89,8 @@ sequenceDiagram
 - [DDR-018](./design-decisions/DDR-018-video-compression-gemini3.md) — Video compression for Gemini
 - [DDR-027](./design-decisions/DDR-027-container-image-lambda-local-commands.md) — Container image Lambda (ffmpeg bundling)
 - [DDR-032](./design-decisions/DDR-032-multi-step-video-enhancement.md) — Multi-step video enhancement pipeline
+- [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 presigned URLs for Gemini video transfer
 
 ---
 
-**Last Updated**: 2026-02-09
+**Last Updated**: 2026-02-14

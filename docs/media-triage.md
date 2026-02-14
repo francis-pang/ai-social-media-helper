@@ -69,7 +69,7 @@ The AI is instructed to be **generous** — if a normal person can understand th
 | Input | `--directory` flag | File browser in UI | Drag-and-drop upload to S3 |
 | Processing | Local Go binary | Local Go binary | AWS Lambda |
 | Media access | Local filesystem | Local filesystem | S3 presigned URLs |
-| Video support | Full (ffmpeg required) | Full (ffmpeg required) | Images only (no ffmpeg in Lambda yet) |
+| Video support | Full (ffmpeg required) | Full (ffmpeg required) | Full — videos via S3 presigned URLs (DDR-060) |
 | Authentication | API key (env var / GPG) | API key (env var / GPG) | Cognito JWT |
 
 ## S3 Storage Optimization (DDR-059)
@@ -89,6 +89,7 @@ For a typical 36-file session (~500 MB originals), this reduces S3 storage-hours
 - [DDR-026](./design-decisions/DDR-026-phase2-lambda-s3-deployment.md) — Phase 2 Lambda + S3 deployment
 - [DDR-042](./design-decisions/DDR-042-landing-page-workflow-switcher.md) — Landing page workflow switcher
 - [DDR-059](./design-decisions/DDR-059-frugal-triage-s3-cleanup.md) — Frugal Triage — Early S3 Cleanup via Thumbnails
+- [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
 
 ---
 
