@@ -119,7 +119,7 @@ func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
 // to the Gemini Files API, and returns file names for polling.
 func handleTriagePrepare(ctx context.Context, event TriageEvent) (*TriagePrepareResult, error) {
 	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
-		ID: event.JobID, Status: "processing",
+		ID: event.JobID, Status: "processing", Phase: "uploading",
 	})
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
@@ -149,10 +149,26 @@ func handleTriagePrepare(ctx context.Context, event TriageEvent) (*TriagePrepare
 		return nil, fmt.Errorf("no files found for session")
 	}
 
+	// Count supported files for progress tracking.
+	var totalSupported int
+	for _, obj := range listResult.Contents {
+		ext := strings.ToLower(filepath.Ext(filepath.Base(*obj.Key)))
+		if filehandler.IsSupported(ext) {
+			totalSupported++
+		}
+	}
+
+	// Update phase with total file count.
+	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+		ID: event.JobID, Status: "processing", Phase: "uploading",
+		TotalFiles: totalSupported, UploadedFiles: 0,
+	})
+
 	tmpDir := filepath.Join(os.TempDir(), "triage", event.SessionID)
 	os.MkdirAll(tmpDir, 0755)
 
 	var videoFileNames []string
+	uploadedCount := 0
 
 	for _, obj := range listResult.Contents {
 		key := *obj.Key
@@ -193,6 +209,13 @@ func handleTriagePrepare(ctx context.Context, event TriageEvent) (*TriagePrepare
 			log.Debug().Str("fileName", file.Name).Str("key", key).Msg("Video uploaded to Gemini Files API")
 		}
 
+		uploadedCount++
+		// Update upload progress in DynamoDB.
+		sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+			ID: event.JobID, Status: "processing", Phase: "uploading",
+			TotalFiles: totalSupported, UploadedFiles: uploadedCount,
+		})
+
 		log.Debug().Str("key", key).Str("mimeType", mf.MIMEType).Int64("size", mf.Size).Msg("Media file loaded")
 	}
 
@@ -200,6 +223,16 @@ func handleTriagePrepare(ctx context.Context, event TriageEvent) (*TriagePrepare
 	if model == "" {
 		model = chat.DefaultModelName
 	}
+
+	// Update phase: if videos exist, next step is Gemini processing; otherwise go straight to analyzing.
+	nextPhase := "analyzing"
+	if len(videoFileNames) > 0 {
+		nextPhase = "gemini_processing"
+	}
+	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+		ID: event.JobID, Status: "processing", Phase: nextPhase,
+		TotalFiles: totalSupported, UploadedFiles: uploadedCount,
+	})
 
 	log.Info().Int("videoFileNames", len(videoFileNames)).Str("sessionId", event.SessionID).Msg("Triage prepare complete")
 
@@ -224,6 +257,11 @@ func handleTriageCheckGemini(ctx context.Context, event TriageEvent) (*TriageChe
 	if err != nil {
 		return nil, fmt.Errorf("create Gemini client: %w", err)
 	}
+
+	// Keep phase as gemini_processing while polling.
+	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+		ID: event.JobID, Status: "processing", Phase: "gemini_processing",
+	})
 
 	allActive := true
 	for _, fileName := range event.VideoFileNames {
@@ -328,6 +366,12 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	storeCompressed := func(ctx context.Context, sessionID, originalKey, compressedPath string) (string, error) {
 		return uploadCompressedVideo(ctx, sessionID, originalKey, compressedPath)
 	}
+
+	// Update phase: sending query to Gemini and waiting for AI response.
+	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+		ID: event.JobID, Status: "processing", Phase: "analyzing",
+		TotalFiles: len(allMediaFiles),
+	})
 
 	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Msg("Calling AskMediaTriage")
 	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper)

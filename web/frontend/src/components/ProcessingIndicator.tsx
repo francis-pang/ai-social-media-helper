@@ -152,7 +152,7 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
         </span>
         {props.status && (
           <span
-            class={`status-badge status-badge--${props.status === "processing" ? "processing" : "pending"}`}
+            class={`status-badge status-badge--${props.status === "pending" ? "pending" : "processing"}`}
           >
             {props.status}
           </span>

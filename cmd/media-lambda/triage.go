@@ -186,6 +186,15 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 		"keep":    keepItems,
 		"discard": discardItems,
 	}
+	if job.Phase != "" {
+		resp["phase"] = job.Phase
+	}
+	if job.TotalFiles > 0 {
+		resp["totalFiles"] = job.TotalFiles
+	}
+	if job.UploadedFiles > 0 {
+		resp["uploadedFiles"] = job.UploadedFiles
+	}
 	if job.Error != "" {
 		resp["error"] = job.Error
 	}

@@ -33,6 +33,12 @@ export interface TriageItem {
 export interface TriageResults {
   id: string;
   status: "pending" | "processing" | "complete" | "error";
+  /** Current sub-phase: uploading | gemini_processing | analyzing */
+  phase?: "uploading" | "gemini_processing" | "analyzing";
+  /** Total number of supported media files being processed. */
+  totalFiles?: number;
+  /** Number of files uploaded to Gemini so far (during uploading phase). */
+  uploadedFiles?: number;
   keep: TriageItem[];
   discard: TriageItem[];
   error?: string;

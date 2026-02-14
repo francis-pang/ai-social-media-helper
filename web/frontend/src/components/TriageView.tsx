@@ -349,15 +349,44 @@ export function TriageView() {
 
   // Show processing state (DDR-056 — ProcessingIndicator)
   if (!results.value || results.value.status === "pending" || results.value.status === "processing") {
+    const phase = results.value?.phase;
+
+    // Phase-specific title, description, and status label
+    let title = "Analyzing Media with AI";
+    let description = "Evaluating each media file for quality, duplicates, and content issues";
+    let statusLabel = results.value?.status ?? "pending";
+
+    if (phase === "uploading") {
+      title = "Uploading Media to Gemini";
+      description = "Preparing and uploading each media file to the Gemini API for analysis";
+      statusLabel = "uploading";
+    } else if (phase === "gemini_processing") {
+      title = "Processing Videos";
+      description = "Gemini is processing uploaded video files — this may take a moment";
+      statusLabel = "processing videos";
+    } else if (phase === "analyzing") {
+      title = "Analyzing Media with AI";
+      description = "Sending query to Gemini and waiting for the AI to evaluate your media";
+      statusLabel = "analyzing";
+    }
+
+    // Upload progress (only during uploading phase)
+    const showUploadProgress =
+      phase === "uploading" &&
+      results.value?.totalFiles != null &&
+      results.value.totalFiles > 0;
+
     return (
       <ProcessingIndicator
-        title="Analyzing Media with AI"
-        description="Evaluating each media file for quality, duplicates, and content issues"
-        status={results.value?.status ?? "pending"}
+        title={title}
+        description={description}
+        status={statusLabel}
         jobId={triageJobId.value ?? undefined}
         sessionId={uploadSessionId.value ?? undefined}
         pollIntervalMs={2000}
         fileCount={selectedPaths.value.length}
+        completedCount={showUploadProgress ? (results.value?.uploadedFiles ?? 0) : undefined}
+        totalCount={showUploadProgress ? results.value?.totalFiles : undefined}
         onCancel={startOver}
       />
     );
