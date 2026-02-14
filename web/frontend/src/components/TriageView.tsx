@@ -354,7 +354,7 @@ export function TriageView() {
     // Phase-specific title, description, and status label
     let title = "Analyzing Media with AI";
     let description = "Evaluating each media file for quality, duplicates, and content issues";
-    let statusLabel = results.value?.status ?? "pending";
+    let statusLabel: string = results.value?.status ?? "pending";
 
     if (phase === "uploading") {
       title = "Uploading Media to Gemini";
