@@ -1,11 +1,12 @@
 /**
- * Shared processing / waiting screen component (DDR-056).
+ * Shared processing / waiting screen component (DDR-056, DDR-058).
  *
  * Provides a consistent UX across all long-running operations:
- * - Animated spinner
+ * - Inline spinner next to title (DDR-058: smaller, left-aligned)
  * - Elapsed time stopwatch (M:SS)
- * - Status badge (pending / processing)
+ * - Status badge pill (DDR-058)
  * - Optional progress bar
+ * - Optional per-file status list via `items` prop (DDR-058)
  * - Collapsible technical details panel (job ID, session ID, etc.)
  * - Cancel button
  * - Slot for custom child content
@@ -17,6 +18,12 @@ import type { ComponentChildren } from "preact";
 // ProcessingIndicator
 // ---------------------------------------------------------------------------
 
+/** Per-file item for the processing file list (DDR-058). */
+export interface ProcessingItem {
+  name: string;
+  status: string;
+}
+
 interface ProcessingIndicatorProps {
   title: string;
   description: string;
@@ -27,8 +34,29 @@ interface ProcessingIndicatorProps {
   fileCount?: number;
   completedCount?: number;
   totalCount?: number;
+  /** Per-file processing status (DDR-058). */
+  items?: ProcessingItem[];
   children?: ComponentChildren;
   onCancel?: () => void;
+}
+
+/** Map a processing item status string to a status-badge CSS modifier. */
+function itemBadgeClass(status: string): string {
+  switch (status) {
+    case "done":
+    case "complete":
+    case "completed":
+      return "status-badge status-badge--done";
+    case "error":
+    case "failed":
+      return "status-badge status-badge--error";
+    case "processing":
+    case "enhancing":
+    case "analyzing":
+      return "status-badge status-badge--processing";
+    default:
+      return "status-badge status-badge--pending";
+  }
 }
 
 export function ProcessingIndicator(props: ProcessingIndicatorProps) {
@@ -56,30 +84,39 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
     : 0;
 
   return (
-    <div class="card" style={{ textAlign: "center", padding: "3rem" }}>
-      {/* Spinner */}
-      <div
-        style={{
-          width: "3rem",
-          height: "3rem",
-          border: "3px solid var(--color-border)",
-          borderTop: "3px solid var(--color-primary)",
-          borderRadius: "50%",
-          animation: "spin 1s linear infinite",
-          margin: "0 auto 1.5rem",
-        }}
-      />
+    <div class="card" style={{ padding: "2.5rem" }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      {/* Title */}
+      {/* Header: inline spinner + title (DDR-058) */}
       <div
         style={{
-          fontSize: "1.5rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "0.75rem",
           marginBottom: "0.5rem",
-          color: "var(--color-text)",
         }}
       >
-        {props.title}
+        <div
+          style={{
+            width: "1.5rem",
+            height: "1.5rem",
+            border: "2.5px solid var(--color-border)",
+            borderTop: "2.5px solid var(--color-primary)",
+            borderRadius: "50%",
+            animation: "spin 1s linear infinite",
+            flexShrink: 0,
+          }}
+        />
+        <div
+          style={{
+            fontSize: "1.5rem",
+            color: "var(--color-text)",
+            fontWeight: 600,
+          }}
+        >
+          {props.title}
+        </div>
       </div>
 
       {/* Description */}
@@ -88,12 +125,13 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
           color: "var(--color-text-secondary)",
           maxWidth: "32rem",
           margin: "0 auto 1rem",
+          textAlign: "center",
         }}
       >
         {props.description}
       </p>
 
-      {/* Elapsed time + status badge */}
+      {/* Elapsed time + status badge (DDR-058: pill badge) */}
       <div
         style={{
           display: "flex",
@@ -114,34 +152,8 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
         </span>
         {props.status && (
           <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.375rem",
-              fontSize: "0.75rem",
-              padding: "0.125rem 0.5rem",
-              borderRadius: "var(--radius)",
-              background:
-                props.status === "processing"
-                  ? "rgba(108, 140, 255, 0.1)"
-                  : "rgba(139, 143, 168, 0.1)",
-              color:
-                props.status === "processing"
-                  ? "var(--color-primary)"
-                  : "var(--color-text-secondary)",
-            }}
+            class={`status-badge status-badge--${props.status === "processing" ? "processing" : "pending"}`}
           >
-            <span
-              style={{
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
-                background:
-                  props.status === "processing"
-                    ? "var(--color-primary)"
-                    : "var(--color-text-secondary)",
-              }}
-            />
             {props.status}
           </span>
         )}
@@ -186,11 +198,55 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
         </div>
       )}
 
-      {/* Custom child content (e.g. per-item status grid) */}
+      {/* Per-file status list (DDR-058) */}
+      {props.items && props.items.length > 0 && (
+        <div
+          style={{
+            maxWidth: "32rem",
+            margin: "0 auto 1rem",
+          }}
+        >
+          <div class="file-list" style={{ maxHeight: "320px" }}>
+            {props.items.map((item) => (
+              <div class="file-row" key={item.name}>
+                <span
+                  style={{
+                    fontSize: "1rem",
+                    flexShrink: 0,
+                    width: "1.25rem",
+                    textAlign: "center",
+                    opacity: 0.6,
+                  }}
+                >
+                  {"\u{1F4C4}"}
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    fontSize: "0.875rem",
+                    fontFamily: "var(--font-mono)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={item.name}
+                >
+                  {item.name}
+                </span>
+                <span class={itemBadgeClass(item.status)}>
+                  {item.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Custom child content (e.g. per-item status grid from EnhancementView) */}
       {props.children}
 
       {/* Technical details (collapsed by default) */}
-      <div style={{ marginTop: "1rem" }}>
+      <div style={{ marginTop: "1rem", textAlign: "center" }}>
         <button
           class="outline"
           onClick={() => setShowDetails(!showDetails)}
@@ -228,13 +284,15 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
 
       {/* Cancel button */}
       {props.onCancel && (
-        <button
-          class="outline"
-          onClick={props.onCancel}
-          style={{ marginTop: "1rem" }}
-        >
-          Cancel
-        </button>
+        <div style={{ textAlign: "center" }}>
+          <button
+            class="outline"
+            onClick={props.onCancel}
+            style={{ marginTop: "1rem" }}
+          >
+            Cancel
+          </button>
+        </div>
       )}
     </div>
   );

@@ -441,6 +441,25 @@ function formatSize(bytes: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Badge helpers (DDR-058)
+// ---------------------------------------------------------------------------
+
+/** Map file status to status-badge CSS modifier. */
+function badgeClass(status: MediaFile["status"]): string {
+  return `status-badge status-badge--${status}`;
+}
+
+/** Map file status to human-readable badge label. */
+function badgeLabel(status: MediaFile["status"], progress: number): string {
+  switch (status) {
+    case "uploading": return `Uploading ${progress}%`;
+    case "done":      return "Uploaded";
+    case "error":     return "Failed";
+    default:          return "Waiting";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -472,74 +491,60 @@ export function MediaUploader() {
         folder, or drag and drop.
       </p>
 
-      {/* Picker buttons (File System Access API — DDR-029) */}
-      <div
-        style={{
-          display: "flex",
-          gap: "0.75rem",
-          marginBottom: "1rem",
-        }}
-      >
-        <button class="primary" onClick={chooseFiles}>
-          Choose Files
-        </button>
-        <button class="outline" onClick={chooseFolder}>
-          Choose Folder
-        </button>
-      </div>
+      {/* Picker buttons (File System Access API — DDR-029) — shown when no files yet */}
+      {files.value.length === 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: "0.75rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <button class="primary" onClick={chooseFiles}>
+            Choose Files
+          </button>
+          <button class="outline" onClick={chooseFolder}>
+            Choose Folder
+          </button>
+        </div>
+      )}
 
-      {/* Drop zone */}
+      {/* Drop zone (DDR-058: compact secondary when files exist) */}
       <div
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         style={{
           border: "2px dashed var(--color-border)",
           borderRadius: "var(--radius)",
-          padding: "1.5rem",
+          padding: files.value.length > 0 ? "0.75rem" : "1.5rem",
           textAlign: "center",
           marginBottom: "1.5rem",
-          transition: "border-color 0.2s",
+          transition: "border-color 0.2s, padding 0.2s",
         }}
       >
         <div
           style={{
-            fontSize: "1rem",
-            marginBottom: "0.375rem",
+            fontSize: files.value.length > 0 ? "0.875rem" : "1rem",
+            marginBottom: files.value.length > 0 ? "0" : "0.375rem",
             color: "var(--color-text-secondary)",
           }}
         >
-          or drop files here
+          {files.value.length > 0 ? "Drop more files here" : "or drop files here"}
         </div>
-        <div
-          style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}
-        >
-          JPEG, PNG, GIF, WebP, HEIC, MP4, MOV, AVI, WebM, MKV
-        </div>
+        {files.value.length === 0 && (
+          <div
+            style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}
+          >
+            JPEG, PNG, GIF, WebP, HEIC, MP4, MOV, AVI, WebM, MKV
+          </div>
+        )}
       </div>
 
-      {/* File list with thumbnails */}
+      {/* File list (DDR-058: card-based rows with thumbnails) */}
       {files.value.length > 0 && (
-        <div
-          style={{
-            background: "var(--color-bg)",
-            borderRadius: "var(--radius)",
-            padding: "0.5rem",
-            maxHeight: "480px",
-            overflowY: "auto",
-            marginBottom: "1rem",
-          }}
-        >
+        <div class="file-list">
           {files.value.map((f) => (
-            <div
-              key={f.name}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                padding: "0.375rem 0.5rem",
-                borderBottom: "1px solid var(--color-border)",
-              }}
-            >
+            <div class="file-row" key={f.name}>
               {/* Thumbnail */}
               <div
                 style={{
@@ -597,7 +602,7 @@ export function MediaUploader() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "0.125rem 0.375rem",
-                  borderRadius: "4px",
+                  borderRadius: "999px",
                   background:
                     f.mediaType === "video"
                       ? "rgba(108, 140, 255, 0.15)"
@@ -625,44 +630,31 @@ export function MediaUploader() {
                 {formatSize(f.size)}
               </span>
 
-              {/* Progress / Status */}
+              {/* Status badge (DDR-058) */}
               <span
-                style={{
-                  fontSize: "0.75rem",
-                  color:
-                    f.status === "error"
-                      ? "var(--color-danger)"
-                      : "var(--color-text-secondary)",
-                  flexShrink: 0,
-                  minWidth: "3.5rem",
-                  textAlign: "right",
-                  position: "relative",
-                  cursor: f.status === "error" ? "help" : "default",
-                }}
+                class={badgeClass(f.status)}
                 title={f.status === "error" ? (f.error || "Upload failed") : undefined}
               >
-                {f.status === "uploading"
-                  ? `${f.progress}%`
-                  : f.status === "done"
-                    ? "Uploaded"
-                    : f.status === "error"
-                      ? (<>Failed <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>ⓘ</span></>)
-                      : "Pending"}
+                {badgeLabel(f.status, f.progress)}
               </span>
 
-              {/* Remove button */}
+              {/* Remove button (DDR-058: compact X) */}
               <button
-                class="outline"
+                class="btn-remove"
                 onClick={() => removeFile(f.name)}
                 disabled={f.status === "uploading"}
-                style={{
-                  padding: "0.125rem 0.5rem",
-                  fontSize: "0.75rem",
-                  flexShrink: 0,
-                }}
+                title="Remove file"
               >
-                Remove
+                ✕
               </button>
+
+              {/* Per-file progress bar (DDR-058) */}
+              {f.status === "uploading" && (
+                <div
+                  class="file-progress-bar"
+                  style={{ width: `${f.progress}%` }}
+                />
+              )}
             </div>
           ))}
         </div>
@@ -779,25 +771,34 @@ export function MediaUploader() {
         </p>
       </div>
 
-      {/* Actions */}
+      {/* Actions (DDR-058: add-more at left, primary actions at right) */}
       {files.value.length > 0 && (
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            flexWrap: "wrap",
+            gap: "0.75rem",
           }}
         >
-          <span
-            style={{
-              fontSize: "0.875rem",
-              color: "var(--color-text-secondary)",
-            }}
-          >
-            {doneCount} of {totalFiles} file(s) uploaded
-            {anyUploading && " — uploading..."}
-          </span>
-          <div style={{ display: "flex", gap: "0.75rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button class="btn-add-more" onClick={chooseFiles}>
+              + Choose Files
+            </button>
+            <button class="btn-add-more" onClick={chooseFolder}>
+              + Choose Folder
+            </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <span
+              style={{
+                fontSize: "0.875rem",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              {doneCount}/{totalFiles} uploaded
+            </span>
             <button class="outline" onClick={clearAll} disabled={anyUploading}>
               Clear all
             </button>
