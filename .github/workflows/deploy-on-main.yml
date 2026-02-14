@@ -328,3 +328,160 @@ jobs:
             echo "| **Backend pipeline** | $BE |"
             echo "| **Frontend pipeline** | $FE |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-deployment:
+    name: Verify Deployment
+    runs-on: ubuntu-latest
+    needs: [detect-changes, manage-pipelines]
+    if: needs.detect-changes.outputs.scope != 'none'
+    timeout-minutes: 35
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for pipeline completion
+        id: wait
+        env:
+          BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend }}
+          FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend }}
+        run: |
+          echo "=== Deployment Verification ==="
+          echo "Backend to verify: $BACKEND_CHANGED | Frontend to verify: $FRONTEND_CHANGED"
+          echo ""
+
+          MAX_POLLS=60       # 60 * 30s = 30 minutes
+          POLL_INTERVAL=30   # seconds between polls
+
+          # Helper: wait for a pipeline execution to reach a terminal state.
+          # Returns 0 on Succeeded, 1 on Failed/Stopped/timeout.
+          wait_for_pipeline() {
+            local pipeline_name=$1
+
+            echo "::group::Waiting for $pipeline_name"
+
+            # Find the latest execution
+            local exec_id exec_status
+            exec_id=$(aws codepipeline list-pipeline-executions \
+              --pipeline-name "$pipeline_name" \
+              --max-results 1 \
+              --query 'pipelineExecutionSummaries[0].pipelineExecutionId' \
+              --output text 2>/dev/null)
+            exec_status=$(aws codepipeline list-pipeline-executions \
+              --pipeline-name "$pipeline_name" \
+              --max-results 1 \
+              --query 'pipelineExecutionSummaries[0].status' \
+              --output text 2>/dev/null)
+
+            echo "Tracking execution: $exec_id (initial status: $exec_status)"
+
+            if [ -z "$exec_id" ] || [ "$exec_id" = "None" ]; then
+              echo "::endgroup::"
+              echo "::error::$pipeline_name: no execution found to verify"
+              return 1
+            fi
+
+            # Check if already terminal
+            case "$exec_status" in
+              Succeeded)
+                echo "::endgroup::"
+                echo "::notice::$pipeline_name: already Succeeded ($exec_id)"
+                return 0 ;;
+              Failed|Stopped)
+                echo "::endgroup::"
+                echo "::error::$pipeline_name: already $exec_status ($exec_id)"
+                return 1 ;;
+            esac
+
+            # Poll until terminal
+            for i in $(seq 1 $MAX_POLLS); do
+              sleep $POLL_INTERVAL
+              exec_status=$(aws codepipeline list-pipeline-executions \
+                --pipeline-name "$pipeline_name" \
+                --max-results 1 \
+                --query 'pipelineExecutionSummaries[0].status' \
+                --output text 2>/dev/null)
+              local elapsed=$((i * POLL_INTERVAL))
+              echo "Poll $i/$MAX_POLLS: status=$exec_status (${elapsed}s elapsed)"
+
+              case "$exec_status" in
+                Succeeded)
+                  echo "::endgroup::"
+                  echo "::notice::$pipeline_name: Succeeded ($exec_id) after ${elapsed}s"
+                  return 0 ;;
+                Failed|Stopped)
+                  echo "::endgroup::"
+                  echo "::error::$pipeline_name: $exec_status ($exec_id) after ${elapsed}s"
+                  return 1 ;;
+              esac
+            done
+
+            echo "::endgroup::"
+            echo "::error::$pipeline_name: timed out after $((MAX_POLLS * POLL_INTERVAL))s ($exec_id)"
+            return 1
+          }
+
+          OVERALL=0
+          BE_STATUS="skipped"
+          FE_STATUS="skipped"
+
+          if [ "$BACKEND_CHANGED" = "true" ]; then
+            if wait_for_pipeline "$BACKEND_PIPELINE"; then
+              BE_STATUS="Succeeded"
+            else
+              BE_STATUS="Failed"
+              OVERALL=1
+            fi
+          fi
+
+          if [ "$FRONTEND_CHANGED" = "true" ]; then
+            if wait_for_pipeline "$FRONTEND_PIPELINE"; then
+              FE_STATUS="Succeeded"
+            else
+              FE_STATUS="Failed"
+              OVERALL=1
+            fi
+          fi
+
+          echo "backend_status=$BE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "frontend_status=$FE_STATUS" >> "$GITHUB_OUTPUT"
+
+          exit $OVERALL
+
+      - name: Deployment Summary
+        if: always()
+        env:
+          BE_STATUS: ${{ steps.wait.outputs.backend_status }}
+          FE_STATUS: ${{ steps.wait.outputs.frontend_status }}
+        run: |
+          format_deploy() {
+            case "$1" in
+              Succeeded) echo "✅ Succeeded" ;;
+              Failed)    echo "❌ Failed" ;;
+              skipped)   echo "⏭️ Skipped (no changes)" ;;
+              *)         echo "❓ Unknown ($1)" ;;
+            esac
+          }
+
+          BE=$(format_deploy "$BE_STATUS")
+          FE=$(format_deploy "$FE_STATUS")
+
+          if [ "$BE_STATUS" = "Failed" ] || [ "$FE_STATUS" = "Failed" ]; then
+            OVERALL="❌ Deployment failed"
+          else
+            OVERALL="✅ Deployment succeeded"
+          fi
+
+          {
+            echo "## Deployment Verification"
+            echo ""
+            echo "**Status: $OVERALL**"
+            echo ""
+            echo "| Pipeline | Result |"
+            echo "|----------|--------|"
+            echo "| **Backend** | $BE |"
+            echo "| **Frontend** | $FE |"
+          } >> "$GITHUB_STEP_SUMMARY"
