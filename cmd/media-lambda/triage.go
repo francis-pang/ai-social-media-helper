@@ -269,6 +269,11 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
 
 	log.Info().Int("deleted", deleted).Int("totalRequested", len(req.DeleteKeys)).Msg("Triage confirm completed")
 
+	// DDR-059: Clean up all remaining S3 artifacts for this session (thumbnails,
+	// compressed videos, any stragglers). Best-effort in a goroutine — same
+	// pattern as session invalidation (DDR-037).
+	go cleanupS3Prefix(req.SessionID, "")
+
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"deleted":        deleted,
 		"errors":         errMsgs,

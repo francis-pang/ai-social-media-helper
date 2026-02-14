@@ -71,6 +71,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-056](./DDR-056-loading-ux-and-url-routing.md) | 2026-02-10 | Loading UX and URL Routing | Accepted |
 | [DDR-057](./DDR-057-desktop-1440p-ui-optimization.md) | 2026-02-11 | Desktop 1440p UI Optimization for 1-Meter Viewing Distance | Accepted |
 | [DDR-058](./DDR-058-cloudconvert-style-file-list-restyle.md) | 2026-02-14 | CloudConvert-Style File List and Processing UI Restyle | Accepted |
+| [DDR-059](./DDR-059-frugal-triage-s3-cleanup.md) | 2026-02-14 | Frugal Triage — Early S3 Cleanup via Thumbnails | Accepted |
 
 ---
 
@@ -85,4 +86,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-14 (DDR-058)
+**Last Updated**: 2026-02-14 (DDR-059)

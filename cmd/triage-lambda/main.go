@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
 
@@ -379,6 +381,43 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		return setTriageError(ctx, event, fmt.Sprintf("Triage failed: %v", err))
 	}
 
+	// --- DDR-059: Generate and store thumbnails for images ---
+	// Generate thumbnails from temp files still on disk, upload to S3 at
+	// {sessionId}/thumbnails/{baseName}.webp. This allows us to delete the
+	// originals immediately after, since the review UI only needs thumbnails.
+	thumbnailURLs := make(map[int]string) // media index -> thumbnail URL
+	for i, mf := range allMediaFiles {
+		ext := strings.ToLower(filepath.Ext(mf.Path))
+		if !filehandler.IsImage(ext) {
+			continue // Videos use placeholder SVG; no thumbnail needed
+		}
+
+		thumbData, _, err := filehandler.GenerateThumbnail(mf, 400)
+		if err != nil {
+			log.Warn().Err(err).Str("path", mf.Path).Msg("Failed to generate thumbnail — falling back to original key URL")
+			continue
+		}
+
+		baseName := strings.TrimSuffix(filepath.Base(mf.Path), filepath.Ext(mf.Path))
+		thumbKey := fmt.Sprintf("%s/thumbnails/%s.webp", event.SessionID, baseName)
+		contentType := "image/webp"
+
+		_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      &mediaBucket,
+			Key:         &thumbKey,
+			Body:        bytes.NewReader(thumbData),
+			ContentType: &contentType,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("thumbKey", thumbKey).Msg("Failed to upload thumbnail to S3 — falling back to original key URL")
+			continue
+		}
+
+		thumbnailURLs[i] = fmt.Sprintf("/api/media/thumbnail?key=%s", thumbKey)
+		log.Debug().Str("thumbKey", thumbKey).Int("size", len(thumbData)).Msg("Thumbnail uploaded to S3")
+	}
+	log.Info().Int("thumbnailsUploaded", len(thumbnailURLs)).Int("totalImages", len(allMediaFiles)).Msg("Thumbnail generation complete")
+
 	// Map results to store items.
 	var keep, discard []store.TriageItem
 	seen := make(map[int]bool) // track which media indices got a verdict
@@ -389,13 +428,20 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		}
 		seen[idx] = true
 		key := s3Keys[idx]
+
+		// Use pre-generated thumbnail URL for images, original key URL for videos (DDR-059).
+		thumbURL := fmt.Sprintf("/api/media/thumbnail?key=%s", key)
+		if url, ok := thumbnailURLs[idx]; ok {
+			thumbURL = url
+		}
+
 		item := store.TriageItem{
 			Media:        tr.Media,
 			Filename:     tr.Filename,
 			Key:          key,
 			Saveable:     tr.Saveable,
 			Reason:       tr.Reason,
-			ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?key=%s", key),
+			ThumbnailURL: thumbURL,
 		}
 		if tr.Saveable {
 			keep = append(keep, item)
@@ -413,13 +459,19 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 				Int("media", i+1).
 				Str("filename", filepath.Base(mf.Path)).
 				Msg("Media item missing from AI triage results — defaulting to keep")
+
+			thumbURL := fmt.Sprintf("/api/media/thumbnail?key=%s", key)
+			if url, ok := thumbnailURLs[i]; ok {
+				thumbURL = url
+			}
+
 			keep = append(keep, store.TriageItem{
 				Media:        i + 1,
 				Filename:     filepath.Base(mf.Path),
 				Key:          key,
 				Saveable:     true,
 				Reason:       "Not evaluated by AI — kept by default",
-				ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?key=%s", key),
+				ThumbnailURL: thumbURL,
 			})
 		}
 	}
@@ -429,6 +481,11 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	})
 
 	log.Info().Int("keep", len(keep)).Int("discard", len(discard)).Dur("duration", time.Since(jobStart)).Msg("Triage complete")
+
+	// --- DDR-059: Delete original files from S3 ---
+	// Now that thumbnails are stored and results are in DynamoDB, delete the
+	// original files to free S3 storage. Exclude thumbnails/ and compressed/ prefixes.
+	deleteOriginals(ctx, event.SessionID, s3Keys)
 
 	metrics.New("AiSocialMedia").
 		Dimension("JobType", "triage").
@@ -493,6 +550,39 @@ func uploadCompressedVideo(ctx context.Context, sessionID, originalKey, compress
 		Msg("Compressed video uploaded to S3")
 
 	return compressedKey, nil
+}
+
+// deleteOriginals deletes the original media files from S3 after thumbnails
+// have been stored. Best-effort — errors are logged but do not fail the job.
+// The 1-day S3 lifecycle policy acts as a safety net (DDR-059).
+func deleteOriginals(ctx context.Context, sessionID string, originalKeys []string) {
+	deleted := 0
+	for _, key := range originalKeys {
+		// Skip keys under thumbnails/ or compressed/ — those are generated artifacts.
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) == 2 {
+			suffix := parts[1]
+			if strings.HasPrefix(suffix, "thumbnails/") || strings.HasPrefix(suffix, "compressed/") {
+				continue
+			}
+		}
+
+		_, err := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(mediaBucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("Failed to delete original file from S3")
+			continue
+		}
+		deleted++
+	}
+
+	log.Info().
+		Int("deleted", deleted).
+		Int("total", len(originalKeys)).
+		Str("sessionId", sessionID).
+		Msg("Original files deleted from S3 (DDR-059)")
 }
 
 func downloadToFile(ctx context.Context, key, localPath string) error {
