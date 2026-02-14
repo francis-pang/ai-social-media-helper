@@ -633,6 +633,9 @@ export function MediaUploader() {
               {/* Status badge (DDR-058) */}
               <span
                 class={badgeClass(f.status)}
+                style={f.status === "uploading" ? {
+                  background: `linear-gradient(to right, rgba(108, 140, 255, 0.3) ${f.progress}%, rgba(108, 140, 255, 0.1) ${f.progress}%)`,
+                } : undefined}
                 title={f.status === "error" ? (f.error || "Upload failed") : undefined}
               >
                 {badgeLabel(f.status, f.progress)}
