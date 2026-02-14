@@ -251,43 +251,106 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	var s3Keys []string
 	pathToKeyMap := make(map[string]string) // Map local path -> S3 key
 
+	// Process files in two passes to conserve /tmp disk space:
+	// Pass 1: Videos — download, extract metadata, generate presigned URL, then
+	//         delete the local file immediately (Gemini uses the presigned URL).
+	// Pass 2: Images — download and keep on disk (needed for thumbnail generation
+	//         by AskMediaTriage and the post-triage thumbnail upload).
+	// This prevents /tmp exhaustion when sessions contain large video files.
+
+	// Collect supported keys first so we can process them in order.
+	type s3Object struct {
+		key      string
+		filename string
+		ext      string
+		isVideo  bool
+	}
+	var supported []s3Object
 	for _, obj := range listResult.Contents {
 		key := *obj.Key
 		filename := filepath.Base(key)
 		ext := strings.ToLower(filepath.Ext(filename))
-
 		if !filehandler.IsSupported(ext) {
 			continue
 		}
+		supported = append(supported, s3Object{key: key, filename: filename, ext: ext, isVideo: filehandler.IsVideo(ext)})
+	}
 
-		localPath := filepath.Join(tmpDir, filename)
-		if err := downloadToFile(ctx, key, localPath); err != nil {
-			log.Warn().Err(err).Str("key", key).Msg("Failed to download file")
+	log.Info().
+		Int("totalS3Objects", len(listResult.Contents)).
+		Int("supportedFiles", len(supported)).
+		Str("sessionId", event.SessionID).
+		Msg("S3 listing complete — starting two-pass download")
+
+	// Pass 1: Videos — download, load metadata, get presigned URL, delete local file.
+	for _, obj := range supported {
+		if !obj.isVideo {
+			continue
+		}
+
+		localPath := filepath.Join(tmpDir, obj.filename)
+		if err := downloadToFile(ctx, obj.key, localPath); err != nil {
+			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to download video file")
 			continue
 		}
 
 		mf, err := filehandler.LoadMediaFile(localPath)
 		if err != nil {
-			log.Warn().Err(err).Str("key", key).Msg("Failed to load media file")
+			os.Remove(localPath)
+			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to load video file")
 			continue
 		}
 
-		// For videos, generate presigned URL so Gemini fetches directly from S3 (DDR-060).
-		if filehandler.IsVideo(ext) {
-			url, err := generatePresignedURL(ctx, key)
-			if err != nil {
-				log.Warn().Err(err).Str("key", key).Msg("Failed to generate presigned URL for video")
-				// Continue without presigned URL — AskMediaTriage will fall back to compress+upload
-			} else {
-				mf.PresignedURL = url
-				log.Debug().Str("key", key).Msg("Presigned URL generated for video (DDR-060)")
-			}
+		// Generate presigned URL so Gemini fetches directly from S3 (DDR-060).
+		url, err := generatePresignedURL(ctx, obj.key)
+		if err != nil {
+			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to generate presigned URL for video")
+			// Keep the file on disk as fallback — AskMediaTriage will compress+upload.
+		} else {
+			mf.PresignedURL = url
+			// Presigned URL obtained — delete local file to free /tmp space.
+			os.Remove(localPath)
+			log.Debug().Str("key", obj.key).Msg("Video: presigned URL generated, local file deleted to save /tmp space")
 		}
 
 		allMediaFiles = append(allMediaFiles, mf)
-		s3Keys = append(s3Keys, key)
-		pathToKeyMap[localPath] = key
+		s3Keys = append(s3Keys, obj.key)
+		pathToKeyMap[localPath] = obj.key
 	}
+
+	log.Info().
+		Int("videosProcessed", len(allMediaFiles)).
+		Str("sessionId", event.SessionID).
+		Msg("Pass 1 complete (videos) — starting pass 2 (images)")
+
+	// Pass 2: Images — download and keep on disk for thumbnail generation.
+	for _, obj := range supported {
+		if obj.isVideo {
+			continue
+		}
+
+		localPath := filepath.Join(tmpDir, obj.filename)
+		if err := downloadToFile(ctx, obj.key, localPath); err != nil {
+			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to download image file")
+			continue
+		}
+
+		mf, err := filehandler.LoadMediaFile(localPath)
+		if err != nil {
+			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to load image file")
+			continue
+		}
+
+		allMediaFiles = append(allMediaFiles, mf)
+		s3Keys = append(s3Keys, obj.key)
+		pathToKeyMap[localPath] = obj.key
+	}
+
+	log.Info().
+		Int("totalMediaFiles", len(allMediaFiles)).
+		Int("supportedFiles", len(supported)).
+		Str("sessionId", event.SessionID).
+		Msg("Pass 2 complete (images) — all files processed")
 
 	if len(allMediaFiles) == 0 {
 		return setTriageError(ctx, event, "No supported media files found in the uploaded session")
