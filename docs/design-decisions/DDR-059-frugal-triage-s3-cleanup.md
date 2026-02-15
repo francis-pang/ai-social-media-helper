@@ -27,8 +27,9 @@ Reduce S3 storage costs by generating and persisting thumbnails during triage-ru
 In `handleTriageRun` (triage-lambda), after `AskMediaTriage` returns successfully and results are written to DynamoDB:
 
 - Generate image thumbnails using `filehandler.GenerateThumbnail` from the temp files already on disk
-- Upload each thumbnail to S3 at `{sessionId}/thumbnails/{baseName}.webp`
-- Set `ThumbnailURL` for image results to `/api/media/thumbnail?key={sessionId}/thumbnails/{baseName}.webp` (the existing `handleThumbnail` in media-lambda already serves pre-generated thumbnails at this prefix — DDR-030)
+- Upload each thumbnail to S3 at `{sessionId}/thumbnails/{baseName}.jpg`
+- Set `ThumbnailURL` for image results to `/api/media/thumbnail?key={sessionId}/thumbnails/{baseName}.jpg` (the existing `handleThumbnail` in media-lambda already serves pre-generated thumbnails at this prefix — DDR-030)
+- Thumbnails use JPEG encoding (not WebP) because DDR-027 mandates `CGO_ENABLED=0` for static binary builds, and WebP encoding via `chai2010/webp` requires CGO
 - For video results, keep existing `ThumbnailURL` as-is — the handler returns a placeholder SVG based on file extension, without needing the original file in S3
 - Delete all original files from S3 under `{sessionId}/` (excluding `thumbnails/` and `compressed/` prefixes)
 - This is best-effort; the 1-day lifecycle remains as safety net

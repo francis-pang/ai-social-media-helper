@@ -401,8 +401,8 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		}
 
 		baseName := strings.TrimSuffix(filepath.Base(mf.Path), filepath.Ext(mf.Path))
-		thumbKey := fmt.Sprintf("%s/thumbnails/%s.webp", event.SessionID, baseName)
-		contentType := "image/webp"
+		thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", event.SessionID, baseName)
+		contentType := "image/jpeg"
 
 		_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      &mediaBucket,

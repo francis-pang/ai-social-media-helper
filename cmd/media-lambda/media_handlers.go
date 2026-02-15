@@ -38,7 +38,7 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 
 	// Check for pre-generated thumbnail (DDR-030): keys under /thumbnails/ are
 	// already optimized thumbnails — serve directly from S3 without regeneration.
-	// New thumbnails are WebP format, but old JPEG thumbnails may still exist.
+	// Thumbnails are JPEG format (DDR-027: CGO_ENABLED=0 precludes WebP encoding).
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) == 2 && strings.HasPrefix(parts[1], "thumbnails/") {
 		result, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
@@ -52,11 +52,13 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		}
 		defer result.Body.Close()
 
-		// Determine content type from file extension (backward compatibility)
+		// Determine content type from file extension
 		thumbExt := strings.ToLower(filepath.Ext(key))
-		contentType := "image/webp" // Default to WebP for new thumbnails
-		if thumbExt == ".jpg" || thumbExt == ".jpeg" {
-			contentType = "image/jpeg" // Legacy JPEG thumbnails
+		contentType := "image/jpeg" // Default to JPEG (DDR-027: no CGO for WebP)
+		if thumbExt == ".webp" {
+			contentType = "image/webp"
+		} else if thumbExt == ".png" {
+			contentType = "image/png"
 		}
 
 		w.Header().Set("Content-Type", contentType)
