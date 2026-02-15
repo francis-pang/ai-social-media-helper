@@ -415,6 +415,30 @@ jobs:
                 Failed|Stopped)
                   echo "::endgroup::"
                   echo "::error::$pipeline_name: $exec_status ($exec_id) after ${elapsed}s"
+                  # Auto-diagnose: dump failed stage details and CodeBuild logs
+                  echo "::group::Failure diagnosis for $pipeline_name"
+                  echo "=== Stage details ==="
+                  aws codepipeline list-action-executions \
+                    --pipeline-name "$pipeline_name" \
+                    --filter "pipelineExecutionId=$exec_id" \
+                    --query 'actionExecutionDetails[?status==`Failed`].{action:actionName,stage:stageName,summary:output.executionResult.externalExecutionSummary,buildId:output.executionResult.externalExecutionId}' \
+                    --output json 2>/dev/null || true
+                  # Fetch last 50 lines of CodeBuild logs for each failed action
+                  for build_id in $(aws codepipeline list-action-executions \
+                    --pipeline-name "$pipeline_name" \
+                    --filter "pipelineExecutionId=$exec_id" \
+                    --query 'actionExecutionDetails[?status==`Failed`].output.executionResult.externalExecutionId' \
+                    --output text 2>/dev/null); do
+                    project_name=$(echo "$build_id" | cut -d: -f1)
+                    stream_id=$(echo "$build_id" | cut -d: -f2)
+                    echo "=== CodeBuild logs: $build_id (last 50 events) ==="
+                    aws logs filter-log-events \
+                      --log-group-name "/aws/codebuild/$project_name" \
+                      --log-stream-names "$stream_id" \
+                      --query 'events[-50:].message' \
+                      --output text 2>/dev/null || echo "(unable to fetch logs)"
+                  done
+                  echo "::endgroup::"
                   return 1 ;;
               esac
             done
