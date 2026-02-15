@@ -8,8 +8,9 @@
 #   docker build --build-arg CMD_TARGET=thumbnail-lambda -f Dockerfile.heavy .
 #   docker build --build-arg CMD_TARGET=selection-lambda -f Dockerfile.heavy .
 #   docker build --build-arg CMD_TARGET=video-lambda -f Dockerfile.heavy .
+#   docker build --build-arg CMD_TARGET=media-process-lambda -f Dockerfile.heavy .
 #
-# Used by: Thumbnail Lambda, Selection Lambda, Video Processing Lambda
+# Used by: Thumbnail Lambda, Selection Lambda, Video Processing Lambda, MediaProcess Lambda
 # See also: Dockerfile.light (no ffmpeg)
 # See also: docs/DOCKER-IMAGES.md for layer sharing strategy
 
