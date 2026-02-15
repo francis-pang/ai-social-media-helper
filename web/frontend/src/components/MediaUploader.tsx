@@ -6,6 +6,10 @@ import {
   tripContext,
   uploadSessionId,
 } from "../app";
+import { getFilesFromDataTransfer } from "../utils/fileSystem";
+import { formatBytes } from "../utils/format";
+import { badgeClass, badgeLabel } from "../utils/statusBadge";
+import { generateThumbnail } from "./media-uploader/thumbnailGenerator";
 
 /** Supported media file extensions (lower-case, with leading dot). */
 const MEDIA_EXTENSIONS = new Set([
@@ -33,9 +37,6 @@ const MEDIA_ACCEPT_TYPES: FilePickerAcceptType[] = [
     },
   },
 ];
-
-/** Max thumbnail dimension in pixels for client-side preview. */
-const THUMB_MAX_PX = 160;
 
 interface MediaFile {
   name: string;
@@ -66,102 +67,6 @@ function isMediaFile(file: File): boolean {
 /** Determine whether a file is an image or video based on MIME type. */
 function getMediaType(file: File): "image" | "video" {
   return file.type.startsWith("video/") ? "video" : "image";
-}
-
-// ---------------------------------------------------------------------------
-// Client-side thumbnail generation
-// ---------------------------------------------------------------------------
-
-/** Generate a thumbnail data URL for an image file using canvas. */
-async function generateImageThumbnail(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(
-        THUMB_MAX_PX / img.width,
-        THUMB_MAX_PX / img.height,
-        1,
-      );
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Canvas not supported"));
-        return;
-      }
-      ctx.drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/jpeg", 0.7));
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Failed to load image"));
-    };
-    img.src = url;
-  });
-}
-
-/** Generate a thumbnail data URL for a video by extracting a frame. */
-async function generateVideoThumbnail(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.muted = true;
-    video.playsInline = true;
-
-    video.onloadeddata = () => {
-      video.currentTime = Math.min(1, video.duration / 2);
-    };
-    video.onseeked = () => {
-      const scale = Math.min(
-        THUMB_MAX_PX / video.videoWidth,
-        THUMB_MAX_PX / video.videoHeight,
-        1,
-      );
-      const w = Math.round(video.videoWidth * scale);
-      const h = Math.round(video.videoHeight * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Canvas not supported"));
-        return;
-      }
-      ctx.drawImage(video, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/jpeg", 0.7));
-    };
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Failed to load video"));
-    };
-    video.src = url;
-  });
-}
-
-/** Best-effort thumbnail generation — returns undefined on failure. */
-async function generateThumbnail(
-  file: File,
-): Promise<string | undefined> {
-  try {
-    if (file.type.startsWith("video/")) {
-      return await generateVideoThumbnail(file);
-    }
-    if (file.type.startsWith("image/")) {
-      return await generateImageThumbnail(file);
-    }
-  } catch {
-    // Thumbnail generation is best-effort (HEIC may fail on non-macOS, etc.)
-  }
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,70 +230,6 @@ function clearAll() {
 // Drag-and-drop (supplementary input method)
 // ---------------------------------------------------------------------------
 
-/** Read all entries from a FileSystemDirectoryReader (handles batching). */
-function readAllEntries(
-  reader: FileSystemDirectoryReader,
-): Promise<FileSystemEntry[]> {
-  return new Promise((resolve, reject) => {
-    const results: FileSystemEntry[] = [];
-    function readBatch() {
-      reader.readEntries((entries) => {
-        if (entries.length === 0) {
-          resolve(results);
-        } else {
-          results.push(...entries);
-          readBatch(); // readEntries may return results in batches
-        }
-      }, reject);
-    }
-    readBatch();
-  });
-}
-
-/** Convert a FileSystemFileEntry to a File. */
-function entryToFile(entry: FileSystemFileEntry): Promise<File> {
-  return new Promise((resolve, reject) => entry.file(resolve, reject));
-}
-
-/** Recursively collect all File objects from a FileSystemEntry tree. */
-async function collectFilesFromEntry(
-  entry: FileSystemEntry,
-): Promise<File[]> {
-  if (entry.isFile) {
-    try {
-      const file = await entryToFile(entry as FileSystemFileEntry);
-      return [file];
-    } catch {
-      return [];
-    }
-  }
-  if (entry.isDirectory) {
-    const reader = (entry as FileSystemDirectoryEntry).createReader();
-    const children = await readAllEntries(reader);
-    const nested = await Promise.all(children.map(collectFilesFromEntry));
-    return nested.flat();
-  }
-  return [];
-}
-
-/** Extract files from a DataTransfer, recursively walking dropped directories. */
-async function getFilesFromDataTransfer(
-  dataTransfer: DataTransfer,
-): Promise<File[]> {
-  const items = Array.from(dataTransfer.items);
-  const entries = items
-    .map((item) => item.webkitGetAsEntry?.())
-    .filter((e): e is FileSystemEntry => e != null);
-
-  // If webkitGetAsEntry is not supported, fall back to dataTransfer.files
-  if (entries.length === 0) {
-    return Array.from(dataTransfer.files);
-  }
-
-  const nested = await Promise.all(entries.map(collectFilesFromEntry));
-  return nested.flat();
-}
-
 async function handleDrop(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
@@ -426,37 +267,6 @@ function proceedToSelection() {
   error.value = null;
   selectedPaths.value = uploadedKeys;
   navigateToStep("selecting");
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-// ---------------------------------------------------------------------------
-// Badge helpers (DDR-058)
-// ---------------------------------------------------------------------------
-
-/** Map file status to status-badge CSS modifier. */
-function badgeClass(status: MediaFile["status"]): string {
-  return `status-badge status-badge--${status}`;
-}
-
-/** Map file status to human-readable badge label. */
-function badgeLabel(status: MediaFile["status"], progress: number): string {
-  switch (status) {
-    case "uploading": return `Uploading ${progress}%`;
-    case "done":      return "Uploaded";
-    case "error":     return "Failed";
-    default:          return "Waiting";
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +437,7 @@ export function MediaUploader() {
                   flexShrink: 0,
                 }}
               >
-                {formatSize(f.size)}
+                {formatBytes(f.size)}
               </span>
 
               {/* Status badge (DDR-058) */}

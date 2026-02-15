@@ -2,6 +2,9 @@ import { signal } from "@preact/signals";
 import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, getTriageResults, startTriage } from "../api/client";
 import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep } from "../app";
 import { syncUrlToStep } from "../router";
+import { getFilesFromDataTransfer } from "../utils/fileSystem";
+import { formatBytes, formatSpeed } from "../utils/format";
+import { badgeClass, badgeLabel } from "../utils/statusBadge";
 
 /** Media file MIME types accepted by the uploader. */
 const ACCEPT =
@@ -70,70 +73,6 @@ function handleFileSelect(e: Event) {
   if (!input.files || input.files.length === 0) return;
   addFiles(Array.from(input.files));
   input.value = ""; // Reset so same files can be re-selected
-}
-
-/** Read all entries from a FileSystemDirectoryReader (handles batching). */
-function readAllEntries(
-  reader: FileSystemDirectoryReader,
-): Promise<FileSystemEntry[]> {
-  return new Promise((resolve, reject) => {
-    const results: FileSystemEntry[] = [];
-    function readBatch() {
-      reader.readEntries((entries) => {
-        if (entries.length === 0) {
-          resolve(results);
-        } else {
-          results.push(...entries);
-          readBatch(); // readEntries may return results in batches
-        }
-      }, reject);
-    }
-    readBatch();
-  });
-}
-
-/** Convert a FileSystemFileEntry to a File. */
-function entryToFile(entry: FileSystemFileEntry): Promise<File> {
-  return new Promise((resolve, reject) => entry.file(resolve, reject));
-}
-
-/** Recursively collect all File objects from a FileSystemEntry tree. */
-async function collectFilesFromEntry(
-  entry: FileSystemEntry,
-): Promise<File[]> {
-  if (entry.isFile) {
-    try {
-      const file = await entryToFile(entry as FileSystemFileEntry);
-      return [file];
-    } catch {
-      return [];
-    }
-  }
-  if (entry.isDirectory) {
-    const reader = (entry as FileSystemDirectoryEntry).createReader();
-    const children = await readAllEntries(reader);
-    const nested = await Promise.all(children.map(collectFilesFromEntry));
-    return nested.flat();
-  }
-  return [];
-}
-
-/** Extract files from a DataTransfer, recursively walking dropped directories. */
-async function getFilesFromDataTransfer(
-  dataTransfer: DataTransfer,
-): Promise<File[]> {
-  const items = Array.from(dataTransfer.items);
-  const entries = items
-    .map((item) => item.webkitGetAsEntry?.())
-    .filter((e): e is FileSystemEntry => e != null);
-
-  // If webkitGetAsEntry is not supported, fall back to dataTransfer.files
-  if (entries.length === 0) {
-    return Array.from(dataTransfer.files);
-  }
-
-  const nested = await Promise.all(entries.map(collectFilesFromEntry));
-  return nested.flat();
 }
 
 async function handleDrop(e: DragEvent) {
@@ -315,33 +254,6 @@ async function proceedToTriage() {
   }
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
-  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
-}
-
-/** Map file status to status-badge CSS modifier. */
-function badgeClass(status: UploadedFile["status"]): string {
-  return `status-badge status-badge--${status}`;
-}
-
-/** Map file status to human-readable badge label. */
-function badgeLabel(status: UploadedFile["status"], progress: number): string {
-  switch (status) {
-    case "uploading": return `Uploading ${progress}%`;
-    case "done":      return "Uploaded";
-    case "error":     return "Failed";
-    default:          return "Waiting";
-  }
-}
-
 export function FileUploader() {
   const allDone = files.value.length > 0 && files.value.every(
     (f) => f.status === "done" || f.status === "error",
@@ -454,8 +366,8 @@ export function FileUploader() {
                 }}
               >
                 {f.status === "uploading"
-                  ? `${formatSize(f.loaded)} / ${formatSize(f.size)}`
-                  : formatSize(f.size)}
+                  ? `${formatBytes(f.loaded)} / ${formatBytes(f.size)}`
+                  : formatBytes(f.size)}
               </span>
 
               {/* Status badge (DDR-058) */}

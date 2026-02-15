@@ -1,50 +1,26 @@
-import { signal, computed } from "@preact/signals";
+import { computed } from "@preact/signals";
 import { navigateBack, navigateToStep } from "../app";
-import { thumbnailUrl } from "../api/client";
-import type { PostGroup, GroupableMediaItem } from "../types/api";
-
-// --- Constants ---
-
-/** Maximum items per Instagram carousel post. */
-const MAX_ITEMS_PER_GROUP = 20;
-
-// --- Exported State ---
-
-/** All post groups. Exported so downstream steps can consume them. */
-export const postGroups = signal<PostGroup[]>([]);
-
-/** All media items available for grouping (populated by EnhancementView on proceed). */
-export const groupableMedia = signal<GroupableMediaItem[]>([]);
-
-// --- Internal State ---
-
-/** Currently selected/expanded group. */
-const selectedGroupId = signal<string | null>(null);
-
-/** Drag state: which item is being dragged, and from where. */
-const dragItem = signal<{
-  key: string;
-  sourceGroupId: string | null; // null = ungrouped pool
-} | null>(null);
-
-/** Which drop target is currently highlighted. */
-const dragOverTarget = signal<string | null>(null);
-
-/** Counter for generating unique group IDs. */
-let groupIdCounter = 0;
-
-/**
- * Reset all post grouping state to initial values (DDR-037).
- * Called by the invalidation cascade when a previous step changes.
- */
-export function resetPostGrouperState() {
-  postGroups.value = [];
-  groupableMedia.value = [];
-  selectedGroupId.value = null;
-  dragItem.value = null;
-  dragOverTarget.value = null;
-  groupIdCounter = 0;
-}
+import type { GroupableMediaItem } from "../types/api";
+import { ActionBar } from "./shared/ActionBar";
+import { MediaThumbnail } from "./post-grouper/MediaThumbnail";
+import { GroupIcon, NewGroupButton } from "./post-grouper/GroupIcon";
+import {
+  postGroups,
+  groupableMedia,
+  selectedGroupId,
+  dragItem,
+  dragOverTarget,
+} from "./post-grouper/state";
+export { postGroups, groupableMedia, resetPostGrouperState } from "./post-grouper/state";
+import {
+  createGroup,
+  deleteGroup,
+  updateGroupLabel,
+  addToGroup,
+  removeFromGroup,
+  removeFromAllGroups,
+  MAX_ITEMS_PER_GROUP,
+} from "./post-grouper/useGroupOperations";
 
 // --- Computed ---
 
@@ -77,61 +53,6 @@ const selectedGroupMedia = computed(() => {
     .map((key) => groupableMedia.value.find((m) => m.key === key))
     .filter((m): m is GroupableMediaItem => m !== undefined);
 });
-
-// --- Group Operations ---
-
-function createGroup(initialKey?: string): string {
-  groupIdCounter++;
-  const id = `group-${groupIdCounter}-${Date.now()}`;
-  const keys = initialKey ? [initialKey] : [];
-  postGroups.value = [
-    ...postGroups.value,
-    { id, label: "", keys },
-  ];
-  selectedGroupId.value = id;
-  return id;
-}
-
-function deleteGroup(groupId: string) {
-  postGroups.value = postGroups.value.filter((g) => g.id !== groupId);
-  if (selectedGroupId.value === groupId) {
-    selectedGroupId.value = postGroups.value.length > 0
-      ? postGroups.value[0]!.id
-      : null;
-  }
-}
-
-function updateGroupLabel(groupId: string, label: string) {
-  postGroups.value = postGroups.value.map((g) =>
-    g.id === groupId ? { ...g, label } : g,
-  );
-}
-
-function addToGroup(groupId: string, key: string) {
-  const group = postGroups.value.find((g) => g.id === groupId);
-  if (!group) return;
-  if (group.keys.length >= MAX_ITEMS_PER_GROUP) return;
-  if (group.keys.includes(key)) return;
-
-  // Remove from any other group first
-  removeFromAllGroups(key);
-
-  postGroups.value = postGroups.value.map((g) =>
-    g.id === groupId ? { ...g, keys: [...g.keys, key] } : g,
-  );
-}
-
-function removeFromGroup(groupId: string, key: string) {
-  postGroups.value = postGroups.value.map((g) =>
-    g.id === groupId ? { ...g, keys: g.keys.filter((k) => k !== key) } : g,
-  );
-}
-
-function removeFromAllGroups(key: string) {
-  postGroups.value = postGroups.value.map((g) =>
-    g.keys.includes(key) ? { ...g, keys: g.keys.filter((k) => k !== key) } : g,
-  );
-}
 
 // --- Drag and Drop Handlers ---
 
@@ -209,350 +130,6 @@ function handleProceed() {
 
 function handleBack() {
   navigateBack();
-}
-
-// --- Sub-components ---
-
-/** A draggable media thumbnail. */
-function MediaThumbnail({
-  item,
-  isInGroup,
-  groupId,
-  showAssignHint,
-}: {
-  item: GroupableMediaItem;
-  isInGroup: boolean;
-  groupId: string | null;
-  showAssignHint?: boolean;
-}) {
-  const isDragging =
-    dragItem.value?.key === item.key;
-
-  return (
-    <div
-      draggable
-      onDragStart={() => handleDragStart(item.key, groupId)}
-      onDragEnd={handleDragEnd}
-      onClick={() => handleThumbnailClick(item.key, isInGroup)}
-      title={
-        isInGroup
-          ? `${item.filename} — click to remove from group`
-          : showAssignHint
-            ? `${item.filename} — click to add to selected group`
-            : item.filename
-      }
-      style={{
-        position: "relative",
-        borderRadius: "var(--radius)",
-        overflow: "hidden",
-        cursor: "grab",
-        opacity: isDragging ? 0.4 : 1,
-        transition: "opacity 0.15s, transform 0.15s",
-        border: "2px solid transparent",
-        background: "var(--color-bg)",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          aspectRatio: "1",
-          background: "var(--color-surface-hover)",
-        }}
-      >
-        <img
-          src={thumbnailUrl(item.thumbnailKey)}
-          alt={item.filename}
-          loading="lazy"
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            pointerEvents: "none",
-          }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
-        />
-      </div>
-
-      {/* Type badge */}
-      {item.type === "Video" && (
-        <span
-          style={{
-            position: "absolute",
-            top: "0.25rem",
-            left: "0.25rem",
-            fontSize: "0.75rem",
-            padding: "0.0625rem 0.25rem",
-            borderRadius: "3px",
-            background: "rgba(108, 140, 255, 0.85)",
-            color: "#fff",
-            fontWeight: 600,
-          }}
-        >
-          Video
-        </span>
-      )}
-
-      {/* Remove indicator when in group */}
-      {isInGroup && (
-        <div
-          style={{
-            position: "absolute",
-            top: "0.25rem",
-            right: "0.25rem",
-            width: "1rem",
-            height: "1rem",
-            borderRadius: "50%",
-            background: "rgba(255, 107, 107, 0.85)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: "0.75rem",
-            color: "#fff",
-            fontWeight: 700,
-            lineHeight: 1,
-          }}
-        >
-          ×
-        </div>
-      )}
-
-      {/* Filename */}
-      <div
-        style={{
-          padding: "0.25rem 0.375rem",
-          fontSize: "0.75rem",
-          fontFamily: "var(--font-mono)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        {item.filename}
-      </div>
-    </div>
-  );
-}
-
-/** A compact group icon in the group strip. */
-function GroupIcon({
-  group,
-  isSelected,
-  onSelect,
-  onDelete,
-}: {
-  group: PostGroup;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const isOver = dragOverTarget.value === group.id;
-  const isFull = group.keys.length >= MAX_ITEMS_PER_GROUP;
-  // Get first 4 items for the mosaic preview
-  const previewItems = group.keys
-    .slice(0, 4)
-    .map((key) => groupableMedia.value.find((m) => m.key === key))
-    .filter((m): m is GroupableMediaItem => m !== undefined);
-
-  return (
-    <div
-      onClick={onSelect}
-      onDragOver={handleDragOver}
-      onDragEnter={() => {
-        if (!isFull) dragOverTarget.value = group.id;
-      }}
-      onDragLeave={() => {
-        if (dragOverTarget.value === group.id) dragOverTarget.value = null;
-      }}
-      onDrop={(e) => handleDropOnGroup(e, group.id)}
-      style={{
-        minWidth: "8.5rem",
-        maxWidth: "10rem",
-        padding: "0.5rem",
-        background: isSelected
-          ? "rgba(108, 140, 255, 0.12)"
-          : "var(--color-bg)",
-        border: isOver
-          ? "2px dashed var(--color-primary)"
-          : isSelected
-            ? "2px solid var(--color-primary)"
-            : "2px solid var(--color-border)",
-        borderRadius: "var(--radius)",
-        cursor: "pointer",
-        transition: "border-color 0.15s, background 0.15s",
-        flexShrink: 0,
-        position: "relative",
-      }}
-    >
-      {/* Delete button */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
-        style={{
-          position: "absolute",
-          top: "0.25rem",
-          right: "0.25rem",
-          width: "1.125rem",
-          height: "1.125rem",
-          borderRadius: "50%",
-          background: "var(--color-surface-hover)",
-          border: "none",
-          color: "var(--color-text-secondary)",
-          fontSize: "0.75rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          cursor: "pointer",
-          lineHeight: 1,
-        }}
-        title="Delete group"
-      >
-        ×
-      </button>
-
-      {/* Mini mosaic preview */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "2px",
-          width: "3rem",
-          height: "3rem",
-          margin: "0 auto 0.375rem",
-          borderRadius: "4px",
-          overflow: "hidden",
-          background: "var(--color-surface-hover)",
-        }}
-      >
-        {[0, 1, 2, 3].map((i) => {
-          const item = previewItems[i];
-          return (
-            <div
-              key={i}
-              style={{
-                background: "var(--color-surface-hover)",
-                overflow: "hidden",
-              }}
-            >
-              {item && (
-                <img
-                  src={thumbnailUrl(item.thumbnailKey)}
-                  alt=""
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                    display: "block",
-                  }}
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
-                  }}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Group name (truncated) */}
-      <div
-        style={{
-          fontSize: "0.75rem",
-          fontWeight: 600,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          textAlign: "center",
-          marginBottom: "0.125rem",
-          color: group.label ? "var(--color-text)" : "var(--color-text-secondary)",
-        }}
-        title={group.label || "Untitled group"}
-      >
-        {group.label || "Untitled"}
-      </div>
-
-      {/* Item count */}
-      <div
-        style={{
-          fontSize: "0.75rem",
-          textAlign: "center",
-          color: isFull
-            ? "var(--color-danger)"
-            : "var(--color-text-secondary)",
-        }}
-      >
-        {group.keys.length}/{MAX_ITEMS_PER_GROUP}
-      </div>
-    </div>
-  );
-}
-
-/** The "+ New Group" drop target / button. */
-function NewGroupButton() {
-  const isOver = dragOverTarget.value === "__new__";
-
-  return (
-    <div
-      onClick={() => createGroup()}
-      onDragOver={handleDragOver}
-      onDragEnter={() => {
-        dragOverTarget.value = "__new__";
-      }}
-      onDragLeave={() => {
-        if (dragOverTarget.value === "__new__") dragOverTarget.value = null;
-      }}
-      onDrop={handleDropOnNewGroup}
-      style={{
-        minWidth: "8.5rem",
-        maxWidth: "10rem",
-        padding: "0.5rem",
-        background: isOver
-          ? "rgba(108, 140, 255, 0.08)"
-          : "var(--color-bg)",
-        border: isOver
-          ? "2px dashed var(--color-primary)"
-          : "2px dashed var(--color-border)",
-        borderRadius: "var(--radius)",
-        cursor: "pointer",
-        transition: "border-color 0.15s, background 0.15s",
-        flexShrink: 0,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: "6.5rem",
-      }}
-    >
-      <div
-        style={{
-          fontSize: "1.5rem",
-          color: isOver
-            ? "var(--color-primary)"
-            : "var(--color-text-secondary)",
-          lineHeight: 1,
-          marginBottom: "0.375rem",
-        }}
-      >
-        +
-      </div>
-      <div
-        style={{
-          fontSize: "0.75rem",
-          color: isOver
-            ? "var(--color-primary)"
-            : "var(--color-text-secondary)",
-          fontWeight: 500,
-        }}
-      >
-        New Group
-      </div>
-    </div>
-  );
 }
 
 // --- Main Component ---
@@ -710,8 +287,11 @@ export function PostGrouper() {
                 key={item.key}
                 item={item}
                 isInGroup={false}
-                groupId={null}
                 showAssignHint={hasSelectedGroup}
+                isDragging={dragItem.value?.key === item.key}
+                onDragStart={() => handleDragStart(item.key, null)}
+                onDragEnd={handleDragEnd}
+                onClick={() => handleThumbnailClick(item.key, false)}
               />
             ))}
           </div>
@@ -753,9 +333,25 @@ export function PostGrouper() {
                   selectedGroupId.value === group.id ? null : group.id;
               }}
               onDelete={() => deleteGroup(group.id)}
+              onDragOver={handleDragOver}
+              onDragEnter={() => {
+                if (group.keys.length < MAX_ITEMS_PER_GROUP) dragOverTarget.value = group.id;
+              }}
+              onDragLeave={() => {
+                if (dragOverTarget.value === group.id) dragOverTarget.value = null;
+              }}
+              onDrop={(e) => handleDropOnGroup(e, group.id)}
             />
           ))}
-          <NewGroupButton />
+          <NewGroupButton
+            onCreateGroup={() => createGroup()}
+            onDragOver={handleDragOver}
+            onDragEnter={() => { dragOverTarget.value = "__new__"; }}
+            onDragLeave={() => {
+              if (dragOverTarget.value === "__new__") dragOverTarget.value = null;
+            }}
+            onDrop={handleDropOnNewGroup}
+          />
         </div>
       </div>
 
@@ -846,7 +442,10 @@ export function PostGrouper() {
                   key={item.key}
                   item={item}
                   isInGroup={true}
-                  groupId={currentGroup.id}
+                  isDragging={dragItem.value?.key === item.key}
+                  onDragStart={() => handleDragStart(item.key, currentGroup.id)}
+                  onDragEnd={handleDragEnd}
+                  onClick={() => handleThumbnailClick(item.key, true)}
                 />
               ))}
             </div>
@@ -868,61 +467,39 @@ export function PostGrouper() {
       )}
 
       {/* Action bar */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: "1rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "1rem 1.5rem",
-          background: "var(--color-surface)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <span style={{ fontSize: "0.875rem" }}>
-          {nonEmptyGroups.length === 0 ? (
-            <span style={{ color: "var(--color-text-secondary)" }}>
-              Create a group and add media to proceed
-            </span>
-          ) : (
-            <>
-              <strong style={{ color: "var(--color-success)" }}>
-                {nonEmptyGroups.length} post
-                {nonEmptyGroups.length !== 1 ? "s" : ""}
-              </strong>
+      <ActionBar
+        left={
+          <span style={{ fontSize: "0.875rem" }}>
+            {nonEmptyGroups.length === 0 ? (
               <span style={{ color: "var(--color-text-secondary)" }}>
-                {" "}ready ({totalGrouped} items)
+                Create a group and add media to proceed
               </span>
-              {totalUngrouped > 0 && (
-                <span
-                  style={{
-                    color: "var(--color-text-secondary)",
-                    fontSize: "0.75rem",
-                    marginLeft: "0.5rem",
-                  }}
-                >
-                  ({totalUngrouped} ungrouped — will not be published)
+            ) : (
+              <>
+                <strong style={{ color: "var(--color-success)" }}>
+                  {nonEmptyGroups.length} post{nonEmptyGroups.length !== 1 ? "s" : ""}
+                </strong>
+                <span style={{ color: "var(--color-text-secondary)" }}>
+                  {" "}ready ({totalGrouped} items)
                 </span>
-              )}
-            </>
-          )}
-        </span>
-        <div style={{ display: "flex", gap: "0.75rem" }}>
-          <button class="outline" onClick={handleBack}>
-            Back to Enhancement
-          </button>
-          <button
-            class="primary"
-            onClick={handleProceed}
-            disabled={nonEmptyGroups.length === 0}
-          >
-            Continue ({nonEmptyGroups.length} post
-            {nonEmptyGroups.length !== 1 ? "s" : ""})
-          </button>
-        </div>
-      </div>
+                {totalUngrouped > 0 && (
+                  <span style={{ color: "var(--color-text-secondary)", fontSize: "0.75rem", marginLeft: "0.5rem" }}>
+                    ({totalUngrouped} ungrouped — will not be published)
+                  </span>
+                )}
+              </>
+            )}
+          </span>
+        }
+        right={
+          <div style={{ display: "flex", gap: "0.75rem" }}>
+            <button class="outline" onClick={handleBack}>Back to Enhancement</button>
+            <button class="primary" onClick={handleProceed} disabled={nonEmptyGroups.length === 0}>
+              Continue ({nonEmptyGroups.length} post{nonEmptyGroups.length !== 1 ? "s" : ""})
+            </button>
+          </div>
+        }
+      />
     </div>
   );
 }

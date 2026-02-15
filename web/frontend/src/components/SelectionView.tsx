@@ -10,12 +10,15 @@ import {
   setStep,
 } from "../app";
 import { ProcessingIndicator } from "./ProcessingIndicator";
+import { createPoller } from "../hooks/usePolling";
 import {
   startSelection,
   getSelectionResults,
   isVideoFile,
 } from "../api/client";
 import { enhancementKeys } from "./EnhancementView";
+import { ActionBar } from "./shared/ActionBar";
+import { SelectedCard } from "./SelectedCard";
 import { openMediaPlayer } from "./MediaPlayer";
 import type {
   SelectionItem,
@@ -84,21 +87,22 @@ function startSelectionJob() {
 }
 
 function pollResults(id: string, sessionId: string) {
-  const interval = setInterval(async () => {
-    try {
-      const res = await getSelectionResults(id, sessionId);
+  createPoller({
+    fn: () => getSelectionResults(id, sessionId),
+    intervalMs: 3000,
+    isDone: (res) => res.status === "complete" || res.status === "error",
+    onPoll: (res) => {
       results.value = res;
-      if (res.status === "complete" || res.status === "error") {
-        clearInterval(interval);
-        if (res.status === "complete") {
-          setStep("review-selection");
-        }
-      }
-    } catch (e) {
+    },
+    onPollError: (e) => {
       error.value = e instanceof Error ? e.message : "Failed to poll results";
-      clearInterval(interval);
+      return false;
+    },
+  }).promise.then((res) => {
+    if (res.status === "complete") {
+      setStep("review-selection");
     }
-  }, 3000);
+  });
 }
 
 // --- Override helpers ---
@@ -219,161 +223,6 @@ function handleBack() {
 }
 
 // --- Components ---
-
-function SelectedCard({
-  item,
-  onToggle,
-}: {
-  item: SelectionItem;
-  onToggle: () => void;
-}) {
-  const isOverride = addedToSelection.value.has(item.key);
-  return (
-    <div
-      style={{
-        background: isOverride
-          ? "rgba(108, 140, 255, 0.08)"
-          : "var(--color-bg)",
-        borderRadius: "var(--radius)",
-        overflow: "hidden",
-        border: isOverride
-          ? "2px solid var(--color-primary)"
-          : "2px solid transparent",
-      }}
-    >
-      {/* Thumbnail */}
-      <div
-        style={{
-          width: "100%",
-          aspectRatio: "1",
-          background: "var(--color-surface-hover)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-        }}
-      >
-        <img
-          src={item.thumbnailUrl}
-          alt={item.filename}
-          loading="lazy"
-          onClick={() => openMediaPlayer(item.key, item.type, item.filename)}
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            cursor: "zoom-in",
-          }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
-        />
-        {/* Rank badge */}
-        <span
-          style={{
-            position: "absolute",
-            top: "0.375rem",
-            left: "0.375rem",
-            background: "var(--color-primary)",
-            color: "#fff",
-            fontSize: "0.75rem",
-            fontWeight: 700,
-            width: "1.5rem",
-            height: "1.5rem",
-            borderRadius: "50%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {item.rank}
-        </span>
-        {/* Type badge */}
-        <span
-          style={{
-            position: "absolute",
-            top: "0.375rem",
-            right: "0.375rem",
-            fontSize: "0.75rem",
-            padding: "0.125rem 0.375rem",
-            borderRadius: "4px",
-            background:
-              item.type === "Video"
-                ? "rgba(108, 140, 255, 0.85)"
-                : "rgba(81, 207, 102, 0.85)",
-            color: "#fff",
-            fontWeight: 600,
-            textTransform: "uppercase",
-          }}
-        >
-          {item.type}
-        </span>
-      </div>
-
-      {/* Info */}
-      <div style={{ padding: "0.5rem" }}>
-        <div
-          title={item.filename}
-          style={{
-            fontSize: "0.75rem",
-            fontFamily: "var(--font-mono)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            marginBottom: "0.25rem",
-          }}
-        >
-          {item.filename}
-        </div>
-        {item.scene && (
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--color-primary)",
-              marginBottom: "0.25rem",
-            }}
-          >
-            {item.scene}
-          </div>
-        )}
-        <div
-          style={{
-            fontSize: "0.75rem",
-            color: "var(--color-text-secondary)",
-            lineHeight: 1.4,
-          }}
-        >
-          {item.justification}
-        </div>
-        {item.comparisonNote && (
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              fontStyle: "italic",
-              marginTop: "0.25rem",
-            }}
-          >
-            {item.comparisonNote}
-          </div>
-        )}
-        {/* Remove from selection button */}
-        <button
-          class="outline"
-          onClick={onToggle}
-          style={{
-            marginTop: "0.5rem",
-            padding: "0.125rem 0.5rem",
-            fontSize: "0.75rem",
-            width: "100%",
-          }}
-        >
-          {isOverride ? "Undo Add" : "Remove"}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 function ExcludedCard({
   item,
@@ -729,6 +578,7 @@ export function SelectionView() {
             <SelectedCard
               key={item.key}
               item={item}
+              isOverride={addedToSelection.value.has(item.key)}
               onToggle={() => toggleOverride(item, true)}
             />
           ))}
@@ -842,40 +692,32 @@ export function SelectionView() {
       )}
 
       {/* Action bar */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: "1rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "1rem 1.5rem",
-          background: "var(--color-surface)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <span style={{ fontSize: "0.875rem" }}>
-          {selected.length} item(s) selected for enhancement
-          {hasOverrides && (
-            <span style={{ color: "var(--color-primary)", marginLeft: "0.5rem" }}>
-              (includes overrides)
-            </span>
-          )}
-        </span>
-        <div style={{ display: "flex", gap: "0.75rem" }}>
-          <button class="outline" onClick={handleBack}>
-            Back to Upload
-          </button>
-          <button
-            class="primary"
-            onClick={handleConfirmSelection}
-            disabled={selected.length === 0}
-          >
-            Confirm Selection ({selected.length})
-          </button>
-        </div>
-      </div>
+      <ActionBar
+        left={
+          <span style={{ fontSize: "0.875rem" }}>
+            {selected.length} item(s) selected for enhancement
+            {hasOverrides && (
+              <span style={{ color: "var(--color-primary)", marginLeft: "0.5rem" }}>
+                (includes overrides)
+              </span>
+            )}
+          </span>
+        }
+        right={
+          <div style={{ display: "flex", gap: "0.75rem" }}>
+            <button class="outline" onClick={handleBack}>
+              Back to Upload
+            </button>
+            <button
+              class="primary"
+              onClick={handleConfirmSelection}
+              disabled={selected.length === 0}
+            >
+              Confirm Selection ({selected.length})
+            </button>
+          </div>
+        }
+      />
     </div>
   );
 }

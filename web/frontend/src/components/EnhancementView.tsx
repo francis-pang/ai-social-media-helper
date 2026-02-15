@@ -8,16 +8,18 @@ import {
   uploadSessionId,
   setStep,
 } from "../app";
+import { createPoller } from "../hooks/usePolling";
 import { ProcessingIndicator } from "./ProcessingIndicator";
+import { ActionBar } from "./shared/ActionBar";
 import {
   startEnhancement,
   getEnhancementResults,
   submitEnhancementFeedback,
-  thumbnailUrl,
 } from "../api/client";
-import { openMediaPlayer } from "./MediaPlayer";
 import { groupableMedia } from "./PostGrouper";
-import type { EnhancementItem, EnhancementResults } from "../types/api";
+import { EnhancementCard, getPhaseLabel, getPhaseColor } from "./enhancement/EnhancementCard";
+import { SideBySideComparison } from "./enhancement/SideBySideComparison";
+import type { EnhancementResults } from "../types/api";
 
 // --- State ---
 
@@ -83,21 +85,18 @@ function startEnhancementJob() {
 }
 
 function pollResults(id: string, sessionId: string) {
-  const interval = setInterval(async () => {
-    try {
-      const res = await getEnhancementResults(id, sessionId);
-      results.value = res;
-      if (res.status === "complete" || res.status === "error") {
-        clearInterval(interval);
-        if (res.status === "complete") {
-          setStep("review-enhanced");
-        }
-      }
-    } catch (e) {
+  createPoller({
+    fn: () => getEnhancementResults(id, sessionId),
+    intervalMs: 3000,
+    isDone: (res) => res.status === "complete" || res.status === "error",
+    onPoll: (res) => { results.value = res; },
+    onPollError: (e) => {
       error.value = e instanceof Error ? e.message : "Failed to poll results";
-      clearInterval(interval);
-    }
-  }, 3000);
+      return false;
+    },
+  }).promise.then((res) => {
+    if (res.status === "complete") { setStep("review-enhanced"); }
+  });
 }
 
 // --- Feedback ---
@@ -157,474 +156,6 @@ function handleBack() {
   feedbackText.value = "";
   error.value = null;
   navigateBack();
-}
-
-// --- Helper functions ---
-
-function getPhaseLabel(phase: string): string {
-  switch (phase) {
-    case "initial":
-      return "Queued";
-    case "phase1":
-      return "Global Enhancement";
-    case "phase2":
-      return "Analyzing";
-    case "phase3":
-      return "Surgical Edits";
-    case "feedback":
-      return "Feedback Applied";
-    case "complete":
-      return "Done";
-    case "error":
-      return "Error";
-    default:
-      return phase;
-  }
-}
-
-function getPhaseColor(phase: string): string {
-  switch (phase) {
-    case "complete":
-    case "feedback":
-      return "var(--color-success)";
-    case "error":
-      return "var(--color-danger)";
-    case "initial":
-      return "var(--color-text-secondary)";
-    default:
-      return "var(--color-primary)";
-  }
-}
-
-// --- Sub-components ---
-
-function EnhancementCard({
-  item,
-  isSelected,
-  onClick,
-}: {
-  item: EnhancementItem;
-  isSelected: boolean;
-  onClick: () => void;
-}) {
-  const hasEnhanced = !!item.enhancedThumbKey;
-  const thumbSrc = hasEnhanced
-    ? thumbnailUrl(item.enhancedThumbKey)
-    : thumbnailUrl(item.originalThumbKey || item.key);
-
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        background: isSelected
-          ? "rgba(108, 140, 255, 0.08)"
-          : "var(--color-bg)",
-        borderRadius: "var(--radius)",
-        overflow: "hidden",
-        border: isSelected
-          ? "2px solid var(--color-primary)"
-          : "2px solid transparent",
-        cursor: "pointer",
-        transition: "border-color 0.15s",
-      }}
-    >
-      {/* Thumbnail */}
-      <div
-        style={{
-          width: "100%",
-          aspectRatio: "1",
-          background: "var(--color-surface-hover)",
-          position: "relative",
-        }}
-      >
-        <img
-          src={thumbSrc}
-          alt={item.filename}
-          loading="lazy"
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-          }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
-        />
-        {/* Phase badge */}
-        <span
-          style={{
-            position: "absolute",
-            top: "0.375rem",
-            right: "0.375rem",
-            fontSize: "0.75rem",
-            padding: "0.125rem 0.375rem",
-            borderRadius: "4px",
-            background: getPhaseColor(item.phase),
-            color: "#fff",
-            fontWeight: 600,
-          }}
-        >
-          {getPhaseLabel(item.phase)}
-        </span>
-        {/* Score badge (if analysis available) */}
-        {item.analysis && (
-          <span
-            style={{
-              position: "absolute",
-              top: "0.375rem",
-              left: "0.375rem",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-              padding: "0.125rem 0.375rem",
-              borderRadius: "4px",
-              background:
-                item.analysis.professionalScore >= 8.5
-                  ? "rgba(81, 207, 102, 0.9)"
-                  : "rgba(255, 193, 7, 0.9)",
-              color: "#fff",
-            }}
-          >
-            {item.analysis.professionalScore.toFixed(1)}
-          </span>
-        )}
-        {/* Imagen edits indicator */}
-        {item.imagenEdits > 0 && (
-          <span
-            style={{
-              position: "absolute",
-              bottom: "0.375rem",
-              left: "0.375rem",
-              fontSize: "0.75rem",
-              padding: "0.125rem 0.375rem",
-              borderRadius: "4px",
-              background: "rgba(108, 140, 255, 0.85)",
-              color: "#fff",
-              fontWeight: 600,
-            }}
-          >
-            +{item.imagenEdits} surgical
-          </span>
-        )}
-      </div>
-
-      {/* Info */}
-      <div style={{ padding: "0.5rem" }}>
-        <div
-          title={item.filename}
-          style={{
-            fontSize: "0.75rem",
-            fontFamily: "var(--font-mono)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {item.filename}
-        </div>
-        {item.error && (
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--color-danger)",
-              marginTop: "0.25rem",
-            }}
-          >
-            {item.error}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SideBySideComparison({ item }: { item: EnhancementItem }) {
-  const originalThumb = thumbnailUrl(item.originalThumbKey || item.key);
-  const enhancedThumb = item.enhancedThumbKey
-    ? thumbnailUrl(item.enhancedThumbKey)
-    : null;
-
-  return (
-    <div class="card" style={{ marginBottom: "1.5rem" }}>
-      <h3
-        style={{
-          marginBottom: "1rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <span>{item.filename}</span>
-        <span
-          style={{
-            fontSize: "0.75rem",
-            color: getPhaseColor(item.phase),
-            fontWeight: 600,
-          }}
-        >
-          {getPhaseLabel(item.phase)}
-        </span>
-      </h3>
-
-      {/* Side-by-side images */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: enhancedThumb ? "1fr 1fr" : "1fr",
-          gap: "1rem",
-          marginBottom: "1rem",
-        }}
-      >
-        {/* Original */}
-        <div>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              marginBottom: "0.375rem",
-              textAlign: "center",
-            }}
-          >
-            Original
-          </div>
-          <div
-            style={{
-              background: "var(--color-surface-hover)",
-              borderRadius: "var(--radius)",
-              overflow: "hidden",
-              aspectRatio: "4/3",
-            }}
-          >
-            <img
-              src={originalThumb}
-              alt={`Original: ${item.filename}`}
-              onClick={() => openMediaPlayer(item.originalKey, "Photo", item.filename)}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                cursor: "zoom-in",
-              }}
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Enhanced */}
-        {enhancedThumb && (
-          <div>
-            <div
-              style={{
-                fontSize: "0.75rem",
-                color: "var(--color-text-secondary)",
-                marginBottom: "0.375rem",
-                textAlign: "center",
-              }}
-            >
-              Enhanced
-              {item.analysis && (
-                <span
-                  style={{
-                    marginLeft: "0.375rem",
-                    color:
-                      item.analysis.professionalScore >= 8.5
-                        ? "var(--color-success)"
-                        : "var(--color-warning, #ffc107)",
-                  }}
-                >
-                  (Score: {item.analysis.professionalScore.toFixed(1)})
-                </span>
-              )}
-            </div>
-            <div
-              style={{
-                background: "var(--color-surface-hover)",
-                borderRadius: "var(--radius)",
-                overflow: "hidden",
-                aspectRatio: "4/3",
-              }}
-            >
-              <img
-                src={enhancedThumb}
-                alt={`Enhanced: ${item.filename}`}
-                onClick={() => openMediaPlayer(item.enhancedKey, "Photo", `${item.filename} (enhanced)`)}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  cursor: "zoom-in",
-                }}
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Enhancement details */}
-      {item.phase1Text && (
-        <div style={{ marginBottom: "0.75rem" }}>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              color: "var(--color-text-secondary)",
-              marginBottom: "0.25rem",
-            }}
-          >
-            Changes Applied:
-          </div>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              lineHeight: 1.5,
-              background: "var(--color-bg)",
-              padding: "0.5rem 0.75rem",
-              borderRadius: "var(--radius)",
-            }}
-          >
-            {item.phase1Text}
-          </div>
-        </div>
-      )}
-
-      {/* Analysis details */}
-      {item.analysis && !item.analysis.noFurtherEditsNeeded && (
-        <div style={{ marginBottom: "0.75rem" }}>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              color: "var(--color-text-secondary)",
-              marginBottom: "0.25rem",
-            }}
-          >
-            Analysis:
-          </div>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              lineHeight: 1.5,
-              background: "var(--color-bg)",
-              padding: "0.5rem 0.75rem",
-              borderRadius: "var(--radius)",
-            }}
-          >
-            <div>{item.analysis.overallAssessment}</div>
-            {item.analysis.remainingImprovements.length > 0 && (
-              <ul
-                style={{
-                  margin: "0.375rem 0 0 0",
-                  paddingLeft: "1.25rem",
-                }}
-              >
-                {item.analysis.remainingImprovements.map((imp, i) => (
-                  <li key={i} style={{ marginBottom: "0.25rem" }}>
-                    <span
-                      style={{
-                        fontWeight: 600,
-                        color:
-                          imp.impact === "high"
-                            ? "var(--color-danger)"
-                            : "var(--color-text-secondary)",
-                      }}
-                    >
-                      [{imp.impact}]
-                    </span>{" "}
-                    {imp.description}
-                    {imp.imagenSuitable && (
-                      <span
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--color-primary)",
-                          marginLeft: "0.375rem",
-                        }}
-                      >
-                        (surgical edit)
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Feedback history */}
-      {item.feedbackHistory && item.feedbackHistory.length > 0 && (
-        <div style={{ marginBottom: "0.75rem" }}>
-          <div
-            style={{
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              color: "var(--color-text-secondary)",
-              marginBottom: "0.25rem",
-            }}
-          >
-            Feedback History:
-          </div>
-          {item.feedbackHistory.map((fb, i) => (
-            <div
-              key={i}
-              style={{
-                fontSize: "0.75rem",
-                background: "var(--color-bg)",
-                padding: "0.375rem 0.75rem",
-                borderRadius: "var(--radius)",
-                marginBottom: "0.375rem",
-                borderLeft: `3px solid ${fb.success ? "var(--color-success)" : "var(--color-danger)"}`,
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>You: {fb.userFeedback}</div>
-              <div style={{ color: "var(--color-text-secondary)" }}>
-                AI ({fb.method}): {fb.modelResponse}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Feedback input */}
-      {(item.phase === "complete" || item.phase === "feedback") && (
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "flex-start",
-          }}
-        >
-          <textarea
-            value={feedbackText.value}
-            onInput={(e) => {
-              feedbackText.value = (e.target as HTMLTextAreaElement).value;
-            }}
-            placeholder='Give feedback, e.g., "make the sky more blue", "remove the trash can on the right"...'
-            style={{
-              flex: 1,
-              minHeight: "2.5rem",
-              resize: "vertical",
-              fontSize: "0.875rem",
-            }}
-            disabled={feedbackLoading.value}
-          />
-          <button
-            class="primary"
-            onClick={handleFeedback}
-            disabled={!feedbackText.value.trim() || feedbackLoading.value}
-            style={{ whiteSpace: "nowrap" }}
-          >
-            {feedbackLoading.value ? "Processing..." : "Apply Feedback"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 // --- Main Component ---
@@ -818,38 +349,31 @@ export function EnhancementView() {
       </div>
 
       {/* Side-by-side comparison for selected item */}
-      {selectedItem && <SideBySideComparison item={selectedItem} />}
+      {selectedItem && (
+        <SideBySideComparison
+          item={selectedItem}
+          feedbackText={feedbackText.value}
+          onFeedbackInput={(text) => { feedbackText.value = text; }}
+          feedbackLoading={feedbackLoading.value}
+          onSubmitFeedback={handleFeedback}
+        />
+      )}
 
-      {/* Action bar */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: "1rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "1rem 1.5rem",
-          background: "var(--color-surface)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <span style={{ fontSize: "0.875rem" }}>
-          {completedItems.length} photo(s) ready for grouping
-        </span>
-        <div style={{ display: "flex", gap: "0.75rem" }}>
-          <button class="outline" onClick={handleBack}>
-            Back to Selection
-          </button>
-          <button
-            class="primary"
-            onClick={handleProceed}
-            disabled={completedItems.length === 0}
-          >
-            Proceed to Grouping ({completedItems.length})
-          </button>
-        </div>
-      </div>
+      <ActionBar
+        left={
+          <span style={{ fontSize: "0.875rem" }}>
+            {completedItems.length} photo(s) ready for grouping
+          </span>
+        }
+        right={
+          <div style={{ display: "flex", gap: "0.75rem" }}>
+            <button class="outline" onClick={handleBack}>Back to Selection</button>
+            <button class="primary" onClick={handleProceed} disabled={completedItems.length === 0}>
+              Proceed to Grouping ({completedItems.length})
+            </button>
+          </div>
+        }
+      />
     </div>
   );
 }

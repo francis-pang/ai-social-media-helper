@@ -5,6 +5,7 @@ import {
   navigateToStep,
   uploadSessionId,
 } from "../app";
+import { ActionBar } from "./shared/ActionBar";
 import { ElapsedTimer } from "./ProcessingIndicator";
 import {
   startPublish,
@@ -687,50 +688,41 @@ export function PublishView() {
         <GroupPublishCard key={group.id} group={group} />
       ))}
 
-      {/* Action bar */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: "1rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "1rem 1.5rem",
-          background: "var(--color-surface)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <button class="outline" onClick={() => navigateBack()}>
-            Back
-          </button>
-          <button
-            class="outline"
-            onClick={() => navigateToStep("description")}
-            style={{ fontSize: "0.875rem" }}
-          >
-            Generate Captions
-          </button>
-        </div>
-        <span style={{ fontSize: "0.875rem" }}>
-          {publishedGroups.value === 0 ? (
-            <span style={{ color: "var(--color-text-secondary)" }}>
-              Ready to publish your posts
-            </span>
-          ) : (
-            <>
-              <strong style={{ color: "var(--color-success)" }}>
-                {publishedGroups.value} of {totalGroups.value}
-              </strong>
+      <ActionBar
+        left={
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button class="outline" onClick={() => navigateBack()}>
+              Back
+            </button>
+            <button
+              class="outline"
+              onClick={() => navigateToStep("description")}
+              style={{ fontSize: "0.875rem" }}
+            >
+              Generate Captions
+            </button>
+          </div>
+        }
+        right={
+          <span style={{ fontSize: "0.875rem" }}>
+            {publishedGroups.value === 0 ? (
               <span style={{ color: "var(--color-text-secondary)" }}>
-                {" "}
-                group{publishedGroups.value !== 1 ? "s" : ""} published
+                Ready to publish your posts
               </span>
-            </>
-          )}
-        </span>
-      </div>
+            ) : (
+              <>
+                <strong style={{ color: "var(--color-success)" }}>
+                  {publishedGroups.value} of {totalGroups.value}
+                </strong>
+                <span style={{ color: "var(--color-text-secondary)" }}>
+                  {" "}
+                  group{publishedGroups.value !== 1 ? "s" : ""} published
+                </span>
+              </>
+            )}
+          </span>
+        }
+      />
     </div>
   );
 }

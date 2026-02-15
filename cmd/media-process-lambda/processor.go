@@ -1,0 +1,267 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/rs/zerolog/log"
+
+	"github.com/fpang/gemini-media-cli/internal/filehandler"
+	"github.com/fpang/gemini-media-cli/internal/metrics"
+	"github.com/fpang/gemini-media-cli/internal/s3util"
+	"github.com/fpang/gemini-media-cli/internal/store"
+)
+
+func processFile(ctx context.Context, key string) error {
+	fileStart := time.Now()
+
+	// Parse sessionId from key: {sessionId}/{filename}
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		log.Debug().Str("key", key).Msg("Skipping key: not in {sessionId}/{filename} format")
+		return nil
+	}
+	sessionID := parts[0]
+	remainder := parts[1]
+
+	// Filter: skip our own output directories
+	if strings.Contains(remainder, "/") {
+		// Key has subdirectory: thumbnails/, processed/, compressed/
+		log.Debug().Str("key", key).Msg("Skipping key: subdirectory (generated artifact)")
+		return nil
+	}
+	filename := remainder
+
+	log.Info().Str("key", key).Str("sessionId", sessionID).Str("filename", filename).Msg("Processing file")
+
+	// Validate extension
+	ext := strings.ToLower(filepath.Ext(filename))
+	if !filehandler.IsSupported(ext) {
+		log.Warn().Str("key", key).Str("ext", ext).Msg("Unsupported file extension")
+		return writeErrorResult(ctx, sessionID, filename, key, fmt.Sprintf("Unsupported file extension: %s", ext))
+	}
+
+	isImage := filehandler.IsImage(ext)
+	isVideo := filehandler.IsVideo(ext)
+	fileType := "image"
+	if isVideo {
+		fileType = "video"
+	}
+
+	// Head object to get size and content type
+	headResult, err := s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &mediaBucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return writeErrorResult(ctx, sessionID, filename, key, fmt.Sprintf("Failed to read file metadata: %v", err))
+	}
+
+	fileSize := *headResult.ContentLength
+	contentType := ""
+	if headResult.ContentType != nil {
+		contentType = *headResult.ContentType
+	}
+	mimeType, _ := filehandler.GetMIMEType(ext)
+	if mimeType == "" {
+		mimeType = contentType
+	}
+
+	log.Debug().Str("key", key).Int64("size", fileSize).Str("contentType", contentType).Str("mimeType", mimeType).Msg("File metadata retrieved")
+
+	// Download file to /tmp
+	tmpDir := filepath.Join(os.TempDir(), "media-process", sessionID)
+	os.MkdirAll(tmpDir, 0755)
+	defer os.RemoveAll(tmpDir)
+
+	localPath := filepath.Join(tmpDir, filename)
+	if err := s3util.DownloadToFile(ctx, s3Client, mediaBucket, key, localPath); err != nil {
+		return writeErrorResult(ctx, sessionID, filename, key, fmt.Sprintf("Failed to download file: %v", err))
+	}
+
+	// Load media file (extracts metadata)
+	mf, err := filehandler.LoadMediaFile(localPath)
+	if err != nil {
+		return writeErrorResult(ctx, sessionID, filename, key, fmt.Sprintf("Failed to load media file: %v", err))
+	}
+
+	// Extract metadata as string map for DDB storage
+	metadataMap := make(map[string]string)
+	if mf.Metadata != nil {
+		metadataMap["mediaType"] = mf.Metadata.GetMediaType()
+		if mf.Metadata.HasGPSData() {
+			lat, lon := mf.Metadata.GetGPS()
+			metadataMap["gpsLat"] = fmt.Sprintf("%.6f", lat)
+			metadataMap["gpsLon"] = fmt.Sprintf("%.6f", lon)
+		}
+		if mf.Metadata.HasDateData() {
+			metadataMap["date"] = mf.Metadata.GetDate().Format(time.RFC3339)
+		}
+	}
+
+	// Determine processing strategy
+	var processedKey string
+	var thumbnailKey string
+	converted := false
+
+	if isImage {
+		// Generate thumbnail (always)
+		thumbData, _, err := filehandler.GenerateThumbnail(mf, thumbnailPx)
+		if err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("Failed to generate thumbnail")
+		} else {
+			baseName := strings.TrimSuffix(filename, ext)
+			thumbnailKey = fmt.Sprintf("%s/thumbnails/%s.jpg", sessionID, baseName)
+			thumbContentType := "image/jpeg"
+			_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      &mediaBucket,
+				Key:         &thumbnailKey,
+				Body:        bytes.NewReader(thumbData),
+				ContentType: &thumbContentType,
+			})
+			if err != nil {
+				log.Warn().Err(err).Str("thumbnailKey", thumbnailKey).Msg("Failed to upload thumbnail")
+				thumbnailKey = ""
+			} else {
+				log.Debug().Str("thumbnailKey", thumbnailKey).Int("size", len(thumbData)).Msg("Thumbnail uploaded")
+			}
+		}
+
+		// Small photo: skip conversion, use original
+		processedKey = key
+		// Note: Image conversion (resize large photos) can be added later
+		// For now, all images use the original and just get a thumbnail
+
+	} else if isVideo {
+		// Generate video thumbnail
+		thumbData, _, err := filehandler.GenerateThumbnail(mf, thumbnailPx)
+		if err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("Failed to generate video thumbnail")
+		} else {
+			baseName := strings.TrimSuffix(filename, ext)
+			thumbnailKey = fmt.Sprintf("%s/thumbnails/%s.jpg", sessionID, baseName)
+			thumbContentType := "image/jpeg"
+			_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      &mediaBucket,
+				Key:         &thumbnailKey,
+				Body:        bytes.NewReader(thumbData),
+				ContentType: &thumbContentType,
+			})
+			if err != nil {
+				log.Warn().Err(err).Str("thumbnailKey", thumbnailKey).Msg("Failed to upload video thumbnail")
+				thumbnailKey = ""
+			}
+		}
+
+		// Video compression for Gemini (reuse existing CompressVideoForGemini)
+		if filehandler.IsFFmpegAvailable() {
+			var videoMeta *filehandler.VideoMetadata
+			if mf.Metadata != nil {
+				if vm, ok := mf.Metadata.(*filehandler.VideoMetadata); ok {
+					videoMeta = vm
+				}
+			}
+			compressedPath, _, cleanup, err := filehandler.CompressVideoForGemini(ctx, localPath, videoMeta)
+			if err != nil {
+				log.Warn().Err(err).Str("key", key).Msg("Video compression failed — using original")
+				processedKey = key
+			} else {
+				defer cleanup()
+				// Upload compressed video
+				baseName := strings.TrimSuffix(filename, ext)
+				processedKey = fmt.Sprintf("%s/processed/%s.webm", sessionID, baseName)
+				compressedFile, err := os.Open(compressedPath)
+				if err != nil {
+					log.Warn().Err(err).Msg("Failed to open compressed video")
+					processedKey = key
+				} else {
+					compressedContentType := "video/webm"
+					_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+						Bucket:      &mediaBucket,
+						Key:         &processedKey,
+						Body:        compressedFile,
+						ContentType: &compressedContentType,
+					})
+					compressedFile.Close()
+					if err != nil {
+						log.Warn().Err(err).Str("processedKey", processedKey).Msg("Failed to upload compressed video")
+						processedKey = key
+					} else {
+						converted = true
+						log.Info().Str("processedKey", processedKey).Msg("Compressed video uploaded")
+					}
+				}
+				os.Remove(compressedPath)
+			}
+		} else {
+			log.Debug().Str("key", key).Msg("ffmpeg not available — using original video")
+			processedKey = key
+		}
+	}
+
+	// Look up the jobId from the TriageJob in the sessions table.
+	// The jobId is stored in the triage job record for this session.
+	// We need to find it by querying for TRIAGE# sort key prefix.
+	jobID, err := findTriageJobID(ctx, sessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Could not find triage job ID — file result will be orphaned")
+		// Still write the result with empty jobID so it's not lost
+		jobID = ""
+	}
+
+	// Write result to file-processing table
+	result := &store.FileResult{
+		Filename:     filename,
+		Status:       "valid",
+		OriginalKey:  key,
+		ProcessedKey: processedKey,
+		ThumbnailKey: thumbnailKey,
+		FileType:     fileType,
+		MimeType:     mimeType,
+		FileSize:     fileSize,
+		Converted:    converted,
+		Metadata:     metadataMap,
+	}
+
+	if jobID != "" {
+		if err := fileProcessStore.PutFileResult(ctx, sessionID, jobID, result); err != nil {
+			log.Error().Err(err).Str("key", key).Msg("Failed to write file result to DDB")
+		}
+
+		// Increment processedCount on the TriageJob
+		newCount, err := sessionStore.IncrementTriageProcessedCount(ctx, sessionID, jobID)
+		if err != nil {
+			log.Error().Err(err).Str("key", key).Msg("Failed to increment processedCount")
+		} else {
+			log.Debug().Str("key", key).Int("processedCount", newCount).Msg("processedCount incremented")
+		}
+	}
+
+	processingMs := time.Since(fileStart).Milliseconds()
+	log.Info().
+		Str("key", key).
+		Str("fileType", fileType).
+		Bool("converted", converted).
+		Int64("processingMs", processingMs).
+		Msg("File processing complete")
+
+	// Emit EMF metrics
+	metrics.New("AiSocialMedia").
+		Dimension("Operation", "mediaProcess").
+		Dimension("FileType", fileType).
+		Metric("FileProcessingMs", float64(processingMs), metrics.UnitMilliseconds).
+		Metric("FileSize", float64(fileSize), metrics.UnitBytes).
+		Count("FilesProcessed").
+		Property("sessionId", sessionID).
+		Property("filename", filename).
+		Property("converted", converted).
+		Flush()
+
+	return nil
+}

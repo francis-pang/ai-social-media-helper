@@ -29,6 +29,8 @@ graph TD
         Assets["assets\n(prompts, reference photos)"]
         Store["store\n(DynamoDB sessions)"]
         Jobs["jobs\n(job routing)"]
+        S3Util["s3util\n(S3 download, upload,\nthumbnail helpers)"]
+        JobUtil["jobutil\n(error handling)"]
         Instagram["instagram\n(publishing client,\nOAuth token exchange)"]
         Webhook["webhook\n(Meta event handler)"]
     end
@@ -49,11 +51,14 @@ graph TD
     TriageLambdaBin --> Chat
     TriageLambdaBin --> FileHandler
     TriageLambdaBin --> LambdaBoot
+    TriageLambdaBin --> S3Util
     MediaProcessBin --> FileHandler
     MediaProcessBin --> LambdaBoot
+    MediaProcessBin --> S3Util
     DescLambdaBin --> Chat
     DescLambdaBin --> LambdaBoot
     DownloadLambdaBin --> LambdaBoot
+    DownloadLambdaBin --> S3Util
     PublishLambdaBin --> Instagram
     PublishLambdaBin --> LambdaBoot
     WebhookLambda --> Webhook
@@ -232,6 +237,8 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 
 Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
 
+Each processing Lambda is split into multiple files (e.g. `main.go`, `types.go`, `handler.go`); triage, enhance, description, and media-process also have domain-specific modules (gemini, feedback, media_items, processor, store_helpers).
+
 ### Media Selection Pipeline
 
 The Selection Pipeline orchestrates thumbnail generation and AI-powered media ranking. The API Lambda dispatches work to the `SelectionPipeline` Step Function, which fans out thumbnail generation in parallel before running a single Gemini selection pass.
@@ -389,6 +396,10 @@ flowchart LR
 | `FileBrowser.tsx` | Local | Native OS file picker via Go backend |
 | `TriageView.tsx` | Both | Triage results and deletion interface |
 | `LoginForm.tsx` | Cloud | Cognito authentication UI |
+
+**Shared utilities:** `hooks/usePolling.ts`, `hooks/useElapsedTimer.ts`, `components/shared/ActionBar.tsx`, `utils/format.ts`, `utils/fileSystem.ts`, `utils/statusBadge.ts`. Views use these instead of duplicated implementations.
+
+**Extracted subcomponents:** `SelectedCard`, `enhancement/EnhancementCard`, `enhancement/SideBySideComparison`, `media-uploader/thumbnailGenerator`, `post-grouper/` (state, useGroupOperations, MediaThumbnail, GroupIcon), `download/BundleCard`, `download/GroupCard`, `TriageMediaCard`.
 
 ## CI/CD
 

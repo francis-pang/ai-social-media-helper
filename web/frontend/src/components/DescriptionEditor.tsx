@@ -6,7 +6,9 @@ import {
   uploadSessionId,
   tripContext,
 } from "../app";
+import { createPoller } from "../hooks/usePolling";
 import { ProcessingIndicator } from "./ProcessingIndicator";
+import { ActionBar } from "./shared/ActionBar";
 import {
   generateDescription,
   getDescriptionResults,
@@ -128,52 +130,46 @@ async function startGeneration() {
 }
 
 async function pollForResults(jobId: string, sessionId: string) {
-  const pollInterval = 2000;
-  const maxPolls = 30; // 60 seconds max
+  try {
+    const result = await createPoller({
+      fn: () => getDescriptionResults(jobId, sessionId),
+      intervalMs: 2000,
+      timeoutMs: 60000,
+      isDone: (res) => res.status === "complete" || res.status === "error",
+      onPollError: () => true, // continue on transient errors
+    }).promise;
 
-  for (let i = 0; i < maxPolls; i++) {
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
-
-    try {
-      const results = await getDescriptionResults(jobId, sessionId);
-
-      if (results.status === "complete") {
-        descriptionState.value = {
-          jobId,
-          status: "complete",
-          caption: results.caption ?? "",
-          hashtags: results.hashtags ?? [],
-          locationTag: results.locationTag ?? "",
-          feedbackRound: results.feedbackRound,
-          error: null,
-        };
-        return;
-      }
-
-      if (results.status === "error") {
-        descriptionState.value = {
-          jobId,
-          status: "error",
-          caption: "",
-          hashtags: [],
-          locationTag: "",
-          feedbackRound: 0,
-          error: results.error ?? "Generation failed",
-        };
-        return;
-      }
-    } catch (err) {
-      // Continue polling on transient errors
-      // eslint-disable-next-line no-console
-      console.warn("Poll error:", err);
+    if (result.status === "complete") {
+      descriptionState.value = {
+        jobId,
+        status: "complete",
+        caption: result.caption ?? "",
+        hashtags: result.hashtags ?? [],
+        locationTag: result.locationTag ?? "",
+        feedbackRound: result.feedbackRound,
+        error: null,
+      };
+    } else {
+      descriptionState.value = {
+        jobId,
+        status: "error",
+        caption: "",
+        hashtags: [],
+        locationTag: "",
+        feedbackRound: 0,
+        error: result.error ?? "Generation failed",
+      };
     }
+  } catch (err) {
+    const msg = err instanceof Error && err.message === "Polling timed out"
+      ? "Generation timed out"
+      : (err instanceof Error ? err.message : "Generation failed");
+    descriptionState.value = {
+      ...descriptionState.value,
+      status: "error",
+      error: msg,
+    };
   }
-
-  descriptionState.value = {
-    ...descriptionState.value,
-    status: "error",
-    error: "Generation timed out",
-  };
 }
 
 async function submitFeedback() {
@@ -708,50 +704,25 @@ export function DescriptionEditor() {
         </>
       )}
 
-      {/* Action bar */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: "1rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "1rem 1.5rem",
-          background: "var(--color-surface)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <button class="outline" onClick={() => navigateBack()}>
-          Back
-        </button>
-
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          {state.status === "complete" && (
-            <>
-              <button
-                class="outline"
-                onClick={() => copyToClipboard()}
-                style={{ fontSize: "0.875rem" }}
-              >
-                {copyStatus.value === "copied"
-                  ? "Copied!"
-                  : "Copy to Clipboard"}
-              </button>
-
-              <button
-                class="primary"
-                onClick={() => acceptAndContinue()}
-                style={{ fontSize: "0.875rem" }}
-              >
-                {hasMoreGroups.value
-                  ? "Accept & Next Group"
-                  : "Done"}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+      <ActionBar
+        left={
+          <button class="outline" onClick={() => navigateBack()}>Back</button>
+        }
+        right={
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            {state.status === "complete" && (
+              <>
+                <button class="outline" onClick={() => copyToClipboard()} style={{ fontSize: "0.875rem" }}>
+                  {copyStatus.value === "copied" ? "Copied!" : "Copy to Clipboard"}
+                </button>
+                <button class="primary" onClick={() => acceptAndContinue()} style={{ fontSize: "0.875rem" }}>
+                  {hasMoreGroups.value ? "Accept & Next Group" : "Done"}
+                </button>
+              </>
+            )}
+          </div>
+        }
+      />
     </div>
   );
 }

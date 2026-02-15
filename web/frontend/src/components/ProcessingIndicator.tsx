@@ -11,7 +11,8 @@
  * - Cancel button
  * - Slot for custom child content
  */
-import { useState, useEffect } from "preact/hooks";
+import { useState } from "preact/hooks";
+import { useElapsedTimer, formatElapsed } from "../hooks/useElapsedTimer";
 import type { ComponentChildren } from "preact";
 
 // ---------------------------------------------------------------------------
@@ -60,20 +61,9 @@ function itemBadgeClass(status: string): string {
 }
 
 export function ProcessingIndicator(props: ProcessingIndicatorProps) {
-  const [elapsed, setElapsed] = useState(0);
+  const elapsed = useElapsedTimer();
   const [showDetails, setShowDetails] = useState(false);
-
-  useEffect(() => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-  const elapsedStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  const elapsedStr = formatElapsed(elapsed);
 
   const hasProgress =
     props.completedCount != null &&
@@ -304,19 +294,7 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
 // ---------------------------------------------------------------------------
 
 export function ElapsedTimer() {
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-
+  const elapsed = useElapsedTimer();
   return (
     <span
       style={{
@@ -325,7 +303,7 @@ export function ElapsedTimer() {
         color: "var(--color-text-secondary)",
       }}
     >
-      {minutes}:{seconds.toString().padStart(2, "0")}
+      {formatElapsed(elapsed)}
     </span>
   );
 }
