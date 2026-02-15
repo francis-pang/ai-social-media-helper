@@ -1,6 +1,7 @@
 import { signal } from "@preact/signals";
 import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, getTriageResults, startTriage } from "../api/client";
-import { selectedPaths, uploadSessionId, triageJobId, navigateToStep } from "../app";
+import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep } from "../app";
+import { syncUrlToStep } from "../router";
 
 /** Media file MIME types accepted by the uploader. */
 const ACCEPT =
@@ -152,9 +153,11 @@ function handleDragOver(e: DragEvent) {
 }
 
 function addFiles(newFiles: File[]) {
-  // Ensure we have a session ID
+  // Ensure we have a session ID; update the browser URL once a session starts
   if (!uploadSessionId.value) {
     uploadSessionId.value = generateSessionId();
+    // Push session ID into the URL so the upload page is bookmark-/refresh-safe
+    syncUrlToStep(currentStep.value, uploadSessionId.value);
   }
 
   const sessionId = uploadSessionId.value;

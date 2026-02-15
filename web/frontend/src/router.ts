@@ -42,6 +42,7 @@ for (const [step, path] of Object.entries(STEP_TO_PATH)) {
 
 /** Steps that carry the session ID in the query string. */
 const SESSION_STEPS = new Set<Step>([
+  "triage-upload",
   "processing",
   "results",
   "selecting",

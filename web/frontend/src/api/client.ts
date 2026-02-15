@@ -70,6 +70,25 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
   }
+
+  // Guard against CloudFront error-response masking: when the API origin
+  // returns 403/404, CloudFront's custom errorResponses may convert it to
+  // 200 + index.html (SPA fallback).  Detect this before calling res.json()
+  // so the caller gets a meaningful error instead of a cryptic SyntaxError.
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const body = await res.text();
+    // HTML body strongly suggests CloudFront served the SPA fallback page
+    if (body.trimStart().startsWith("<!DOCTYPE") || body.trimStart().startsWith("<html")) {
+      throw new Error(
+        `API request to ${url} was intercepted by the CDN — the endpoint may not exist or returned an auth error`,
+      );
+    }
+    throw new Error(
+      `Expected JSON from ${url} but received ${contentType || "unknown content-type"}`,
+    );
+  }
+
   return res.json() as Promise<T>;
 }
 
