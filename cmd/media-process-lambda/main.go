@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"time"
 
@@ -35,9 +36,9 @@ var coldStart = true
 // Size thresholds for image processing decisions.
 const (
 	maxSmallPhotoBytes = 2 * 1024 * 1024 // 2 MB
-	maxSmallPhotoPx    = 2000             // 2000px
-	targetResizePx     = 1600             // Resize large photos to 1600px
-	thumbnailPx        = 400              // Thumbnail dimension
+	maxSmallPhotoPx    = 2000            // 2000px
+	targetResizePx     = 1600            // Resize large photos to 1600px
+	thumbnailPx        = 400             // Thumbnail dimension
 )
 
 // AWS clients initialized at cold start.
@@ -84,7 +85,13 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	}
 
 	for _, record := range s3Event.Records {
-		key := record.S3.Object.Key
+		// S3 event notifications URL-encode object keys (spaces → "+",
+		// special chars → "%XX"). Decode so S3 API calls use the real key.
+		key, err := url.QueryUnescape(record.S3.Object.Key)
+		if err != nil {
+			log.Error().Err(err).Str("rawKey", record.S3.Object.Key).Msg("Failed to URL-decode S3 event key")
+			key = record.S3.Object.Key
+		}
 		if err := processFile(ctx, key); err != nil {
 			log.Error().Err(err).Str("key", key).Msg("Failed to process file")
 			// Don't return error — process remaining files in the batch

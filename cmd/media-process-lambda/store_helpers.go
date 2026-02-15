@@ -31,6 +31,8 @@ func findTriageJobID(ctx context.Context, sessionID string) (string, error) {
 }
 
 func writeErrorResult(ctx context.Context, sessionID, filename, originalKey, errMsg string) error {
+	log.Warn().Str("sessionId", sessionID).Str("filename", filename).Str("key", originalKey).Str("error", errMsg).Msg("File processing failed")
+
 	jobID, _ := findTriageJobID(ctx, sessionID)
 	if jobID == "" {
 		log.Warn().Str("sessionId", sessionID).Str("filename", filename).Str("error", errMsg).Msg("Cannot write error result — no triage job found")
