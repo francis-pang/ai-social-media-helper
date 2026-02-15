@@ -17,6 +17,142 @@ import (
 
 // --- Triage Endpoints (DDR-050, DDR-052: DynamoDB + Step Functions) ---
 
+// POST /api/triage/init
+// Body: {"sessionId": "uuid", "expectedFileCount": 36, "model": "optional-model-name"}
+// Returns: {"id": "triage-xxx", "sessionId": "uuid"}
+func handleTriageInit(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleTriageInit")
+
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID         string `json:"sessionId"`
+		ExpectedFileCount int    `json:"expectedFileCount"`
+		Model             string `json:"model,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" {
+		httpError(w, http.StatusBadRequest, "sessionId is required")
+		return
+	}
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.ExpectedFileCount <= 0 {
+		httpError(w, http.StatusBadRequest, "expectedFileCount must be > 0")
+		return
+	}
+
+	model := chat.DefaultModelName
+	if req.Model != "" {
+		model = req.Model
+	}
+
+	jobID := jobs.GenerateID("triage-")
+
+	// Write pending job with expectedFileCount to DynamoDB (DDR-061)
+	if sessionStore != nil {
+		pendingJob := &store.TriageJob{
+			ID:                jobID,
+			Status:            "pending",
+			ExpectedFileCount: req.ExpectedFileCount,
+		}
+		if err := sessionStore.PutTriageJob(context.Background(), req.SessionID, pendingJob); err != nil {
+			log.Error().Err(err).Str("jobId", jobID).Msg("Failed to persist pending triage job")
+			httpError(w, http.StatusInternalServerError, "failed to create job")
+			return
+		}
+	}
+
+	// Start TriagePipeline Step Function (DDR-061: init-session type)
+	if sfnClient == nil || triageSfnArn == "" {
+		log.Error().Str("jobId", jobID).Msg("Triage pipeline not configured")
+		httpError(w, http.StatusServiceUnavailable, "triage processing is not available")
+		return
+	}
+
+	sfnInput, _ := json.Marshal(map[string]interface{}{
+		"type":              "triage-init-session",
+		"sessionId":         req.SessionID,
+		"jobId":             jobID,
+		"model":             model,
+		"expectedFileCount": req.ExpectedFileCount,
+	})
+	_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(triageSfnArn),
+		Input:           aws.String(string(sfnInput)),
+		Name:            aws.String(jobID),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start triage pipeline")
+		httpError(w, http.StatusInternalServerError, fmt.Sprintf("failed to start processing: %v", err))
+		return
+	}
+
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Int("expectedFileCount", req.ExpectedFileCount).
+		Msg("Triage init: SFN started (DDR-061)")
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"id":        jobID,
+		"sessionId": req.SessionID,
+	})
+}
+
+// POST /api/triage/update-files
+// Body: {"sessionId": "uuid", "jobId": "triage-xxx", "expectedFileCount": 42}
+func handleTriageUpdateFiles(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleTriageUpdateFiles")
+
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID         string `json:"sessionId"`
+		JobID             string `json:"jobId"`
+		ExpectedFileCount int    `json:"expectedFileCount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" || req.JobID == "" || req.ExpectedFileCount <= 0 {
+		httpError(w, http.StatusBadRequest, "sessionId, jobId, and expectedFileCount > 0 are required")
+		return
+	}
+
+	if sessionStore != nil {
+		if err := sessionStore.UpdateTriageExpectedCount(context.Background(), req.SessionID, req.JobID, req.ExpectedFileCount); err != nil {
+			log.Error().Err(err).Msg("Failed to update expectedFileCount")
+			httpError(w, http.StatusInternalServerError, "failed to update file count")
+			return
+		}
+	}
+
+	log.Info().
+		Str("sessionId", req.SessionID).
+		Str("jobId", req.JobID).
+		Int("expectedFileCount", req.ExpectedFileCount).
+		Msg("Triage file count updated (DDR-061)")
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"expectedFileCount": req.ExpectedFileCount,
+	})
+}
+
 // POST /api/triage/start
 // Body: {"sessionId": "uuid", "model": "optional-model-name"}
 func handleTriageStart(w http.ResponseWriter, r *http.Request) {
@@ -198,6 +334,33 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	if job.Error != "" {
 		resp["error"] = job.Error
 	}
+
+	// DDR-061: Include per-file statuses during processing phase
+	if job.Status == "processing" && fileProcessStore != nil {
+		fileResults, err := fileProcessStore.GetFileResults(context.Background(), sessionID, jobID)
+		if err == nil && len(fileResults) > 0 {
+			fileStatuses := make([]map[string]interface{}, 0, len(fileResults))
+			for _, fr := range fileResults {
+				status := map[string]interface{}{
+					"key":       fr.OriginalKey,
+					"filename":  fr.Filename,
+					"status":    fr.Status,
+					"converted": fr.Converted,
+				}
+				if fr.ThumbnailKey != "" {
+					status["thumbnailUrl"] = fmt.Sprintf("/api/media/thumbnail?key=%s", fr.ThumbnailKey)
+				}
+				if fr.Error != "" {
+					status["error"] = fr.Error
+				}
+				fileStatuses = append(fileStatuses, status)
+			}
+			resp["fileStatuses"] = fileStatuses
+			resp["expectedFileCount"] = job.ExpectedFileCount
+			resp["processedCount"] = job.ProcessedCount
+		}
+	}
+
 	respondJSON(w, http.StatusOK, resp)
 }
 

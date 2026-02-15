@@ -12,6 +12,7 @@ graph TD
         MediaWeb["media-web\n(local web server)"]
         MediaLambda["media-lambda\n(AWS Lambda)"]
         TriageLambdaBin["triage-lambda\n(DDR-053)"]
+        MediaProcessBin["media-process-lambda\n(DDR-061)"]
         DescLambdaBin["description-lambda\n(DDR-053)"]
         DownloadLambdaBin["download-lambda\n(DDR-053)"]
         PublishLambdaBin["publish-lambda\n(DDR-053)"]
@@ -48,6 +49,8 @@ graph TD
     TriageLambdaBin --> Chat
     TriageLambdaBin --> FileHandler
     TriageLambdaBin --> LambdaBoot
+    MediaProcessBin --> FileHandler
+    MediaProcessBin --> LambdaBoot
     DescLambdaBin --> Chat
     DescLambdaBin --> LambdaBoot
     DownloadLambdaBin --> LambdaBoot
@@ -118,8 +121,10 @@ graph TD
         SelectionLambda["Selection Lambda\n(4GB, 15min)"]
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
         VideoLambda["Video Lambda\n(4GB, 15min)"]
+        MediaProcessLambda["MediaProcess Lambda\n(1GB, 5min, DDR-061)"]
         StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish)"]
         DynamoDB["DynamoDB\n(session state, TTL 24h)"]
+        FileProcessingDB["DynamoDB\n(file processing, TTL 4h,\nDDR-061)"]
     end
 
     S3Media["S3 Media Bucket\n(24h auto-expiration)"]
@@ -156,6 +161,10 @@ graph TD
     VideoLambda --> S3Media
     APILambda --> SSM
     Browser -->|"presigned PUT"| S3Media
+    S3Media -->|"S3 ObjectCreated"| MediaProcessLambda
+    MediaProcessLambda --> FileProcessingDB
+    MediaProcessLambda --> DynamoDB
+    MediaProcessLambda --> S3Media
 ```
 
 ### Key Design Decisions
@@ -175,7 +184,7 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Lambda | Purpose | Container | Memory | Timeout | Credentials |
 |--------|---------|-----------|--------|---------|-------------|
 | API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s | Gemini + Instagram |
-| Triage | Triage pipeline: prepare, poll Gemini, run, cleanup originals (DDR-053, DDR-059, DDR-060) | Light | 2 GB | 10 min | Gemini |
+| Triage | Triage pipeline: prepare (list S3), run (presigned URLs, AI triage, thumbnails, cleanup) (DDR-053, DDR-059, DDR-060) | Light | 2 GB | 10 min | Gemini |
 | Description | Caption generation + feedback (DDR-053) | Light | 2 GB | 5 min | Gemini |
 | Download | ZIP bundle creation (DDR-053) | Light | 2 GB | 10 min | None |
 | Publish | Publish pipeline: containers, poll Instagram, finalize (DDR-053) | Light | 256 MB | 5 min | Instagram |
@@ -196,7 +205,7 @@ The API Lambda dispatches all long-running work asynchronously — **no backgrou
 |----------|----------|-----------|
 | Selection | Step Functions `StartExecution` | Thumbnail → Selection pipeline |
 | Enhancement | Step Functions `StartExecution` | Enhancement + Video pipeline |
-| Triage | Step Functions `StartExecution` (DDR-052) | Triage Lambda (prepare → poll Gemini → run) |
+| Triage | Step Functions `StartExecution` (DDR-052) | Triage Lambda (prepare → run; DDR-060 bypasses Gemini polling) |
 | Publish | Step Functions `StartExecution` (DDR-052) | Publish Lambda (containers → poll Instagram → finalize) |
 | Description | `lambda:Invoke` (async) | Description Lambda (DDR-053) |
 | Download | `lambda:Invoke` (async) | Download Lambda (DDR-053) |
@@ -217,11 +226,133 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 | Download | `cmd/download-lambda` | Async invoke | `{type, sessionId, jobId, keys[]}` | writes to DynamoDB |
 | Publish | `cmd/publish-lambda` | Step Functions | `{type, sessionId, jobId, groupId, ...}` | returns JSON + writes DynamoDB |
 | Thumbnail | `cmd/thumbnail-lambda` | Step Functions | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
-| Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, mediaKeys[]}` | `{selectedCount, excludedCount}` |
+| Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, model, mediaKeys[], thumbnailKeys[]}` | `{jobId, selectedCount, excludedCount, sceneGroupCount}` |
 | Enhancement | `cmd/enhance-lambda` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
 | Video | `cmd/video-lambda` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
 
 Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
+
+### Media Selection Pipeline
+
+The Selection Pipeline orchestrates thumbnail generation and AI-powered media ranking. The API Lambda dispatches work to the `SelectionPipeline` Step Function, which fans out thumbnail generation in parallel before running a single Gemini selection pass.
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as API Lambda
+    participant DB as DynamoDB
+    participant S3
+    participant SFN as SelectionPipeline
+    participant Thumb as Thumbnail Lambda
+    participant Sel as Selection Lambda
+    participant Gemini as Gemini API
+
+    FE->>API: POST /api/selection/start
+    API->>DB: Write pending SelectionJob
+    API->>S3: ListObjectsV2 "sessionId/"
+    API->>SFN: StartExecution
+    API-->>FE: 202 Accepted with jobId
+
+    Note over SFN,Sel: Step Function — SelectionPipeline
+
+    loop ThumbnailMap per file — maxConcurrency 20
+        SFN->>Thumb: Invoke with sessionId + key
+        Thumb->>S3: GetObject — download media file
+        Thumb->>Thumb: GenerateThumbnail — 400px JPEG
+        Thumb->>S3: PutObject thumbnails/name.jpg
+        Thumb-->>SFN: Return thumbnailKey + originalKey
+    end
+
+    SFN->>Sel: RunSelection — all keys + thumbnailKeys
+    Sel->>S3: Download all media files to /tmp
+    Note over Sel: Presigned URLs for videos — DDR-060
+    Sel->>Gemini: AskMediaSelectionJSON
+    Gemini-->>Sel: JSON — selected + excluded + sceneGroups
+    Sel->>DB: Write complete SelectionJob
+    Sel-->>SFN: Return counts
+
+    loop Frontend polls until status is complete
+        FE->>API: GET /api/selection/id/results
+        API->>DB: GetSelectionJob
+        API-->>FE: status + selected + excluded + sceneGroups
+    end
+```
+
+**Key details:**
+
+- **ThumbnailMap** runs up to 20 Thumbnail Lambda invocations in parallel. Each downloads one file from S3, generates a 400px JPEG thumbnail (ffmpeg for videos, pure Go for images), and uploads it to `{sessionId}/thumbnails/{baseName}.jpg`. Retries: 2 attempts with exponential backoff. Soft failures do not halt the pipeline.
+- **RunSelection** receives the full input plus the collected `thumbnailKeys[]` from the Map state. It downloads all media, generates S3 presigned URLs for videos so Gemini can fetch them directly (DDR-060), and calls `AskMediaSelectionJSON` for structured ranking. Results (selected, excluded, scene groups) are written to DynamoDB as a complete `SelectionJob`.
+- **Pipeline timeout**: 30 minutes. Selection Lambda timeout: 15 minutes (4 GB memory, Heavy container with ffmpeg).
+
+### Media Triage Pipeline
+
+The Triage Pipeline evaluates uploaded media and categorizes each file as keep or discard. After DDR-060, the Gemini polling step is bypassed — videos use S3 presigned URLs or inline Gemini Files API uploads instead.
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as API Lambda
+    participant DB as DynamoDB
+    participant S3
+    participant SFN as TriagePipeline
+    participant TL as Triage Lambda
+    participant Gemini as Gemini API
+
+    FE->>API: POST /api/triage/start
+    API->>DB: Write pending TriageJob
+    API->>SFN: StartExecution
+    API-->>FE: 202 Accepted with jobId
+
+    Note over SFN,TL: Step Function — TriagePipeline
+
+    SFN->>TL: triage-prepare
+    TL->>S3: ListObjectsV2 "sessionId/"
+    TL->>DB: Update phase to analyzing
+    TL-->>SFN: hasVideos false — DDR-060
+
+    Note over SFN: Choice — hasVideos? No — skip to run
+
+    SFN->>TL: triage-run
+    Note over TL: Pass 1 — Videos
+    TL->>S3: GetObject each video to /tmp
+    Note over TL: Small video 10 MiB or less — presigned URL
+    TL->>S3: PresignGetObject — DDR-060
+    Note over TL: Large video over 10 MiB — Gemini Files API
+    TL->>Gemini: Files.Upload + poll until active
+    Note over TL: Pass 2 — Images
+    TL->>S3: GetObject each image to /tmp
+    Note over TL: Interleave videos and images across batches
+    TL->>Gemini: AskMediaTriage
+    Gemini-->>TL: Keep/discard verdicts per file
+    Note over TL: DDR-059 — Generate + store thumbnails
+    TL->>S3: PutObject thumbnails/name.jpg per image
+    TL->>DB: Write TriageJob — keep + discard items
+    Note over TL: DDR-059 — Delete originals from S3
+    TL->>S3: DeleteObject each original file
+
+    loop Frontend polls until status is complete
+        FE->>API: GET /api/triage/id/results
+        API->>DB: GetTriageJob
+        API-->>FE: status + keep + discard + phase
+    end
+
+    FE->>API: POST /api/triage/id/confirm
+    API->>S3: DeleteObject user-confirmed discard keys
+    Note over API: DDR-059 — Clean up all remaining S3 artifacts
+    API->>S3: Delete all objects under sessionId/
+    API-->>FE: deleted count
+```
+
+**Key details:**
+
+- **triage-prepare** lists S3 objects and counts supported files for progress tracking. It always returns `HasVideos: false` (DDR-060) so the Step Function skips the `triage-check-gemini` polling loop. The Gemini polling path still exists in the state machine for potential future use.
+- **triage-run** uses a two-pass download strategy to conserve `/tmp` disk space:
+  - **Pass 1 (videos)**: Download, extract metadata. Small videos (<=10 MiB) get an S3 presigned URL; large videos (>10 MiB) are uploaded to the Gemini Files API with inline polling. Local files are deleted after URL/upload.
+  - **Pass 2 (images)**: Download and keep on disk for thumbnail generation.
+  - Videos and images are interleaved before batching to prevent all-video batches that would overwhelm the Gemini API.
+- **DDR-059 cleanup**: After `AskMediaTriage` succeeds, thumbnails are generated from `/tmp` files and uploaded to S3. Original files are then deleted immediately. The 1-day S3 lifecycle policy acts as a safety net for abandoned sessions.
+- **Confirm cleanup**: When the user confirms triage results, the API Lambda deletes the user-selected discard keys, then cleans up all remaining S3 artifacts (thumbnails, compressed videos) in a background goroutine.
+- **Pipeline timeout**: 30 minutes. Triage Lambda timeout: 10 minutes (2 GB memory, Light container).
 
 ## Security Architecture
 
@@ -317,4 +448,4 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 
 ---
 
-**Last Updated**: 2026-02-14
+**Last Updated**: 2026-02-15

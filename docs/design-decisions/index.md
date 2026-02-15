@@ -73,6 +73,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-058](./DDR-058-cloudconvert-style-file-list-restyle.md) | 2026-02-14 | CloudConvert-Style File List and Processing UI Restyle | Accepted |
 | [DDR-059](./DDR-059-frugal-triage-s3-cleanup.md) | 2026-02-14 | Frugal Triage — Early S3 Cleanup via Thumbnails | Accepted |
 | [DDR-060](./DDR-060-s3-presigned-urls-for-gemini.md) | 2026-02-14 | S3 Presigned URLs for Gemini Video Transfer | Accepted |
+| [DDR-061](./DDR-061-s3-event-driven-per-file-processing.md) | 2026-02-15 | S3 Event-Driven Per-File Processing | Accepted |
 
 ---
 
@@ -87,4 +88,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-14 (DDR-060)
+**Last Updated**: 2026-02-15 (DDR-061)

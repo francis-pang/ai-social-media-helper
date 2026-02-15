@@ -4,6 +4,9 @@ import type {
   PickResponse,
   TriageStartRequest,
   TriageStartResponse,
+  TriageInitRequest,
+  TriageInitResponse,
+  TriageUpdateFilesRequest,
   TriageResults,
   TriageConfirmRequest,
   TriageConfirmResponse,
@@ -318,6 +321,26 @@ export function startTriage(
   req: TriageStartRequest,
 ): Promise<TriageStartResponse> {
   return fetchJSON<TriageStartResponse>("/api/triage/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Initialize a triage job before file uploads complete (DDR-061). */
+export function initTriage(
+  req: TriageInitRequest,
+): Promise<TriageInitResponse> {
+  return fetchJSON<TriageInitResponse>("/api/triage/init", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Update the expected file count during upload (DDR-061). */
+export function updateTriageFiles(
+  req: TriageUpdateFilesRequest,
+): Promise<{ expectedFileCount: number }> {
+  return fetchJSON<{ expectedFileCount: number }>("/api/triage/update-files", {
     method: "POST",
     body: JSON.stringify(req),
   });

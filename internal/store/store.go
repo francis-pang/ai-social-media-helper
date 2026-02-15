@@ -53,6 +53,15 @@ type SessionStore interface {
 	// GetTriageJob retrieves a triage job. Returns nil, nil if not found.
 	GetTriageJob(ctx context.Context, sessionID, jobID string) (*TriageJob, error)
 
+	// --- Triage atomic counters (DDR-061) ---
+
+	// IncrementTriageProcessedCount atomically increments processedCount on a triage job.
+	// Returns the new count after incrementing.
+	IncrementTriageProcessedCount(ctx context.Context, sessionID, jobID string) (int, error)
+
+	// UpdateTriageExpectedCount sets the expectedFileCount on a triage job.
+	UpdateTriageExpectedCount(ctx context.Context, sessionID, jobID string, count int) error
+
 	// --- Selection jobs ---
 
 	// PutSelectionJob creates or replaces a selection job record.
@@ -134,9 +143,11 @@ type TriageJob struct {
 	SessionID     string       `json:"-" dynamodbav:"-"`
 	Status        string       `json:"status" dynamodbav:"status"`
 	Phase         string       `json:"phase,omitempty" dynamodbav:"phase,omitempty"`
-	TotalFiles    int          `json:"totalFiles,omitempty" dynamodbav:"totalFiles,omitempty"`
-	UploadedFiles int          `json:"uploadedFiles,omitempty" dynamodbav:"uploadedFiles,omitempty"`
-	Keep          []TriageItem `json:"keep,omitempty" dynamodbav:"keep,omitempty"`
+	TotalFiles        int          `json:"totalFiles,omitempty" dynamodbav:"totalFiles,omitempty"`
+	UploadedFiles     int          `json:"uploadedFiles,omitempty" dynamodbav:"uploadedFiles,omitempty"`
+	ExpectedFileCount int          `json:"expectedFileCount,omitempty" dynamodbav:"expectedFileCount,omitempty"`
+	ProcessedCount    int          `json:"processedCount,omitempty" dynamodbav:"processedCount,omitempty"`
+	Keep              []TriageItem `json:"keep,omitempty" dynamodbav:"keep,omitempty"`
 	Discard       []TriageItem `json:"discard,omitempty" dynamodbav:"discard,omitempty"`
 	Error         string       `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }

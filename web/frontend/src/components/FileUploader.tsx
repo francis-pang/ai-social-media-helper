@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, startTriage } from "../api/client";
+import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, getTriageResults, startTriage } from "../api/client";
 import { selectedPaths, uploadSessionId, triageJobId, navigateToStep } from "../app";
 
 /** Media file MIME types accepted by the uploader. */
@@ -18,6 +18,8 @@ interface UploadedFile {
 
 const files = signal<UploadedFile[]>([]);
 const error = signal<string | null>(null);
+const triageInitialized = signal<boolean>(false);
+const triagePolling = signal<boolean>(false);
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -140,6 +142,20 @@ function addFiles(newFiles: File[]) {
 
   files.value = [...files.value, ...toAdd];
 
+  // DDR-061: Initialize triage on first file drop
+  if (!triageInitialized.value) {
+    triageInitialized.value = true;
+    initTriageSession(sessionId, files.value.length);
+  } else {
+    // Update expected count if adding more files
+    const jobId = triageJobId.value;
+    if (jobId) {
+      updateTriageFiles({ sessionId, jobId, expectedFileCount: files.value.length }).catch(
+        (e) => console.error("Failed to update file count:", e)
+      );
+    }
+  }
+
   // Start uploading each file
   for (const entry of toAdd) {
     uploadFile(sessionId, entry.name, fileMap.get(entry.name)!);
@@ -186,6 +202,36 @@ function removeFile(filename: string) {
   files.value = files.value.filter((f) => f.name !== filename);
 }
 
+async function initTriageSession(sessionId: string, fileCount: number) {
+  try {
+    const res = await initTriage({ sessionId, expectedFileCount: fileCount });
+    triageJobId.value = res.id;
+    // Start polling for per-file results immediately
+    triagePolling.value = true;
+    pollTriageResults(res.id, sessionId);
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "Failed to initialize triage";
+  }
+}
+
+async function pollTriageResults(jobId: string, sessionId: string) {
+  while (triagePolling.value) {
+    try {
+      const results = await getTriageResults(jobId, sessionId);
+      // If complete, navigate to processing view
+      if (results.status === "complete" || results.status === "error") {
+        triagePolling.value = false;
+        selectedPaths.value = files.value.filter(f => f.status === "done").map(f => f.key);
+        navigateToStep("processing");
+        return;
+      }
+    } catch {
+      // Ignore polling errors
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+}
+
 function clearAll() {
   files.value = [];
   uploadSessionId.value = null;
@@ -195,6 +241,8 @@ function clearAll() {
 export function resetFileUploaderState() {
   files.value = [];
   error.value = null;
+  triageInitialized.value = false;
+  triagePolling.value = false;
 }
 
 /** Proceed to triage: start the triage job and navigate to processing (DDR-042). */
@@ -487,13 +535,19 @@ export function FileUploader() {
             >
               Clear all
             </button>
-            <button
-              class="primary"
-              onClick={proceedToTriage}
-              disabled={!allDone || doneCount === 0}
-            >
-              Continue to Triage
-            </button>
+            {triageInitialized.value ? (
+              <span style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
+                Triage will start automatically
+              </span>
+            ) : (
+              <button
+                class="primary"
+                onClick={proceedToTriage}
+                disabled={!allDone || doneCount === 0}
+              >
+                Continue to Triage
+              </button>
+            )}
           </div>
         </div>
       )}

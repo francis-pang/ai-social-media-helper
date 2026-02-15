@@ -88,6 +88,12 @@ func init() {
 		log.Warn().Msg("DYNAMO_TABLE_NAME not set — DynamoDB store disabled")
 	}
 
+	// Initialize file processing store for per-file triage status (DDR-061).
+	fpTableName := os.Getenv("FILE_PROCESSING_TABLE_NAME")
+	if fpTableName != "" && sessionStore != nil {
+		fileProcessStore = store.NewFileProcessingStore(sessionStore.Client(), fpTableName)
+	}
+
 	// Initialize Lambda client for async invocations (DDR-050, DDR-053).
 	lambdaClient = lambdasvc.NewFromConfig(cfg)
 	descriptionLambdaArn = os.Getenv("DESCRIPTION_LAMBDA_ARN")
@@ -203,6 +209,8 @@ func main() {
 	mux.HandleFunc("/api/upload-multipart/init", handleMultipartInit)         // DDR-054
 	mux.HandleFunc("/api/upload-multipart/complete", handleMultipartComplete) // DDR-054
 	mux.HandleFunc("/api/upload-multipart/abort", handleMultipartAbort)       // DDR-054
+	mux.HandleFunc("/api/triage/init", handleTriageInit)
+	mux.HandleFunc("/api/triage/update-files", handleTriageUpdateFiles)
 	mux.HandleFunc("/api/triage/start", handleTriageStart)
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
 	mux.HandleFunc("/api/selection/start", handleSelectionStart)

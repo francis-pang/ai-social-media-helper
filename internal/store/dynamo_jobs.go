@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -269,6 +270,69 @@ func (s *DynamoStore) DeletePostGroup(ctx context.Context, sessionID, groupID st
 	}
 
 	log.Debug().Str("sessionId", sessionID).Str("groupId", groupID).Msg("Post group deleted")
+	return nil
+}
+
+// --- Triage atomic counter operations (DDR-061) ---
+
+// IncrementTriageProcessedCount atomically increments the processedCount field
+// on a TriageJob record. Used by the MediaProcess Lambda after processing each file.
+func (s *DynamoStore) IncrementTriageProcessedCount(ctx context.Context, sessionID, jobID string) (int, error) {
+	pk := sessionPK(sessionID)
+	sk := skTriage + jobID
+
+	result, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression: aws.String("ADD processedCount :inc"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":inc": &types.AttributeValueMemberN{Value: "1"},
+		},
+		ReturnValues: types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("increment processedCount %s/%s: %w", sessionID, jobID, err)
+	}
+
+	// Extract the new processedCount value
+	newCount := 0
+	if attr, ok := result.Attributes["processedCount"]; ok {
+		if n, ok := attr.(*types.AttributeValueMemberN); ok {
+			if v, err := strconv.Atoi(n.Value); err == nil {
+				newCount = v
+			}
+		}
+	}
+
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Int("processedCount", newCount).Msg("Triage processedCount incremented")
+	return newCount, nil
+}
+
+// UpdateTriageExpectedCount atomically sets the expectedFileCount field
+// on a TriageJob record. Used by POST /api/triage/update-files when files are added/removed.
+func (s *DynamoStore) UpdateTriageExpectedCount(ctx context.Context, sessionID, jobID string, count int) error {
+	pk := sessionPK(sessionID)
+	sk := skTriage + jobID
+
+	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression: aws.String("SET expectedFileCount = :count"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":count": &types.AttributeValueMemberN{Value: strconv.Itoa(count)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update expectedFileCount %s/%s to %d: %w", sessionID, jobID, count, err)
+	}
+
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Int("expectedFileCount", count).Msg("Triage expectedFileCount updated")
 	return nil
 }
 

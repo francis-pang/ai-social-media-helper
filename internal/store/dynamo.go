@@ -59,6 +59,18 @@ func NewDynamoStore(client *dynamodb.Client, tableName string) *DynamoStore {
 	}
 }
 
+// Client returns the underlying DynamoDB client.
+// Used by MediaProcess Lambda to share one client across stores (DDR-061).
+func (s *DynamoStore) Client() *dynamodb.Client {
+	return s.client
+}
+
+// QueryBySKPrefix queries all items for a session where SK begins with the given prefix.
+// Public wrapper for cross-package use (DDR-061: MediaProcess Lambda).
+func (s *DynamoStore) QueryBySKPrefix(ctx context.Context, sessionID, skPrefix string) ([]map[string]types.AttributeValue, error) {
+	return s.queryBySKPrefix(ctx, sessionID, skPrefix)
+}
+
 // --- Internal helpers ---
 
 // sessionPK returns the partition key for a session.

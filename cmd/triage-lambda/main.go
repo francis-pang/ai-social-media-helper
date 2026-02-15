@@ -1,9 +1,9 @@
 // Package main provides a Lambda entry point for the triage pipeline (DDR-053).
 //
-// This Lambda handles the 3 steps of the Triage Pipeline Step Function (DDR-052):
-//   - triage-prepare: List S3 objects and count files (DDR-060: no Gemini upload)
-//   - triage-check-gemini: Poll Gemini Files API (skipped when HasVideos=false)
-//   - triage-run: Call AskMediaTriage with presigned URLs for videos (DDR-060)
+// This Lambda handles the 3 steps of the Triage Pipeline Step Function (DDR-061):
+//   - triage-init-session: Write session record with expectedFileCount (DDR-061)
+//   - triage-check-processing: Poll processedCount vs expectedFileCount (DDR-061)
+//   - triage-run: Read file manifest from DDB, call AskMediaTriage (DDR-061)
 //
 // Container: Light (Dockerfile.light — no ffmpeg needed)
 // Memory: 2 GB
@@ -11,7 +11,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -36,12 +35,20 @@ import (
 
 var coldStart = true
 
+// maxPresignedURLVideoBytes is the largest video file that can be referenced
+// via an S3 presigned URL in the Gemini FileData.FileURI field. The Gemini API
+// returns INVALID_ARGUMENT for HTTPS-URL-referenced files above ~15 MiB.
+// We use 10 MiB as a conservative threshold to leave headroom.
+// Videos exceeding this limit are uploaded to the Gemini Files API instead.
+const maxPresignedURLVideoBytes int64 = 10 * 1024 * 1024 // 10 MiB
+
 // AWS clients initialized at cold start.
 var (
-	s3Client      *s3.Client
-	presignClient *s3.PresignClient
-	mediaBucket   string
-	sessionStore  *store.DynamoStore
+	s3Client         *s3.Client
+	presignClient    *s3.PresignClient
+	mediaBucket      string
+	sessionStore     *store.DynamoStore
+	fileProcessStore *store.FileProcessingStore
 )
 
 func init() {
@@ -55,6 +62,11 @@ func init() {
 	mediaBucket = s3s.Bucket
 	sessionStore = lambdaboot.InitDynamo(aws.Config, "DYNAMO_TABLE_NAME")
 	lambdaboot.LoadGeminiKey(aws.SSM)
+
+	fpTableName := os.Getenv("FILE_PROCESSING_TABLE_NAME")
+	if fpTableName != "" {
+		fileProcessStore = store.NewFileProcessingStore(sessionStore.Client(), fpTableName)
+	}
 
 	lambdaboot.StartupLog("triage-lambda", initStart).
 		S3Bucket("mediaBucket", mediaBucket).
@@ -71,29 +83,30 @@ func main() {
 
 // TriageEvent is the input from Step Functions.
 type TriageEvent struct {
-	Type           string   `json:"type"`
-	SessionID      string   `json:"sessionId"`
-	JobID          string   `json:"jobId"`
-	Model          string   `json:"model,omitempty"`
-	VideoFileNames []string `json:"videoFileNames,omitempty"`
+	Type              string   `json:"type"`
+	SessionID         string   `json:"sessionId"`
+	JobID             string   `json:"jobId"`
+	Model             string   `json:"model,omitempty"`
+	ExpectedFileCount int      `json:"expectedFileCount,omitempty"`
+	VideoFileNames    []string `json:"videoFileNames,omitempty"`
 }
 
-// TriagePrepareResult is returned by the triage-prepare handler.
-type TriagePrepareResult struct {
-	SessionID      string   `json:"sessionId"`
-	JobID          string   `json:"jobId"`
-	Model          string   `json:"model"`
-	HasVideos      bool     `json:"hasVideos"`
-	VideoFileNames []string `json:"videoFileNames"`
+// TriageInitResult is returned by the triage-init-session handler.
+type TriageInitResult struct {
+	SessionID string `json:"sessionId"`
+	JobID     string `json:"jobId"`
+	Model     string `json:"model"`
 }
 
-// TriageCheckGeminiResult is returned by the triage-check-gemini handler.
-type TriageCheckGeminiResult struct {
-	SessionID      string   `json:"sessionId"`
-	JobID          string   `json:"jobId"`
-	Model          string   `json:"model"`
-	AllActive      bool     `json:"allActive"`
-	VideoFileNames []string `json:"videoFileNames"`
+// TriageCheckProcessingResult is returned by the triage-check-processing handler.
+type TriageCheckProcessingResult struct {
+	SessionID      string `json:"sessionId"`
+	JobID          string `json:"jobId"`
+	Model          string `json:"model"`
+	AllProcessed   bool   `json:"allProcessed"`
+	ProcessedCount int    `json:"processedCount"`
+	ExpectedCount  int    `json:"expectedCount"`
+	ErrorCount     int    `json:"errorCount"`
 }
 
 func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
@@ -108,10 +121,10 @@ func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
 		Msg("Triage Lambda invoked")
 
 	switch event.Type {
-	case "triage-prepare":
-		return handleTriagePrepare(ctx, event)
-	case "triage-check-gemini":
-		return handleTriageCheckGemini(ctx, event)
+	case "triage-init-session":
+		return handleTriageInitSession(ctx, event)
+	case "triage-check-processing":
+		return handleTriageCheckProcessing(ctx, event)
 	case "triage-run":
 		return nil, handleTriageRun(ctx, event)
 	default:
@@ -119,108 +132,99 @@ func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
 	}
 }
 
-// handleTriagePrepare lists S3 objects and counts supported files for progress
-// tracking. Videos are handled via S3 presigned URLs in triage-run (DDR-060),
-// so this step no longer downloads files or uploads to the Gemini Files API.
-// Always returns HasVideos: false so the Step Function skips triage-check-gemini.
-func handleTriagePrepare(ctx context.Context, event TriageEvent) (*TriagePrepareResult, error) {
-	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
-		ID: event.JobID, Status: "processing", Phase: "uploading",
-	})
-
-	// List S3 objects for the session.
-	prefix := event.SessionID + "/"
-	listResult, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: &mediaBucket, Prefix: &prefix,
-	})
-	if err != nil {
-		setTriageError(ctx, event, fmt.Sprintf("Failed to list S3 objects: %v", err))
-		return nil, fmt.Errorf("list S3 objects: %w", err)
-	}
-	log.Debug().Int("objectCount", len(listResult.Contents)).Str("sessionId", event.SessionID).Msg("S3 ListObjectsV2 completed")
-	if len(listResult.Contents) == 0 {
-		setTriageError(ctx, event, "No files found for session")
-		return nil, fmt.Errorf("no files found for session")
-	}
-
-	// Count supported files for progress tracking.
-	var totalSupported int
-	for _, obj := range listResult.Contents {
-		ext := strings.ToLower(filepath.Ext(filepath.Base(*obj.Key)))
-		if filehandler.IsSupported(ext) {
-			totalSupported++
-		}
-	}
-
+// handleTriageInitSession writes the session record with expectedFileCount
+// and sets the phase to "uploading". (DDR-061)
+func handleTriageInitSession(ctx context.Context, event TriageEvent) (*TriageInitResult, error) {
 	model := event.Model
 	if model == "" {
 		model = chat.DefaultModelName
 	}
 
-	// Go straight to analyzing — videos use presigned URLs in triage-run (DDR-060).
 	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
-		ID: event.JobID, Status: "processing", Phase: "analyzing",
-		TotalFiles: totalSupported, UploadedFiles: totalSupported,
+		ID:                event.JobID,
+		Status:            "processing",
+		Phase:             "uploading",
+		ExpectedFileCount: event.ExpectedFileCount,
 	})
 
-	log.Info().Int("totalSupported", totalSupported).Str("sessionId", event.SessionID).Msg("Triage prepare complete (DDR-060: no Gemini upload)")
+	log.Info().
+		Str("sessionId", event.SessionID).
+		Str("jobId", event.JobID).
+		Int("expectedFileCount", event.ExpectedFileCount).
+		Msg("Triage session initialized (DDR-061)")
 
-	return &TriagePrepareResult{
-		SessionID:      event.SessionID,
-		JobID:          event.JobID,
-		Model:          model,
-		HasVideos:      false, // DDR-060: videos handled via presigned URLs in triage-run
-		VideoFileNames: nil,
+	return &TriageInitResult{
+		SessionID: event.SessionID,
+		JobID:     event.JobID,
+		Model:     model,
 	}, nil
 }
 
-// handleTriageCheckGemini polls the Gemini Files API to check if all uploaded
-// videos have finished processing.
-func handleTriageCheckGemini(ctx context.Context, event TriageEvent) (*TriageCheckGeminiResult, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY not configured")
+// handleTriageCheckProcessing reads processedCount and expectedFileCount from DDB
+// and returns whether all files are processed. (DDR-061)
+func handleTriageCheckProcessing(ctx context.Context, event TriageEvent) (*TriageCheckProcessingResult, error) {
+	job, err := sessionStore.GetTriageJob(ctx, event.SessionID, event.JobID)
+	if err != nil || job == nil {
+		return nil, fmt.Errorf("failed to read triage job: %v", err)
 	}
 
-	client, err := chat.NewGeminiClient(ctx, apiKey)
-	if err != nil {
-		return nil, fmt.Errorf("create Gemini client: %w", err)
+	processedCount := job.ProcessedCount
+	expectedCount := job.ExpectedFileCount
+	allProcessed := expectedCount > 0 && processedCount >= expectedCount
+
+	// Count errors from file processing table
+	errorCount := 0
+	if fileProcessStore != nil {
+		results, err := fileProcessStore.GetFileResults(ctx, event.SessionID, event.JobID)
+		if err == nil {
+			for _, r := range results {
+				if r.Status == "invalid" || r.Status == "error" {
+					errorCount++
+				}
+			}
+		}
 	}
 
-	// Keep phase as gemini_processing while polling.
+	// Update phase based on progress
+	phase := "uploading"
+	if processedCount > 0 {
+		phase = "processing"
+	}
+	if allProcessed {
+		phase = "analyzing"
+	}
 	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
-		ID: event.JobID, Status: "processing", Phase: "gemini_processing",
+		ID:                event.JobID,
+		Status:            "processing",
+		Phase:             phase,
+		ProcessedCount:    processedCount,
+		ExpectedFileCount: expectedCount,
+		TotalFiles:        expectedCount,
+		UploadedFiles:     processedCount,
 	})
 
-	allActive := true
-	for _, fileName := range event.VideoFileNames {
-		file, err := client.Files.Get(ctx, fileName, nil)
-		if err != nil {
-			log.Warn().Err(err).Str("fileName", fileName).Msg("Failed to check Gemini file status")
-			return nil, fmt.Errorf("check Gemini file %s: %w", fileName, err)
-		}
-		log.Debug().Str("fileName", fileName).Str("state", string(file.State)).Msg("Gemini file status")
-		if file.State == genai.FileStateProcessing {
-			allActive = false
-		} else if file.State == genai.FileStateFailed {
-			setTriageError(ctx, event, fmt.Sprintf("Gemini file processing failed: %s", fileName))
-			return nil, fmt.Errorf("Gemini file processing failed: %s", fileName)
-		}
-	}
+	log.Info().
+		Bool("allProcessed", allProcessed).
+		Int("processedCount", processedCount).
+		Int("expectedCount", expectedCount).
+		Int("errorCount", errorCount).
+		Str("sessionId", event.SessionID).
+		Msg("Processing status check (DDR-061)")
 
-	log.Info().Bool("allActive", allActive).Int("videoCount", len(event.VideoFileNames)).Str("sessionId", event.SessionID).Msg("Gemini status check complete")
-
-	return &TriageCheckGeminiResult{
+	return &TriageCheckProcessingResult{
 		SessionID:      event.SessionID,
 		JobID:          event.JobID,
 		Model:          event.Model,
-		AllActive:      allActive,
-		VideoFileNames: event.VideoFileNames,
+		AllProcessed:   allProcessed,
+		ProcessedCount: processedCount,
+		ExpectedCount:  expectedCount,
+		ErrorCount:     errorCount,
 	}, nil
 }
 
-// handleTriageRun calls AskMediaTriage with all prepared media and writes
-// results to DynamoDB.
+// handleTriageRun reads the pre-processed file manifest from the file-processing
+// table, generates presigned URLs, calls Gemini for AI triage, and writes results.
+// Simplified from the original that downloaded/processed files (DDR-061).
 func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	jobStart := time.Now()
 
@@ -234,126 +238,68 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		return setTriageError(ctx, event, fmt.Sprintf("Failed to create Gemini client: %v", err))
 	}
 
-	// Re-download files from S3 (Standard Workflows run each step in separate invocations).
-	prefix := event.SessionID + "/"
-	listResult, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: &mediaBucket, Prefix: &prefix,
-	})
-	if err != nil {
-		return setTriageError(ctx, event, fmt.Sprintf("Failed to list S3 objects: %v", err))
+	// Read processed file manifest from file-processing table (DDR-061)
+	if fileProcessStore == nil {
+		return setTriageError(ctx, event, "File processing store not configured")
 	}
 
-	tmpDir := filepath.Join(os.TempDir(), "triage", event.SessionID)
-	os.MkdirAll(tmpDir, 0755)
-	defer os.RemoveAll(tmpDir)
+	fileResults, err := fileProcessStore.GetFileResults(ctx, event.SessionID, event.JobID)
+	if err != nil {
+		return setTriageError(ctx, event, fmt.Sprintf("Failed to read file results: %v", err))
+	}
 
+	// Filter to valid files only
+	var validFiles []store.FileResult
+	for _, fr := range fileResults {
+		if fr.Status == "valid" {
+			validFiles = append(validFiles, fr)
+		}
+	}
+
+	if len(validFiles) == 0 {
+		return setTriageError(ctx, event, "No valid media files found after processing")
+	}
+
+	log.Info().Int("totalResults", len(fileResults)).Int("validFiles", len(validFiles)).Str("sessionId", event.SessionID).Msg("File manifest read from DDB (DDR-061)")
+
+	// Build MediaFile list from file results using presigned URLs
 	var allMediaFiles []*filehandler.MediaFile
 	var s3Keys []string
-	pathToKeyMap := make(map[string]string) // Map local path -> S3 key
+	pathToKeyMap := make(map[string]string)
 
-	// Process files in two passes to conserve /tmp disk space:
-	// Pass 1: Videos — download, extract metadata, generate presigned URL, then
-	//         delete the local file immediately (Gemini uses the presigned URL).
-	// Pass 2: Images — download and keep on disk (needed for thumbnail generation
-	//         by AskMediaTriage and the post-triage thumbnail upload).
-	// This prevents /tmp exhaustion when sessions contain large video files.
-
-	// Collect supported keys first so we can process them in order.
-	type s3Object struct {
-		key      string
-		filename string
-		ext      string
-		isVideo  bool
-	}
-	var supported []s3Object
-	for _, obj := range listResult.Contents {
-		key := *obj.Key
-		filename := filepath.Base(key)
-		ext := strings.ToLower(filepath.Ext(filename))
-		if !filehandler.IsSupported(ext) {
-			continue
-		}
-		supported = append(supported, s3Object{key: key, filename: filename, ext: ext, isVideo: filehandler.IsVideo(ext)})
-	}
-
-	log.Info().
-		Int("totalS3Objects", len(listResult.Contents)).
-		Int("supportedFiles", len(supported)).
-		Str("sessionId", event.SessionID).
-		Msg("S3 listing complete — starting two-pass download")
-
-	// Pass 1: Videos — download, load metadata, get presigned URL, delete local file.
-	for _, obj := range supported {
-		if !obj.isVideo {
-			continue
+	for _, fr := range validFiles {
+		// Use processedKey (converted file) if available, otherwise originalKey
+		useKey := fr.ProcessedKey
+		if useKey == "" {
+			useKey = fr.OriginalKey
 		}
 
-		localPath := filepath.Join(tmpDir, obj.filename)
-		if err := downloadToFile(ctx, obj.key, localPath); err != nil {
-			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to download video file")
-			continue
-		}
-
-		mf, err := filehandler.LoadMediaFile(localPath)
+		// Generate presigned URL for the file
+		url, err := generatePresignedURL(ctx, useKey)
 		if err != nil {
-			os.Remove(localPath)
-			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to load video file")
+			log.Warn().Err(err).Str("key", useKey).Msg("Failed to generate presigned URL")
 			continue
 		}
 
-		// Generate presigned URL so Gemini fetches directly from S3 (DDR-060).
-		url, err := generatePresignedURL(ctx, obj.key)
-		if err != nil {
-			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to generate presigned URL for video")
-			// Keep the file on disk as fallback — AskMediaTriage will compress+upload.
-		} else {
-			mf.PresignedURL = url
-			// Presigned URL obtained — delete local file to free /tmp space.
-			os.Remove(localPath)
-			log.Debug().Str("key", obj.key).Msg("Video: presigned URL generated, local file deleted to save /tmp space")
+		mimeType := fr.MimeType
+		if mimeType == "" {
+			mimeType, _ = filehandler.GetMIMEType(strings.ToLower(filepath.Ext(fr.Filename)))
+		}
+
+		mf := &filehandler.MediaFile{
+			Path:         fr.Filename, // Use filename as path (for key mapping)
+			MIMEType:     mimeType,
+			Size:         fr.FileSize,
+			PresignedURL: url,
 		}
 
 		allMediaFiles = append(allMediaFiles, mf)
-		s3Keys = append(s3Keys, obj.key)
-		pathToKeyMap[localPath] = obj.key
+		s3Keys = append(s3Keys, fr.OriginalKey)
+		pathToKeyMap[fr.Filename] = fr.OriginalKey
 	}
-
-	log.Info().
-		Int("videosProcessed", len(allMediaFiles)).
-		Str("sessionId", event.SessionID).
-		Msg("Pass 1 complete (videos) — starting pass 2 (images)")
-
-	// Pass 2: Images — download and keep on disk for thumbnail generation.
-	for _, obj := range supported {
-		if obj.isVideo {
-			continue
-		}
-
-		localPath := filepath.Join(tmpDir, obj.filename)
-		if err := downloadToFile(ctx, obj.key, localPath); err != nil {
-			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to download image file")
-			continue
-		}
-
-		mf, err := filehandler.LoadMediaFile(localPath)
-		if err != nil {
-			log.Warn().Err(err).Str("key", obj.key).Msg("Failed to load image file")
-			continue
-		}
-
-		allMediaFiles = append(allMediaFiles, mf)
-		s3Keys = append(s3Keys, obj.key)
-		pathToKeyMap[localPath] = obj.key
-	}
-
-	log.Info().
-		Int("totalMediaFiles", len(allMediaFiles)).
-		Int("supportedFiles", len(supported)).
-		Str("sessionId", event.SessionID).
-		Msg("Pass 2 complete (images) — all files processed")
 
 	if len(allMediaFiles) == 0 {
-		return setTriageError(ctx, event, "No supported media files found in the uploaded session")
+		return setTriageError(ctx, event, "No media files with valid presigned URLs")
 	}
 
 	model := event.Model
@@ -361,68 +307,37 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		model = chat.DefaultModelName
 	}
 
-	// Create key mapper function
 	keyMapper := func(localPath string) string {
 		return pathToKeyMap[localPath]
 	}
 
-	// Create compressed video store callback
+	// No storeCompressed callback needed — files are already processed (DDR-061)
 	storeCompressed := func(ctx context.Context, sessionID, originalKey, compressedPath string) (string, error) {
 		return uploadCompressedVideo(ctx, sessionID, originalKey, compressedPath)
 	}
 
-	// Update phase: sending query to Gemini and waiting for AI response.
 	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
 		ID: event.JobID, Status: "processing", Phase: "analyzing",
 		TotalFiles: len(allMediaFiles),
 	})
 
-	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Msg("Calling AskMediaTriage")
+	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Msg("Calling AskMediaTriage (DDR-061: presigned URLs from manifest)")
 	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper)
 	if err != nil {
 		return setTriageError(ctx, event, fmt.Sprintf("Triage failed: %v", err))
 	}
 
-	// --- DDR-059: Generate and store thumbnails for images ---
-	// Generate thumbnails from temp files still on disk, upload to S3 at
-	// {sessionId}/thumbnails/{baseName}.webp. This allows us to delete the
-	// originals immediately after, since the review UI only needs thumbnails.
-	thumbnailURLs := make(map[int]string) // media index -> thumbnail URL
-	for i, mf := range allMediaFiles {
-		ext := strings.ToLower(filepath.Ext(mf.Path))
-		if !filehandler.IsImage(ext) {
-			continue // Videos use placeholder SVG; no thumbnail needed
+	// Build thumbnail URL map from file results
+	thumbnailURLs := make(map[int]string)
+	for i, fr := range validFiles {
+		if fr.ThumbnailKey != "" {
+			thumbnailURLs[i] = fmt.Sprintf("/api/media/thumbnail?key=%s", fr.ThumbnailKey)
 		}
-
-		thumbData, _, err := filehandler.GenerateThumbnail(mf, 400)
-		if err != nil {
-			log.Warn().Err(err).Str("path", mf.Path).Msg("Failed to generate thumbnail — falling back to original key URL")
-			continue
-		}
-
-		baseName := strings.TrimSuffix(filepath.Base(mf.Path), filepath.Ext(mf.Path))
-		thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", event.SessionID, baseName)
-		contentType := "image/jpeg"
-
-		_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:      &mediaBucket,
-			Key:         &thumbKey,
-			Body:        bytes.NewReader(thumbData),
-			ContentType: &contentType,
-		})
-		if err != nil {
-			log.Warn().Err(err).Str("thumbKey", thumbKey).Msg("Failed to upload thumbnail to S3 — falling back to original key URL")
-			continue
-		}
-
-		thumbnailURLs[i] = fmt.Sprintf("/api/media/thumbnail?key=%s", thumbKey)
-		log.Debug().Str("thumbKey", thumbKey).Int("size", len(thumbData)).Msg("Thumbnail uploaded to S3")
 	}
-	log.Info().Int("thumbnailsUploaded", len(thumbnailURLs)).Int("totalImages", len(allMediaFiles)).Msg("Thumbnail generation complete")
 
-	// Map results to store items.
+	// Map results to store items
 	var keep, discard []store.TriageItem
-	seen := make(map[int]bool) // track which media indices got a verdict
+	seen := make(map[int]bool)
 	for _, tr := range triageResults {
 		idx := tr.Media - 1
 		if idx < 0 || idx >= len(allMediaFiles) {
@@ -431,7 +346,6 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		seen[idx] = true
 		key := s3Keys[idx]
 
-		// Use pre-generated thumbnail URL for images, original key URL for videos (DDR-059).
 		thumbURL := fmt.Sprintf("/api/media/thumbnail?key=%s", key)
 		if url, ok := thumbnailURLs[idx]; ok {
 			thumbURL = url
@@ -452,15 +366,11 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		}
 	}
 
-	// Safety net: any media items missing from the AI response default to "keep"
-	// so that nothing is silently lost.
+	// Safety net: missing items default to "keep"
 	for i, mf := range allMediaFiles {
 		if !seen[i] {
 			key := s3Keys[i]
-			log.Warn().
-				Int("media", i+1).
-				Str("filename", filepath.Base(mf.Path)).
-				Msg("Media item missing from AI triage results — defaulting to keep")
+			log.Warn().Int("media", i+1).Str("filename", filepath.Base(mf.Path)).Msg("Media item missing from AI triage results — defaulting to keep")
 
 			thumbURL := fmt.Sprintf("/api/media/thumbnail?key=%s", key)
 			if url, ok := thumbnailURLs[i]; ok {
@@ -482,12 +392,14 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		ID: event.JobID, Status: "complete", Keep: keep, Discard: discard,
 	})
 
-	log.Info().Int("keep", len(keep)).Int("discard", len(discard)).Dur("duration", time.Since(jobStart)).Msg("Triage complete")
+	log.Info().Int("keep", len(keep)).Int("discard", len(discard)).Dur("duration", time.Since(jobStart)).Msg("Triage complete (DDR-061)")
 
-	// --- DDR-059: Delete original files from S3 ---
-	// Now that thumbnails are stored and results are in DynamoDB, delete the
-	// original files to free S3 storage. Exclude thumbnails/ and compressed/ prefixes.
-	deleteOriginals(ctx, event.SessionID, s3Keys)
+	// Delete original uploads (processed files and thumbnails remain)
+	originalKeys := make([]string, 0, len(validFiles))
+	for _, fr := range validFiles {
+		originalKeys = append(originalKeys, fr.OriginalKey)
+	}
+	deleteOriginals(ctx, event.SessionID, originalKeys)
 
 	metrics.New("AiSocialMedia").
 		Dimension("JobType", "triage").
@@ -599,6 +511,138 @@ func generatePresignedURL(ctx context.Context, key string) (string, error) {
 		return "", fmt.Errorf("presign GetObject: %w", err)
 	}
 	return result.URL, nil
+}
+
+// uploadVideoToGemini uploads a local video file to the Gemini Files API and
+// waits for it to finish processing. Returns the File object whose URI can be
+// used in FileData.FileURI for GenerateContent calls. The caller is responsible
+// for deleting the uploaded file after use via client.Files.Delete.
+func uploadVideoToGemini(ctx context.Context, client *genai.Client, localPath, mimeType string) (*genai.File, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat file: %w", err)
+	}
+
+	log.Debug().
+		Str("path", localPath).
+		Int64("size_bytes", info.Size()).
+		Str("mime_type", mimeType).
+		Msg("Starting Gemini Files API upload for large video")
+
+	uploadStart := time.Now()
+	file, err := client.Files.Upload(ctx, f, &genai.UploadFileConfig{
+		MIMEType: mimeType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload file: %w", err)
+	}
+
+	log.Debug().
+		Str("name", file.Name).
+		Str("uri", file.URI).
+		Dur("upload_duration", time.Since(uploadStart)).
+		Msg("Video uploaded to Gemini, waiting for processing...")
+
+	// Poll until the file is ACTIVE (processed) or FAILED.
+	const pollInterval = 5 * time.Second
+	const pollTimeout = 5 * time.Minute
+	deadline := time.Now().Add(pollTimeout)
+
+	for file.State == genai.FileStateProcessing {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timeout waiting for Gemini file processing after %v", pollTimeout)
+		}
+		time.Sleep(pollInterval)
+		file, err = client.Files.Get(ctx, file.Name, nil)
+		if err != nil {
+			return nil, fmt.Errorf("get file state: %w", err)
+		}
+	}
+
+	if file.State == genai.FileStateFailed {
+		return nil, fmt.Errorf("Gemini file processing failed: %s", file.Name)
+	}
+
+	log.Info().
+		Str("name", file.Name).
+		Str("uri", file.URI).
+		Str("state", string(file.State)).
+		Dur("total_duration", time.Since(uploadStart)).
+		Msg("Gemini Files API upload complete")
+
+	return file, nil
+}
+
+// interleaveMedia distributes videos evenly among images so that triage
+// batches receive a balanced mix of media types. Given 20 videos and 49
+// images, interleaving produces a sequence like [V, I, I, V, I, I, V, I, I, ...]
+// ensuring each batch of 20 items contains roughly 6 videos and 14 images
+// instead of one all-video batch that overwhelms the Gemini API.
+//
+// Both slices must have the same length; pathToKeyMap is keyed by local path
+// and does not need reordering.
+func interleaveMedia(files []*filehandler.MediaFile, keys []string) ([]*filehandler.MediaFile, []string) {
+	// Separate into videos and images, preserving their paired keys.
+	type entry struct {
+		file *filehandler.MediaFile
+		key  string
+	}
+	var videos, images []entry
+	for i, mf := range files {
+		ext := strings.ToLower(filepath.Ext(mf.Path))
+		if filehandler.IsVideo(ext) {
+			videos = append(videos, entry{mf, keys[i]})
+		} else {
+			images = append(images, entry{mf, keys[i]})
+		}
+	}
+
+	if len(videos) == 0 || len(images) == 0 {
+		return files, keys // Nothing to interleave.
+	}
+
+	// Distribute: for each video, emit a proportional number of images.
+	imagesPerSlot := max(len(images)/len(videos), 1)
+
+	result := make([]entry, 0, len(files))
+	vi, ii := 0, 0
+	for vi < len(videos) || ii < len(images) {
+		if vi < len(videos) {
+			result = append(result, videos[vi])
+			vi++
+		}
+		for j := 0; j < imagesPerSlot && ii < len(images); j++ {
+			result = append(result, images[ii])
+			ii++
+		}
+	}
+	// Append any remaining images.
+	for ii < len(images) {
+		result = append(result, images[ii])
+		ii++
+	}
+
+	// Rebuild the parallel slices.
+	newFiles := make([]*filehandler.MediaFile, len(result))
+	newKeys := make([]string, len(result))
+	for i, e := range result {
+		newFiles[i] = e.file
+		newKeys[i] = e.key
+	}
+
+	log.Info().
+		Int("videos", len(videos)).
+		Int("images", len(images)).
+		Int("imagesPerSlot", imagesPerSlot).
+		Msg("Media files interleaved to distribute videos across triage batches")
+
+	return newFiles, newKeys
 }
 
 func downloadToFile(ctx context.Context, key, localPath string) error {

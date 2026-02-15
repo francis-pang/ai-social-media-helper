@@ -39,6 +39,12 @@ export interface TriageResults {
   totalFiles?: number;
   /** Number of files uploaded to Gemini so far (during uploading phase). */
   uploadedFiles?: number;
+  /** Per-file processing statuses during upload phase (DDR-061). */
+  fileStatuses?: FileProcessingStatus[];
+  /** Expected total file count (DDR-061). */
+  expectedFileCount?: number;
+  /** Files processed so far by MediaProcess Lambda (DDR-061). */
+  processedCount?: number;
   keep: TriageItem[];
   discard: TriageItem[];
   error?: string;
@@ -67,6 +73,36 @@ export interface TriageStartRequest {
 /** Response from POST /api/triage/start. */
 export interface TriageStartResponse {
   id: string;
+}
+
+/** Response from POST /api/triage/init (DDR-061). */
+export interface TriageInitResponse {
+  id: string;
+  sessionId: string;
+}
+
+/** Request body for POST /api/triage/init (DDR-061). */
+export interface TriageInitRequest {
+  sessionId: string;
+  expectedFileCount: number;
+  model?: string;
+}
+
+/** Request body for POST /api/triage/update-files (DDR-061). */
+export interface TriageUpdateFilesRequest {
+  sessionId: string;
+  jobId: string;
+  expectedFileCount: number;
+}
+
+/** Per-file processing status from the MediaProcess Lambda (DDR-061). */
+export interface FileProcessingStatus {
+  key: string;
+  filename: string;
+  status: "valid" | "invalid" | "error" | "processing";
+  converted: boolean;
+  thumbnailUrl?: string;
+  error?: string;
 }
 
 /** Request body for POST /api/triage/:id/confirm. */

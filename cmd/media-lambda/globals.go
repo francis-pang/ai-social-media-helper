@@ -19,6 +19,9 @@ var (
 	// DynamoDB session store for persistent job state (DDR-050).
 	sessionStore *store.DynamoStore
 
+	// File processing store for per-file status during triage (DDR-061).
+	fileProcessStore *store.FileProcessingStore
+
 	// Lambda client for async Lambda invocations (DDR-050, DDR-053).
 	lambdaClient *lambda.Client
 
