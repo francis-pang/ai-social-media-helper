@@ -39,6 +39,7 @@ func UploadCompressedVideo(ctx context.Context, client *s3.Client, bucket, sessi
 		Key:         &compressedKey,
 		Body:        compressedFile,
 		ContentType: &contentType,
+		Tagging:     ProjectTagging(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload compressed video to S3: %w", err)

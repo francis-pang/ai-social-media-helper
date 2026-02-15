@@ -140,6 +140,7 @@ func handleEnhance(ctx context.Context, event EnhanceEvent) (EnhanceResult, erro
 		Key:         &enhancedKey,
 		Body:        bytes.NewReader(state.CurrentData),
 		ContentType: &contentType,
+		Tagging:     s3util.ProjectTagging(),
 	})
 	if uploadErr != nil {
 		logger.Error().Err(uploadErr).Str("enhancedKey", enhancedKey).Msg("Failed to upload enhanced image")
@@ -162,6 +163,7 @@ func handleEnhance(ctx context.Context, event EnhanceEvent) (EnhanceResult, erro
 			Key:         &enhancedThumbKey,
 			Body:        bytes.NewReader(thumbData),
 			ContentType: &thumbContentType,
+			Tagging:     s3util.ProjectTagging(),
 		})
 	}
 

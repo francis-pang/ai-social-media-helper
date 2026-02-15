@@ -28,6 +28,7 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/gemini-media-cli/internal/s3util"
 	"github.com/rs/zerolog/log"
 )
 
@@ -177,6 +178,7 @@ func handler(ctx context.Context, event ThumbnailEvent) (ThumbnailResult, error)
 		Key:         &thumbKey,
 		Body:        bytes.NewReader(thumbData),
 		ContentType: &contentType,
+		Tagging:     s3util.ProjectTagging(),
 	})
 	if err != nil {
 		logger.Error().Err(err).Str("thumbKey", thumbKey).Msg("Failed to upload thumbnail")

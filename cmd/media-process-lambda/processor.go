@@ -40,6 +40,12 @@ func processFile(ctx context.Context, key string) error {
 
 	log.Info().Str("key", key).Str("sessionId", sessionID).Str("filename", filename).Msg("Processing file")
 
+	// Tag the browser-uploaded object for cost allocation (DDR-049).
+	// Presigned PUT URLs cannot embed tags, so we apply them on first access.
+	if err := s3util.TagObject(ctx, s3Client, mediaBucket, key); err != nil {
+		log.Warn().Err(err).Str("key", key).Msg("Failed to tag uploaded object (non-fatal)")
+	}
+
 	// Validate extension
 	ext := strings.ToLower(filepath.Ext(filename))
 	if !filehandler.IsSupported(ext) {
@@ -124,6 +130,7 @@ func processFile(ctx context.Context, key string) error {
 				Key:         &thumbnailKey,
 				Body:        bytes.NewReader(thumbData),
 				ContentType: &thumbContentType,
+				Tagging:     s3util.ProjectTagging(),
 			})
 			if err != nil {
 				log.Warn().Err(err).Str("thumbnailKey", thumbnailKey).Msg("Failed to upload thumbnail")
@@ -152,6 +159,7 @@ func processFile(ctx context.Context, key string) error {
 				Key:         &thumbnailKey,
 				Body:        bytes.NewReader(thumbData),
 				ContentType: &thumbContentType,
+				Tagging:     s3util.ProjectTagging(),
 			})
 			if err != nil {
 				log.Warn().Err(err).Str("thumbnailKey", thumbnailKey).Msg("Failed to upload video thumbnail")
@@ -187,6 +195,7 @@ func processFile(ctx context.Context, key string) error {
 						Key:         &processedKey,
 						Body:        compressedFile,
 						ContentType: &compressedContentType,
+						Tagging:     s3util.ProjectTagging(),
 					})
 					compressedFile.Close()
 					if err != nil {

@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/rs/zerolog/log"
+
+	"github.com/fpang/gemini-media-cli/internal/s3util"
 )
 
 // --- S3 Multipart Upload (DDR-054) ---
@@ -145,6 +147,7 @@ func handleMultipartInit(w http.ResponseWriter, r *http.Request) {
 		Bucket:      &mediaBucket,
 		Key:         &key,
 		ContentType: &req.ContentType,
+		Tagging:     s3util.ProjectTagging(),
 	})
 	if err != nil {
 		log.Error().Err(err).Str("key", key).Msg("Failed to create multipart upload")

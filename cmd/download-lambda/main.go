@@ -32,6 +32,7 @@ import (
 
 	"github.com/fpang/gemini-media-cli/internal/lambdaboot"
 	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/gemini-media-cli/internal/s3util"
 	"github.com/fpang/gemini-media-cli/internal/store"
 )
 
@@ -329,6 +330,7 @@ func dlCreateZip(ctx context.Context, files []dlFile, zipKey string) (int64, err
 	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &mediaBucket, Key: &zipKey,
 		Body: zipFile, ContentType: &contentType,
+		Tagging: s3util.ProjectTagging(),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("upload ZIP to S3: %w", err)

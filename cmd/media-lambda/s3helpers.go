@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
+
+	"github.com/fpang/gemini-media-cli/internal/s3util"
 )
 
 // --- S3 Helpers ---
@@ -113,6 +115,7 @@ func uploadCompressedVideo(ctx context.Context, sessionID, originalKey, compress
 		Key:         &compressedKey,
 		Body:        compressedFile,
 		ContentType: &contentType,
+		Tagging:     s3util.ProjectTagging(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload compressed video to S3: %w", err)

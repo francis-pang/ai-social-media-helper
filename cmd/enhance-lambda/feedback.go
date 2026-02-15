@@ -123,6 +123,7 @@ func handleEnhancementFeedback(ctx context.Context, event EnhanceEvent) error {
 		_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket: &mediaBucket, Key: &feedbackKey,
 			Body: bytes.NewReader(resultData), ContentType: &contentType,
+			Tagging: s3util.ProjectTagging(),
 		})
 		if uploadErr != nil {
 			log.Error().Err(uploadErr).Str("key", feedbackKey).Msg("Failed to upload feedback result")
@@ -138,6 +139,7 @@ func handleEnhancementFeedback(ctx context.Context, event EnhanceEvent) error {
 			s3Client.PutObject(ctx, &s3.PutObjectInput{
 				Bucket: &mediaBucket, Key: &thumbKey,
 				Body: bytes.NewReader(thumbData), ContentType: &thumbContentType,
+				Tagging: s3util.ProjectTagging(),
 			})
 		}
 

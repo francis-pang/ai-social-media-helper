@@ -33,6 +33,7 @@ import (
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/gemini-media-cli/internal/s3util"
 	"github.com/fpang/gemini-media-cli/internal/store"
 	"github.com/rs/zerolog/log"
 )
@@ -235,6 +236,7 @@ func handler(ctx context.Context, event VideoEvent) (VideoResult, error) {
 		Key:         &enhancedKey,
 		Body:        enhancedFile,
 		ContentType: &contentType,
+		Tagging:     s3util.ProjectTagging(),
 	})
 	if uploadErr != nil {
 		logger.Error().Err(uploadErr).Str("enhancedKey", enhancedKey).Msg("Failed to upload enhanced video")
