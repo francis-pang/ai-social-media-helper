@@ -49,12 +49,16 @@ import { getIdToken } from "../auth/cognito";
  */
 export const isCloudMode: boolean = !!import.meta.env.VITE_CLOUD_MODE;
 
+/** Client commit hash injected at build time (DDR-062: version identity). */
+const CLIENT_VERSION: string = import.meta.env.VITE_COMMIT_HASH || "dev";
+
 const BASE = "";
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  // Attach Cognito JWT token for authenticated API calls (DDR-028)
+  // Attach Cognito JWT token and client version for authenticated API calls (DDR-028, DDR-062)
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Client-Version": CLIENT_VERSION, // DDR-062: Send client version on every request
     ...((init?.headers as Record<string, string>) || {}),
   };
   const token = await getIdToken();
@@ -68,7 +72,10 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    const backendVersion = res.headers.get("x-app-version") || "unknown";
+    throw new Error(
+      `${res.status}: ${body} (backend: ${backendVersion}, client: ${CLIENT_VERSION})`,
+    );
   }
 
   // Guard against CloudFront error-response masking: when the API origin
@@ -78,14 +85,18 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const contentType = res.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     const body = await res.text();
+    const backendVersion = res.headers.get("x-app-version") || "unknown";
     // HTML body strongly suggests CloudFront served the SPA fallback page
     if (body.trimStart().startsWith("<!DOCTYPE") || body.trimStart().startsWith("<html")) {
       throw new Error(
-        `API request to ${url} was intercepted by the CDN — the endpoint may not exist or returned an auth error`,
+        `API request to ${url} was intercepted by the CDN — ` +
+        `the endpoint may not exist or returned an auth error. ` +
+        `Backend: ${backendVersion}, Client: ${CLIENT_VERSION}`,
       );
     }
     throw new Error(
-      `Expected JSON from ${url} but received ${contentType || "unknown content-type"}`,
+      `Expected JSON from ${url} but received ${contentType || "unknown content-type"} ` +
+      `(backend: ${backendVersion}, client: ${CLIENT_VERSION})`,
     );
   }
 
@@ -571,6 +582,8 @@ export function submitDescriptionFeedback(
 export interface HealthResponse {
   status: string;
   service: string;
+  commitHash: string;
+  buildTime: string;
   instagramConfigured: boolean;
 }
 

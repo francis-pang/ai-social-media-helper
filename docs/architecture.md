@@ -361,6 +361,22 @@ sequenceDiagram
 - **Confirm cleanup**: When the user confirms triage results, the API Lambda deletes the user-selected discard keys, then cleans up all remaining S3 artifacts (thumbnails, compressed videos) in a background goroutine.
 - **Pipeline timeout**: 30 minutes. Triage Lambda timeout: 10 minutes (2 GB memory, Light container).
 
+## Observability
+
+Version identity and structured logging across every layer. See [DDR-062](./design-decisions/DDR-062-observability-and-version-tracking.md).
+
+| Signal | Where | What |
+|--------|-------|------|
+| Commit hash | Health endpoint, cold-start log, `X-App-Version` header | Exact deployed version |
+| Build time | Health endpoint, cold-start log | When the binary was built |
+| Client version | `X-Client-Version` request header, error messages | Frontend/backend skew detection |
+| Route table | Cold-start log (INFO) | All registered HTTP routes |
+| Unmatched routes | Catch-all handler (WARN) | Distinguishes mux-404 from handler-404 |
+| API Gateway access | CloudWatch log group | Auth rejections, throttling, routing errors before Lambda |
+| SPA routing | CloudFront Function (viewer-request) | Rewrites non-file paths to index.html without masking API errors |
+
+Version identity is injected at build time via `-ldflags -X` (backend) and `VITE_COMMIT_HASH` (frontend). Every cold-start log includes `commitHash` and `buildTime`. Every API response includes `X-App-Version`. Error messages include both frontend and backend versions.
+
 ## Security Architecture
 
 Defense-in-depth with multiple layers. See [DDR-028](./design-decisions/DDR-028-security-hardening.md).
@@ -369,15 +385,15 @@ Defense-in-depth with multiple layers. See [DDR-028](./design-decisions/DDR-028-
 flowchart LR
     Browser --> CloudFront
     CloudFront -->|"x-origin-verify header"| APIGW["API Gateway"]
-    APIGW -->|"JWT Authorizer (Cognito)"| Lambda
+    APIGW -->|"JWT Authorizer (Cognito)\nAccess logging (DDR-062)"| Lambda
     Lambda -->|"Origin verify middleware\nInput validation\nContent-type allowlist\nRandom job IDs"| Processing["Process Request"]
 ```
 
 | Layer | Control |
 |-------|---------|
-| CloudFront | Origin-verify header, response security headers (CSP, HSTS) |
-| API Gateway | JWT authorizer (Cognito), throttling (100 burst / 50 rps), CORS |
-| Lambda | Origin-verify middleware, input validation, content-type allowlist, safe error messages |
+| CloudFront | Origin-verify header, response security headers (CSP, HSTS), SPA routing via CloudFront Function (DDR-062) |
+| API Gateway | JWT authorizer (Cognito), throttling (100 burst / 50 rps), CORS, access logging (DDR-062) |
+| Lambda | Origin-verify middleware, input validation, content-type allowlist, safe error messages, version headers (DDR-062) |
 | S3 | CORS locked to CloudFront domain, OAC (no public access) |
 
 ## Frontend Components
@@ -456,6 +472,7 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-053](./design-decisions/DDR-053-granular-lambda-split.md) — Granular Lambda split: Worker Lambda → 4 domain-specific Lambdas + shared bootstrap
 - [DDR-059](./design-decisions/DDR-059-frugal-triage-s3-cleanup.md) — Frugal Triage — Early S3 Cleanup via Thumbnails
 - [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
+- [DDR-062](./design-decisions/DDR-062-observability-and-version-tracking.md) — Observability gaps and version tracking
 
 ---
 

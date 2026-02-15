@@ -41,14 +41,17 @@ func (sr *statusRecorder) WriteHeader(code int) {
 	sr.ResponseWriter.WriteHeader(code)
 }
 
-// withMetrics is middleware that emits per-request EMF metrics and request logging:
-// RequestLatencyMs, RequestCount (with Endpoint and StatusCode dimensions).
+// withMetrics is middleware that emits per-request EMF metrics, request logging,
+// and X-App-Version response header (DDR-062: version identity on every response).
 func withMetrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if coldStart {
 			coldStart = false
-			log.Info().Str("function", "media-lambda").Msg("Cold start — first invocation")
+			log.Info().Str("function", "media-lambda").Str("commitHash", commitHash).Msg("Cold start — first invocation")
 		}
+
+		// DDR-062: Set version header on every response so DevTools shows the build.
+		w.Header().Set("X-App-Version", commitHash)
 
 		start := time.Now()
 		sr := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
@@ -60,11 +63,15 @@ func withMetrics(next http.Handler) http.Handler {
 		// Normalize endpoint for dimension (avoid high cardinality from path params)
 		endpoint := normalizeEndpoint(r.URL.Path)
 
+		// DDR-062: Enhanced request logging — request ID, content-type, client version.
 		log.Debug().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", sr.statusCode).
 			Dur("duration", elapsed).
+			Str("requestId", r.Header.Get("X-Amzn-Requestid")).
+			Str("contentType", sr.Header().Get("Content-Type")).
+			Str("clientVersion", r.Header.Get("X-Client-Version")).
 			Msg(fmt.Sprintf("%s %s %d", r.Method, r.URL.Path, sr.statusCode))
 
 		metrics.New("AiSocialMedia").

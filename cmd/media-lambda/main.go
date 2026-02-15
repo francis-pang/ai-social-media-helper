@@ -180,8 +180,10 @@ func init() {
 		log.Warn().Msg("Instagram credentials not configured — publishing disabled")
 	}
 
-	// Emit consolidated cold-start log for troubleshooting.
+	// Emit consolidated cold-start log for troubleshooting (DDR-062: version identity).
 	logging.NewStartupLogger("media-lambda").
+		CommitHash(commitHash).
+		BuildTime(buildTime).
 		InitDuration(time.Since(initStart)).
 		S3Bucket("mediaBucket", mediaBucket).
 		DynamoTable("sessions", dynamoTableName).
@@ -228,6 +230,27 @@ func main() {
 	mux.HandleFunc("/api/media/full", handleFullImage)
 	mux.HandleFunc("/api/media/compressed", handleCompressedVideo)
 
+	// Catch-all: log unmatched routes explicitly (DDR-062: distinguish mux-404 from handler-404).
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Warn().Str("method", r.Method).Str("path", r.URL.Path).Msg("No route matched — returning 404")
+		httpError(w, http.StatusNotFound, "not found")
+	})
+
+	// Log registered routes at cold start for troubleshooting (DDR-062).
+	routes := []string{
+		"/api/health", "/api/upload-url",
+		"/api/upload-multipart/init", "/api/upload-multipart/complete", "/api/upload-multipart/abort",
+		"/api/triage/init", "/api/triage/update-files", "/api/triage/start", "/api/triage/",
+		"/api/selection/start", "/api/selection/",
+		"/api/enhance/start", "/api/enhance/",
+		"/api/download/start", "/api/download/",
+		"/api/description/generate", "/api/description/",
+		"/api/publish/start", "/api/publish/",
+		"/api/session/invalidate",
+		"/api/media/thumbnail", "/api/media/full", "/api/media/compressed",
+	}
+	log.Info().Strs("routes", routes).Int("count", len(routes)).Msg("HTTP routes registered")
+
 	// Wrap with middleware chain: metrics -> origin-verify -> handler
 	handler := withMetrics(withOriginVerify(mux))
 
@@ -241,6 +264,8 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":              "ok",
 		"service":             "ai-social-media-helper",
+		"commitHash":          commitHash,
+		"buildTime":           buildTime,
 		"instagramConfigured": igClient != nil,
 	})
 }

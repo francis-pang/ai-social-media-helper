@@ -15,6 +15,8 @@ import (
 // Lambda was configured when troubleshooting from CloudWatch logs.
 type StartupLogger struct {
 	name         string
+	commitHash   string
+	buildTime    string
 	initDuration time.Duration
 
 	s3Buckets     map[string]string
@@ -39,6 +41,18 @@ func NewStartupLogger(name string) *StartupLogger {
 		features:      make(map[string]bool),
 		config:        make(map[string]string),
 	}
+}
+
+// CommitHash sets the git commit hash baked into the binary at build time (DDR-062).
+func (s *StartupLogger) CommitHash(hash string) *StartupLogger {
+	s.commitHash = hash
+	return s
+}
+
+// BuildTime sets the UTC build timestamp baked into the binary at build time (DDR-062).
+func (s *StartupLogger) BuildTime(t string) *StartupLogger {
+	s.buildTime = t
+	return s
 }
 
 // S3Bucket registers an S3 bucket used by this Lambda.
@@ -104,8 +118,8 @@ func EnvOrDefault(envVar, defaultVal string) string {
 func (s *StartupLogger) Log() {
 	evt := log.Info()
 
-	// Lambda identity — auto-collected from runtime environment.
-	evt = evt.Dict("lambda", zerolog.Dict().
+	// Lambda identity — auto-collected from runtime environment (DDR-062: version identity).
+	lambdaDict := zerolog.Dict().
 		Str("name", s.name).
 		Str("functionName", os.Getenv("AWS_LAMBDA_FUNCTION_NAME")).
 		Str("version", os.Getenv("AWS_LAMBDA_FUNCTION_VERSION")).
@@ -115,7 +129,16 @@ func (s *StartupLogger) Log() {
 		Str("runtime", os.Getenv("AWS_EXECUTION_ENV")).
 		Str("goVersion", runtime.Version()).
 		Str("arch", runtime.GOARCH).
-		Str("logLevel", os.Getenv("GEMINI_LOG_LEVEL")))
+		Str("logLevel", os.Getenv("GEMINI_LOG_LEVEL"))
+
+	if s.commitHash != "" {
+		lambdaDict = lambdaDict.Str("commitHash", s.commitHash)
+	}
+	if s.buildTime != "" {
+		lambdaDict = lambdaDict.Str("buildTime", s.buildTime)
+	}
+
+	evt = evt.Dict("lambda", lambdaDict)
 
 	// Resources — only non-empty maps are attached.
 	resources := zerolog.Dict()

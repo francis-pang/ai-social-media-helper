@@ -20,6 +20,7 @@ ARG ECR_ACCOUNT_ID=123456789012
 
 # Stage 1: Build the Go binary
 # BuildKit cache mounts persist Go module + build caches across builds (DDR-047)
+# COMMIT_HASH is injected by CodeBuild and baked into the binary via -ldflags (DDR-062)
 FROM public.ecr.aws/docker/library/golang:1.24 AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -27,10 +28,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 COPY . .
 ARG CMD_TARGET
+ARG COMMIT_HASH=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /handler ./cmd/${CMD_TARGET}
+    go build -trimpath -ldflags="-s -w -X main.commitHash=${COMMIT_HASH} -X main.buildTime=$(date -u +%Y%m%dT%H%M%SZ)" -o /handler ./cmd/${CMD_TARGET}
 
 # Stage 2: ffmpeg cache — variable expansion in FROM is supported, not in COPY --from
 FROM ${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 AS ffmpeg-cache
