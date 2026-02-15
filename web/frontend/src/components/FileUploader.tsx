@@ -13,6 +13,7 @@ interface UploadedFile {
   key: string;
   status: "pending" | "uploading" | "done" | "error";
   progress: number; // 0-100
+  loaded: number; // bytes uploaded so far
   error?: string;
 }
 
@@ -20,6 +21,44 @@ const files = signal<UploadedFile[]>([]);
 const error = signal<string | null>(null);
 const triageInitialized = signal<boolean>(false);
 const triagePolling = signal<boolean>(false);
+
+/** Current aggregate upload speed in bytes per second. */
+const uploadSpeed = signal<number>(0);
+let speedTimer: ReturnType<typeof setInterval> | null = null;
+let prevSpeedBytes = 0;
+let prevSpeedTime = 0;
+
+function getTotalLoaded(): number {
+  return files.value.reduce((sum, f) => sum + f.loaded, 0);
+}
+
+function startSpeedTracking() {
+  if (speedTimer) return;
+  prevSpeedBytes = getTotalLoaded();
+  prevSpeedTime = performance.now();
+  speedTimer = setInterval(() => {
+    const now = performance.now();
+    const currentLoaded = getTotalLoaded();
+    const elapsedSec = (now - prevSpeedTime) / 1000;
+    if (elapsedSec > 0) {
+      uploadSpeed.value = (currentLoaded - prevSpeedBytes) / elapsedSec;
+    }
+    prevSpeedBytes = currentLoaded;
+    prevSpeedTime = now;
+    // Stop when no uploads are active
+    if (!files.value.some((f) => f.status === "uploading")) {
+      stopSpeedTracking();
+    }
+  }, 1000);
+}
+
+function stopSpeedTracking() {
+  if (speedTimer) {
+    clearInterval(speedTimer);
+    speedTimer = null;
+  }
+  uploadSpeed.value = 0;
+}
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -134,6 +173,7 @@ function addFiles(newFiles: File[]) {
       key: `${sessionId}/${file.name}`,
       status: "pending",
       progress: 0,
+      loaded: 0,
     });
     fileMap.set(file.name, file);
   }
@@ -163,7 +203,8 @@ function addFiles(newFiles: File[]) {
 }
 
 async function uploadFile(sessionId: string, filename: string, file: File) {
-  updateFile(filename, { status: "uploading", progress: 0 });
+  updateFile(filename, { status: "uploading", progress: 0, loaded: 0 });
+  startSpeedTracking();
 
   try {
     let key: string;
@@ -171,7 +212,7 @@ async function uploadFile(sessionId: string, filename: string, file: File) {
     if (file.size > MULTIPART_THRESHOLD) {
       // Large file: use S3 multipart upload with parallel chunks (DDR-054)
       key = await uploadToS3Multipart(sessionId, file, (loaded, total) => {
-        updateFile(filename, { progress: Math.round((loaded / total) * 100) });
+        updateFile(filename, { progress: Math.round((loaded / total) * 100), loaded });
       });
     } else {
       // Small file: use single presigned PUT (existing path)
@@ -179,11 +220,11 @@ async function uploadFile(sessionId: string, filename: string, file: File) {
       key = res.key;
 
       await uploadToS3(res.uploadUrl, file, (loaded, total) => {
-        updateFile(filename, { progress: Math.round((loaded / total) * 100) });
+        updateFile(filename, { progress: Math.round((loaded / total) * 100), loaded });
       });
     }
 
-    updateFile(filename, { status: "done", progress: 100, key });
+    updateFile(filename, { status: "done", progress: 100, loaded: file.size, key });
   } catch (e) {
     updateFile(filename, {
       status: "error",
@@ -235,6 +276,7 @@ async function pollTriageResults(jobId: string, sessionId: string) {
 function clearAll() {
   files.value = [];
   uploadSessionId.value = null;
+  stopSpeedTracking();
 }
 
 /** Reset FileUploader state (called from navigateToLanding — DDR-042). */
@@ -243,6 +285,7 @@ export function resetFileUploaderState() {
   error.value = null;
   triageInitialized.value = false;
   triagePolling.value = false;
+  stopSpeedTracking();
 }
 
 /** Proceed to triage: start the triage job and navigate to processing (DDR-042). */
@@ -273,6 +316,12 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatSpeed(bytesPerSec: number): string {
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
 /** Map file status to status-badge CSS modifier. */
@@ -392,15 +441,18 @@ export function FileUploader() {
                 {f.name}
               </span>
 
-              {/* Size */}
+              {/* Size / upload progress */}
               <span
                 style={{
                   fontSize: "0.75rem",
                   color: "var(--color-text-secondary)",
                   flexShrink: 0,
+                  fontVariantNumeric: "tabular-nums",
                 }}
               >
-                {formatSize(f.size)}
+                {f.status === "uploading"
+                  ? `${formatSize(f.loaded)} / ${formatSize(f.size)}`
+                  : formatSize(f.size)}
               </span>
 
               {/* Status badge (DDR-058) */}
@@ -451,7 +503,14 @@ export function FileUploader() {
             <span>
               Uploading {doneCount} of {totalFiles} files...
             </span>
-            <span>{overallProgress}%</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+              {uploadSpeed.value > 0 && (
+                <span style={{ marginRight: "0.5rem" }}>
+                  {formatSpeed(uploadSpeed.value)}
+                </span>
+              )}
+              {overallProgress}%
+            </span>
           </div>
           <div
             style={{
