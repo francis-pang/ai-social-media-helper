@@ -251,8 +251,9 @@ func main() {
 	}
 	log.Info().Strs("routes", routes).Int("count", len(routes)).Msg("HTTP routes registered")
 
-	// Wrap with middleware chain: metrics -> origin-verify -> handler
-	handler := withMetrics(withOriginVerify(mux))
+	// Wrap with middleware chain: metrics -> origin-verify -> user-identity -> handler
+	// Risk 15: withUserIdentity extracts Cognito sub for session ownership checks.
+	handler := withMetrics(withOriginVerify(withUserIdentity(mux)))
 
 	adapter := httpadapter.NewV2(handler)
 	lambda.Start(adapter.ProxyWithContext)

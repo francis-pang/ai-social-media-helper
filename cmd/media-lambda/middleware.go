@@ -1,23 +1,56 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/awslabs/aws-lambda-go-api-proxy/core"
 	"github.com/fpang/gemini-media-cli/internal/metrics"
 	"github.com/rs/zerolog/log"
 )
+
+// contextKey is a typed key for request context values (Risk 15: session ownership).
+type contextKey string
+
+const userSubKey contextKey = "userSub"
+
+// withUserIdentity extracts the Cognito `sub` claim from the API Gateway JWT
+// authorizer context and stores it in the Go request context. Risk 15: IDOR prevention.
+func withUserIdentity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCtx, ok := core.GetAPIGatewayV2ContextFromContext(r.Context())
+		if ok && reqCtx.Authorizer != nil && reqCtx.Authorizer.JWT != nil {
+			if sub, exists := reqCtx.Authorizer.JWT.Claims["sub"]; exists && sub != "" {
+				ctx := context.WithValue(r.Context(), userSubKey, sub)
+				r = r.WithContext(ctx)
+				log.Debug().Str("sub", sub).Str("path", r.URL.Path).Msg("User identity extracted from JWT")
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// getUserSub returns the authenticated user's Cognito sub from the request context.
+// Returns empty string for unauthenticated routes (health, thumbnail).
+func getUserSub(r *http.Request) string {
+	if sub, ok := r.Context().Value(userSubKey).(string); ok {
+		return sub
+	}
+	return ""
+}
 
 // withOriginVerify is middleware that rejects requests lacking the correct
 // x-origin-verify header. CloudFront injects this header via a custom origin
 // header, so direct API Gateway access is blocked. (DDR-028 Problem 1)
 func withOriginVerify(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Risk 5: No bypass when secret is empty — origin verification is mandatory.
+		// If ORIGIN_VERIFY_SECRET is not set, all requests are blocked (fail-closed).
 		if originVerifySecret == "" {
-			// Secret not configured — allow through (dev/initial deploy)
-			log.Debug().Str("path", r.URL.Path).Msg("Origin verification skipped — secret not configured")
-			next.ServeHTTP(w, r)
+			log.Error().Str("path", r.URL.Path).Msg("Blocked request: ORIGIN_VERIFY_SECRET not configured (fail-closed)")
+			httpError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		if r.Header.Get("x-origin-verify") != originVerifySecret {

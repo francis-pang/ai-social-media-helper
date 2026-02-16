@@ -35,6 +35,11 @@ func handleSessionInvalidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Risk 15: Verify session ownership.
+	if !ensureSessionOwner(w, r, req.SessionID) {
+		return
+	}
+
 	if sessionStore == nil {
 		httpError(w, http.StatusServiceUnavailable, "store not configured")
 		return

@@ -53,6 +53,11 @@ func handleUploadURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Risk 15: Verify or establish session ownership.
+	if !ensureSessionOwner(w, r, sessionID) {
+		return
+	}
+
 	// Sanitize and validate filename (DDR-028 Problem 4)
 	filename = filepath.Base(filename) // strip directory components
 	if err := validateFilename(filename); err != nil {

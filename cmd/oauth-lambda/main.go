@@ -17,6 +17,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -142,9 +144,49 @@ func init() {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/callback", handleOAuthCallback)
+	mux.HandleFunc("/oauth/authorize", handleOAuthAuthorize) // Risk 19D: Generate auth URL with CSRF state
 
 	adapter := httpadapter.NewV2(mux)
 	lambda.Start(adapter.ProxyWithContext)
+}
+
+// handleOAuthAuthorize generates the Instagram authorization URL with a CSRF state parameter.
+// Risk 19D: The state token is stored in SSM and verified on callback to prevent CSRF attacks.
+func handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondHTML(w, http.StatusMethodNotAllowed, "Error", "Method not allowed.")
+		return
+	}
+
+	// Generate a cryptographically random state token (CSRF protection).
+	stateBytes := make([]byte, 16)
+	if _, err := rand.Read(stateBytes); err != nil {
+		log.Error().Err(err).Msg("Failed to generate CSRF state token")
+		respondHTML(w, http.StatusInternalServerError, "Error", "Failed to generate security token.")
+		return
+	}
+	state := hex.EncodeToString(stateBytes)
+
+	// Store state in SSM for validation on callback (expires naturally — single use).
+	stateParam := "/ai-social-media/prod/oauth-csrf-state"
+	_, err := ssmClient.PutParameter(r.Context(), &ssm.PutParameterInput{
+		Name:      &stateParam,
+		Value:     &state,
+		Type:      ssmtypes.ParameterTypeString,
+		Overwrite: aws.Bool(true),
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to store CSRF state in SSM")
+		respondHTML(w, http.StatusInternalServerError, "Error", "Failed to store security token.")
+		return
+	}
+
+	authURL := fmt.Sprintf(
+		"https://www.instagram.com/oauth/authorize?client_id=%s&redirect_uri=%s&scope=instagram_basic,instagram_content_publish,instagram_manage_insights&response_type=code&state=%s",
+		appID, redirectURI, state,
+	)
+
+	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // handleOAuthCallback processes the Instagram OAuth redirect.
@@ -162,6 +204,25 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		log.Warn().Str("method", r.Method).Msg("Method not allowed")
 		respondHTML(w, http.StatusMethodNotAllowed, "Error", "Method not allowed.")
 		return
+	}
+
+	// Risk 19D: Verify CSRF state parameter if present.
+	// If state is provided in the callback, it must match the stored value.
+	// This prevents CSRF attacks on the OAuth callback URL.
+	if state := r.URL.Query().Get("state"); state != "" {
+		stateParam := "/ai-social-media/prod/oauth-csrf-state"
+		result, err := ssmClient.GetParameter(r.Context(), &ssm.GetParameterInput{
+			Name: &stateParam,
+		})
+		if err != nil || result.Parameter == nil || *result.Parameter.Value != state {
+			log.Warn().Str("state", state).Msg("OAuth CSRF state mismatch — possible CSRF attack")
+			respondHTML(w, http.StatusForbidden, "Security Error",
+				"Invalid security token. Please start the authorization flow again from /oauth/authorize.")
+			return
+		}
+		log.Debug().Msg("OAuth CSRF state verified successfully")
+		// Clear the used state token (single-use).
+		ssmClient.DeleteParameter(r.Context(), &ssm.DeleteParameterInput{Name: &stateParam})
 	}
 
 	// Check for error response (user denied access).

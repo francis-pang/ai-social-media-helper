@@ -281,6 +281,34 @@ func (s *DynamoStore) GetSession(ctx context.Context, sessionID string) (*Sessio
 	return &session, nil
 }
 
+// VerifySessionOwner checks that the session exists and is owned by the given sub.
+// Returns nil if ownership matches, a non-nil error otherwise.
+// If no META record exists yet, returns ErrSessionNotFound.
+// Risk 15: IDOR prevention — every API call with a sessionId must verify ownership.
+func (s *DynamoStore) VerifySessionOwner(ctx context.Context, sessionID, userSub string) error {
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("verify session owner: %w", err)
+	}
+	if session == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	if session.OwnerSub == "" {
+		// Legacy session without owner — allow (backward compatible)
+		log.Warn().Str("sessionId", sessionID).Msg("Session has no owner (legacy) — allowing access")
+		return nil
+	}
+	if session.OwnerSub != userSub {
+		log.Warn().
+			Str("sessionId", sessionID).
+			Str("ownerSub", session.OwnerSub).
+			Str("callerSub", userSub).
+			Msg("Session ownership mismatch — access denied")
+		return fmt.Errorf("access denied: session belongs to another user")
+	}
+	return nil
+}
+
 func (s *DynamoStore) UpdateSessionStatus(ctx context.Context, sessionID, status string) error {
 	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: &s.tableName,

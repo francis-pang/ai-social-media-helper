@@ -109,12 +109,47 @@ aws cognito-idp admin-set-user-password \
 
 **Password policy:** Minimum 12 characters, requires uppercase + lowercase + digits + symbols. Token validity: 1 hour (ID/access), 7 days (refresh).
 
+## Session Ownership (IDOR Prevention)
+
+Every API session is bound to the authenticated Cognito user's `sub` claim. The API Lambda extracts the `sub` from the JWT authorizer context and:
+
+1. **First access** — creates a `META` record in DynamoDB with `ownerSub` set to the caller's `sub`
+2. **Subsequent access** — verifies the caller's `sub` matches the stored `ownerSub`
+
+Legacy sessions (created before this check was added) have no `ownerSub` and are allowed access with a warning log.
+
+## Origin-Verify Secret
+
+CloudFront injects an `x-origin-verify` header with a cryptographically random secret (stored in AWS Secrets Manager). The API Lambda rejects all requests without a valid header — **fail-closed** (no bypass when secret is empty).
+
+## SSM Parameter Security
+
+Sensitive parameters are stored as **SecureString** type in SSM Parameter Store, encrypted with the default `aws/ssm` KMS key:
+
+| Parameter | Type |
+|-----------|------|
+| `/ai-social-media/prod/gemini-api-key` | SecureString |
+| `/ai-social-media/prod/instagram-app-secret` | SecureString |
+| `/ai-social-media/prod/instagram-webhook-verify-token` | SecureString |
+| `/ai-social-media/prod/instagram-access-token` | SecureString |
+| `/ai-social-media/prod/instagram-user-id` | String (not secret) |
+
+## OAuth CSRF Protection
+
+The Instagram OAuth flow uses a `state` parameter for CSRF protection:
+
+1. `GET /oauth/authorize` — generates a random state token, stores it in SSM, and redirects to Instagram
+2. `GET /oauth/callback?code=...&state=...` — verifies the state matches the stored value (single-use)
+
+Always use `/oauth/authorize` to initiate the OAuth flow instead of constructing the URL manually.
+
 ## Security Best Practices
 
 - Never commit API keys to Git — `.gpg-passphrase` and credential files are gitignored
 - Use environment variables for CI/CD pipelines
 - Regenerate keys immediately if compromise is suspected
 - File permissions: `chmod 600 ~/.gemini-media-cli/credentials.gpg`
+- GPG passphrase file must have `0600` permissions — the app rejects files with group/other access
 
 ## Related DDRs
 
@@ -126,4 +161,4 @@ aws cognito-idp admin-set-user-password \
 
 ---
 
-**Last Updated**: 2026-02-09
+**Last Updated**: 2026-02-15

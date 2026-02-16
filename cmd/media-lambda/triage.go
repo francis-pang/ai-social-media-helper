@@ -51,6 +51,11 @@ func handleTriageInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Risk 15: Verify or establish session ownership before any processing.
+	if !ensureSessionOwner(w, r, req.SessionID) {
+		return
+	}
+
 	model := chat.DefaultModelName
 	if req.Model != "" {
 		model = req.Model
@@ -188,6 +193,11 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Debug().Str("sessionId", req.SessionID).Msg("SessionId validation passed")
+
+	// Risk 15: Verify session ownership.
+	if !ensureSessionOwner(w, r, req.SessionID) {
+		return
+	}
 
 	model := chat.DefaultModelName
 	if req.Model != "" {

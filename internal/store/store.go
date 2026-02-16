@@ -131,6 +131,7 @@ type SessionStore interface {
 type Session struct {
 	ID           string   `json:"id" dynamodbav:"-"`
 	Status       string   `json:"status" dynamodbav:"status"`
+	OwnerSub     string   `json:"ownerSub,omitempty" dynamodbav:"ownerSub,omitempty"` // Risk 15: Cognito sub claim — binds session to authenticated user
 	TripContext  string   `json:"tripContext,omitempty" dynamodbav:"tripContext,omitempty"`
 	UploadedKeys []string `json:"uploadedKeys,omitempty" dynamodbav:"uploadedKeys,omitempty"`
 	CreatedAt    int64    `json:"createdAt" dynamodbav:"createdAt"`

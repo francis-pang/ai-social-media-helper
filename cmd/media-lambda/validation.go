@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/fpang/gemini-media-cli/internal/store"
 )
 
 // --- Input Validation (DDR-028) ---
@@ -43,6 +46,58 @@ func validateS3Key(key string) error {
 		return fmt.Errorf("invalid key format: expected <uuid>/<filename>")
 	}
 	return nil
+}
+
+// validateS3KeyBelongsToSession ensures an S3 key starts with the given sessionId prefix.
+// Risk 30C: Defense-in-depth — prevents a compromised handler from accessing
+// objects belonging to other sessions, even though IAM cannot restrict by
+// dynamic prefix (Risk 30B limitation: sessionId is unknown at policy time).
+func validateS3KeyBelongsToSession(key, sessionID string) error {
+	if !strings.HasPrefix(key, sessionID+"/") {
+		return fmt.Errorf("key %q does not belong to session %s", key, sessionID)
+	}
+	return nil
+}
+
+// --- Session Ownership Validation (Risk 15: IDOR prevention) ---
+
+// ensureSessionOwner creates or verifies session ownership for the given sessionId.
+// On the first call for a session (META record doesn't exist), creates the session
+// with the authenticated user as the owner. On subsequent calls, verifies the caller
+// owns the session. Returns an HTTP error and false if ownership check fails.
+func ensureSessionOwner(w http.ResponseWriter, r *http.Request, sessionID string) bool {
+	if sessionStore == nil {
+		return true // No store configured — skip ownership check
+	}
+
+	userSub := getUserSub(r)
+	if userSub == "" {
+		// Unauthenticated route (e.g., thumbnail) — skip ownership check
+		return true
+	}
+
+	if err := sessionStore.VerifySessionOwner(r.Context(), sessionID, userSub); err != nil {
+		if strings.Contains(err.Error(), "session not found") {
+			// First access — create session with owner
+			session := &store.Session{
+				ID:       sessionID,
+				Status:   "active",
+				OwnerSub: userSub,
+			}
+			if putErr := sessionStore.PutSession(r.Context(), session); putErr != nil {
+				httpError(w, http.StatusInternalServerError, "failed to initialize session")
+				return false
+			}
+			return true
+		}
+		if strings.Contains(err.Error(), "access denied") {
+			httpError(w, http.StatusForbidden, "access denied")
+			return false
+		}
+		httpError(w, http.StatusInternalServerError, "session validation failed")
+		return false
+	}
+	return true
 }
 
 // --- Upload Validation (DDR-028) ---
