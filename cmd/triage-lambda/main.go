@@ -1,7 +1,8 @@
 // Package main provides a Lambda entry point for the triage pipeline (DDR-053).
 //
-// This Lambda handles the 3 steps of the Triage Pipeline Step Function (DDR-061):
+// This Lambda handles the steps of the Triage Pipeline Step Function (DDR-061):
 //   - triage-init-session: Write session record with expectedFileCount (DDR-061)
+//   - triage-prepare: List S3 objects, write file results, and set counts (start flow)
 //   - triage-check-processing: Poll processedCount vs expectedFileCount (DDR-061)
 //   - triage-run: Read file manifest from DDB, call AskMediaTriage (DDR-061)
 //
@@ -14,6 +15,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -21,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/fpang/gemini-media-cli/internal/chat"
+	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/lambdaboot"
 	"github.com/fpang/gemini-media-cli/internal/logging"
 	"github.com/fpang/gemini-media-cli/internal/store"
@@ -86,6 +90,8 @@ func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
 	switch event.Type {
 	case "triage-init-session":
 		return handleTriageInitSession(ctx, event)
+	case "triage-prepare":
+		return handleTriagePrepare(ctx, event)
 	case "triage-check-processing":
 		return handleTriageCheckProcessing(ctx, event)
 	case "triage-run":
@@ -115,6 +121,91 @@ func handleTriageInitSession(ctx context.Context, event TriageEvent) (*TriageIni
 		Str("jobId", event.JobID).
 		Int("expectedFileCount", event.ExpectedFileCount).
 		Msg("Triage session initialized (DDR-061)")
+
+	return &TriageInitResult{
+		SessionID: event.SessionID,
+		JobID:     event.JobID,
+		Model:     model,
+	}, nil
+}
+
+// handleTriagePrepare lists S3 objects already uploaded for the session, writes
+// FileResult entries, and sets expectedFileCount = processedCount so the pipeline
+// can immediately proceed to the triage-run step. Used by POST /api/triage/start
+// when files were uploaded before the triage pipeline was started.
+func handleTriagePrepare(ctx context.Context, event TriageEvent) (*TriageInitResult, error) {
+	model := event.Model
+	if model == "" {
+		model = chat.DefaultModelName
+	}
+
+	prefix := event.SessionID + "/"
+	input := &s3.ListObjectsV2Input{
+		Bucket: &mediaBucket,
+		Prefix: &prefix,
+	}
+
+	result, err := s3Client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("list S3 objects for session %s: %w", event.SessionID, err)
+	}
+
+	var mediaCount int
+	for _, obj := range result.Contents {
+		key := *obj.Key
+		// Skip subdirectories (thumbnails/, compressed/) and non-media files
+		relPath := strings.TrimPrefix(key, prefix)
+		if strings.Contains(relPath, "/") {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(relPath))
+		if !filehandler.IsSupported(ext) {
+			continue
+		}
+
+		mimeType, _ := filehandler.GetMIMEType(ext)
+		fileType := "image"
+		if filehandler.IsVideo(ext) {
+			fileType = "video"
+		}
+
+		// Write FileResult entry so triage-run can read the manifest
+		if fileProcessStore != nil {
+			fr := &store.FileResult{
+				Filename:    relPath,
+				Status:      "valid",
+				OriginalKey: key,
+				FileType:    fileType,
+				MimeType:    mimeType,
+				FileSize:    *obj.Size,
+			}
+			if err := fileProcessStore.PutFileResult(ctx, event.SessionID, event.JobID, fr); err != nil {
+				log.Warn().Err(err).Str("key", key).Msg("Failed to write FileResult during prepare")
+			}
+		}
+		mediaCount++
+	}
+
+	if mediaCount == 0 {
+		return nil, fmt.Errorf("no media files found under s3://%s/%s", mediaBucket, prefix)
+	}
+
+	// Set both counts equal so check-processing immediately sees allProcessed=true
+	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+		ID:                event.JobID,
+		Status:            "processing",
+		Phase:             "analyzing",
+		ExpectedFileCount: mediaCount,
+		ProcessedCount:    mediaCount,
+		TotalFiles:        mediaCount,
+		UploadedFiles:     mediaCount,
+	})
+
+	log.Info().
+		Str("sessionId", event.SessionID).
+		Str("jobId", event.JobID).
+		Int("mediaCount", mediaCount).
+		Msg("Triage prepare: listed S3 objects and wrote file results")
 
 	return &TriageInitResult{
 		SessionID: event.SessionID,
