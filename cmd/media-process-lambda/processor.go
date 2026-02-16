@@ -168,6 +168,9 @@ func processFile(ctx context.Context, key string) error {
 		}
 
 		// Video compression for Gemini (reuse existing CompressVideoForGemini)
+		// Use a shorter deadline than the Lambda timeout so we always have time
+		// to write file results and increment processedCount even if compression
+		// is too slow for large videos.
 		if filehandler.IsFFmpegAvailable() {
 			var videoMeta *filehandler.VideoMetadata
 			if mf.Metadata != nil {
@@ -175,7 +178,9 @@ func processFile(ctx context.Context, key string) error {
 					videoMeta = vm
 				}
 			}
-			compressedPath, _, cleanup, err := filehandler.CompressVideoForGemini(ctx, localPath, videoMeta)
+			compressCtx, compressCancel := context.WithTimeout(ctx, 8*time.Minute)
+			compressedPath, _, cleanup, err := filehandler.CompressVideoForGemini(compressCtx, localPath, videoMeta)
+			compressCancel()
 			if err != nil {
 				log.Warn().Err(err).Str("key", key).Msg("Video compression failed — using original")
 				processedKey = key
