@@ -17,7 +17,7 @@ ARG CMD_TARGET=media-lambda
 # Stage 1: Build the Go binary
 # BuildKit cache mounts persist Go module + build caches across builds (DDR-047)
 # COMMIT_HASH is injected by CodeBuild and baked into the binary via -ldflags (DDR-062)
-FROM public.ecr.aws/docker/library/golang:1.24 AS builder
+FROM public.ecr.aws/docker/library/golang:1.26 AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
