@@ -9,6 +9,11 @@ export function itemId(item: TriageItem): string {
 
 /** Get the thumbnail source for a triage item. */
 function itemThumb(item: TriageItem): string {
+  // Prefer the backend-provided thumbnailUrl which points to the pre-generated
+  // thumbnail (the original file may have been deleted after triage completes).
+  if (item.thumbnailUrl) {
+    return item.thumbnailUrl;
+  }
   if (isCloudMode && item.key) {
     return thumbnailUrl(item.key);
   }

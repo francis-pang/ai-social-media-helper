@@ -201,8 +201,10 @@ async function pollTriageResults(jobId: string, sessionId: string) {
   while (triagePolling.value) {
     try {
       const results = await getTriageResults(jobId, sessionId);
-      // If complete, navigate to processing view
-      if (results.status === "complete" || results.status === "error") {
+      // Navigate to the processing view as soon as triage moves past "pending".
+      // TriageView will take over polling and show the ProcessingIndicator
+      // with phase-specific progress (uploading, processing videos, analyzing).
+      if (results.status !== "pending") {
         triagePolling.value = false;
         selectedPaths.value = files.value.filter(f => f.status === "done").map(f => f.key);
         navigateToStep("processing");
