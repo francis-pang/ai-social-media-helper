@@ -208,8 +208,19 @@ async function pollTriageResults(jobId: string, sessionId: string) {
         f => f.status === "done" || f.status === "error"
       );
       if (results.status !== "pending" && allUploaded) {
+        // Update expectedFileCount to actual successful uploads so the Step
+        // Function doesn't wait forever for files that failed to upload.
+        const doneFiles = files.value.filter(f => f.status === "done");
+        const errorFiles = files.value.filter(f => f.status === "error");
+        if (errorFiles.length > 0 && doneFiles.length > 0) {
+          await updateTriageFiles({
+            sessionId,
+            jobId,
+            expectedFileCount: doneFiles.length,
+          }).catch(e => console.error("Failed to update expected file count:", e));
+        }
         triagePolling.value = false;
-        selectedPaths.value = files.value.filter(f => f.status === "done").map(f => f.key);
+        selectedPaths.value = doneFiles.map(f => f.key);
         navigateToStep("processing");
         return;
       }

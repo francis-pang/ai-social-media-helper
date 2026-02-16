@@ -241,15 +241,23 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 
 		if filehandler.IsImage(ext) {
 			if file.PresignedURL != "" {
-				// Cloud mode: use presigned URL directly via FileData (DDR-060).
+				// Cloud mode: download thumbnail from presigned URL and pass as
+				// inline data. This is more reliable than FileData+FileURI because
+				// Gemini may reject S3 presigned URLs in larger batches.
+				imgData, err := downloadToBytes(ctx, file.PresignedURL)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to download image from presigned URL, skipping")
+					continue
+				}
 				log.Debug().
 					Int("index", i+1).
 					Str("file", filepath.Base(file.Path)).
-					Msg("Using presigned URL for image")
+					Int("bytes", len(imgData)).
+					Msg("Downloaded image thumbnail for inline triage")
 				parts = append(parts, &genai.Part{
-					FileData: &genai.FileData{
+					InlineData: &genai.Blob{
 						MIMEType: file.MIMEType,
-						FileURI:  file.PresignedURL,
+						Data:     imgData,
 					},
 				})
 			} else {
@@ -542,6 +550,31 @@ func downloadFromURL(ctx context.Context, url string) (string, func(), error) {
 
 	cleanup := func() { os.Remove(tmpFile.Name()) }
 	return tmpFile.Name(), cleanup, nil
+}
+
+// downloadToBytes downloads a URL and returns the response body as a byte slice.
+// Intended for small files (thumbnails) that can be held in memory.
+func downloadToBytes(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	return data, nil
 }
 
 // uploadVideoToGeminiFiles uploads a local video file to the Gemini Files API

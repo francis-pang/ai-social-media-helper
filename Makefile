@@ -6,14 +6,20 @@
 # Build all binaries
 all: build-select build-triage build-web
 
-# Build the Preact frontend and copy to embed directory
+# Build the Preact frontend for cloud deployment (uses .env.production → cloud mode)
 build-frontend:
 	cd web/frontend && npm install && npm run build
 	rm -rf cmd/media-web/frontend_dist
 	cp -r web/frontend/dist cmd/media-web/frontend_dist
 
-# Build the web server (requires frontend to be built first)
-build-web: build-frontend
+# Build the Preact frontend for local mode (overrides VITE_CLOUD_MODE from .env.production)
+build-frontend-local:
+	cd web/frontend && npm install && VITE_CLOUD_MODE= npm run build
+	rm -rf cmd/media-web/frontend_dist
+	cp -r web/frontend/dist cmd/media-web/frontend_dist
+
+# Build the web server with local-mode frontend
+build-web: build-frontend-local
 	go build -o media-web ./cmd/media-web
 
 # Build CLI tools
