@@ -219,11 +219,20 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, job *triageJob)
 	job.mu.Lock()
 	defer job.mu.Unlock()
 
+	// Ensure nil slices serialize as [] not null in JSON (DDR-028)
+	keep := job.keep
+	if keep == nil {
+		keep = []triageResultItem{}
+	}
+	discard := job.discard
+	if discard == nil {
+		discard = []triageResultItem{}
+	}
 	resp := map[string]interface{}{
 		"id":      job.id,
 		"status":  job.status,
-		"keep":    job.keep,
-		"discard": job.discard,
+		"keep":    keep,
+		"discard": discard,
 	}
 	if job.errMsg != "" {
 		resp["error"] = job.errMsg

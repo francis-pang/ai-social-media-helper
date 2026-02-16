@@ -3,6 +3,7 @@ import { useEffect } from "preact/hooks";
 import { createPoller } from "../hooks/usePolling";
 import { formatBytes } from "../utils/format";
 import { triageJobId, selectedPaths, uploadSessionId, navigateToLanding, navigateBack, setStep } from "../app";
+import { resetFileBrowserState } from "./FileBrowser";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   getTriageResults,
@@ -76,8 +77,9 @@ function toggleDeletion(id: string) {
 
 function selectAllDiscard() {
   if (!results.value) return;
+  const discard = results.value.discard ?? [];
   selectedForDeletion.value = new Set(
-    results.value.discard.map((item) => itemId(item)),
+    discard.map((item) => itemId(item)),
   );
 }
 
@@ -115,6 +117,7 @@ function startOver() {
   if (isCloudMode) {
     navigateToLanding();
   } else {
+    resetFileBrowserState();
     setStep("browse");
   }
 }

@@ -140,17 +140,17 @@ type Session struct {
 // TriageJob represents AI triage results (DynamoDB SK = TRIAGE#{jobId}).
 // Added by DDR-050 to support async triage via Worker Lambda.
 type TriageJob struct {
-	ID            string       `json:"id" dynamodbav:"-"`
-	SessionID     string       `json:"-" dynamodbav:"-"`
-	Status        string       `json:"status" dynamodbav:"status"`
-	Phase         string       `json:"phase,omitempty" dynamodbav:"phase,omitempty"`
+	ID                string       `json:"id" dynamodbav:"-"`
+	SessionID         string       `json:"-" dynamodbav:"-"`
+	Status            string       `json:"status" dynamodbav:"status"`
+	Phase             string       `json:"phase,omitempty" dynamodbav:"phase,omitempty"`
 	TotalFiles        int          `json:"totalFiles,omitempty" dynamodbav:"totalFiles,omitempty"`
 	UploadedFiles     int          `json:"uploadedFiles,omitempty" dynamodbav:"uploadedFiles,omitempty"`
 	ExpectedFileCount int          `json:"expectedFileCount,omitempty" dynamodbav:"expectedFileCount,omitempty"`
 	ProcessedCount    int          `json:"processedCount,omitempty" dynamodbav:"processedCount,omitempty"`
 	Keep              []TriageItem `json:"keep,omitempty" dynamodbav:"keep,omitempty"`
-	Discard       []TriageItem `json:"discard,omitempty" dynamodbav:"discard,omitempty"`
-	Error         string       `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	Discard           []TriageItem `json:"discard,omitempty" dynamodbav:"discard,omitempty"`
+	Error             string       `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }
 
 // TriageItem represents a single media item in triage results.

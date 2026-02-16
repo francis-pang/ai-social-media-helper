@@ -116,6 +116,7 @@ export interface TriageConfirmRequest {
 /** Response from POST /api/triage/:id/confirm. */
 export interface TriageConfirmResponse {
   deleted: number;
+  skipped: number;
   errors: string[];
   reclaimedBytes: number;
 }

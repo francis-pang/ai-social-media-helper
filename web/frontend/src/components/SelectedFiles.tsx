@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import { currentStep, selectedPaths, triageJobId, uploadSessionId } from "../app";
+import { selectedPaths, triageJobId, uploadSessionId, setStep } from "../app";
 import { startTriage, isCloudMode } from "../api/client";
 
 const loading = signal(false);
@@ -15,7 +15,7 @@ async function handleStartTriage() {
 
     const res = await startTriage(req);
     triageJobId.value = res.id;
-    currentStep.value = "processing";
+    setStep("processing");
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to start triage";
   } finally {
@@ -24,7 +24,7 @@ async function handleStartTriage() {
 }
 
 function goBack() {
-  currentStep.value = "browse";
+  setStep("browse");
 }
 
 /** Extract just the filename from a path or S3 key. */

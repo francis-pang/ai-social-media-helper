@@ -32,6 +32,13 @@ function clearAll() {
   pickedPaths.value = [];
 }
 
+/** Reset the file browser state. Called when returning to browse from triage. */
+export function resetFileBrowserState() {
+  pickedPaths.value = [];
+  loading.value = false;
+  error.value = null;
+}
+
 function proceedWithSelection() {
   selectedPaths.value = pickedPaths.value;
   currentStep.value = "confirm-files";
