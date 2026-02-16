@@ -27,6 +27,12 @@ export interface PollConfig<T> {
    * Defaults to aborting on any error.
    */
   onPollError?: (err: unknown) => boolean;
+  /**
+   * If true, fire the first tick immediately instead of waiting `intervalMs`.
+   * Useful when the result may already be available (e.g. navigating back to a
+   * completed operation). Defaults to false.
+   */
+  immediate?: boolean;
 }
 
 export interface Poller<T> {
@@ -80,8 +86,12 @@ export function createPoller<T>(config: PollConfig<T>): Poller<T> {
       }
     };
 
-    // First tick after one interval (matches existing setInterval behavior).
-    setTimeout(tick, intervalMs);
+    // Fire the first tick immediately or after one interval.
+    if (config.immediate) {
+      tick();
+    } else {
+      setTimeout(tick, intervalMs);
+    }
   });
 
   return { promise, abort: () => { aborted = true; } };

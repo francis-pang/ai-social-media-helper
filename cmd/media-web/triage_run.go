@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -77,7 +78,7 @@ func runTriageJob(job *triageJob, model string) {
 					Path:         mf.Path,
 					Saveable:     false,
 					Reason:       "Video too short — likely accidental recording",
-					ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?path=%s", mf.Path),
+					ThumbnailURL: "/api/media/thumbnail?path=" + url.QueryEscape(mf.Path),
 				})
 				job.mu.Unlock()
 				continue
@@ -118,7 +119,7 @@ func runTriageJob(job *triageJob, model string) {
 			Path:         mf.Path,
 			Saveable:     tr.Saveable,
 			Reason:       tr.Reason,
-			ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?path=%s", mf.Path),
+			ThumbnailURL: "/api/media/thumbnail?path=" + url.QueryEscape(mf.Path),
 		}
 		if tr.Saveable {
 			job.keep = append(job.keep, item)
@@ -140,7 +141,7 @@ func runTriageJob(job *triageJob, model string) {
 				Path:         mf.Path,
 				Saveable:     true,
 				Reason:       "Not evaluated by AI — kept by default",
-				ThumbnailURL: fmt.Sprintf("/api/media/thumbnail?path=%s", mf.Path),
+				ThumbnailURL: "/api/media/thumbnail?path=" + url.QueryEscape(mf.Path),
 			})
 		}
 	}

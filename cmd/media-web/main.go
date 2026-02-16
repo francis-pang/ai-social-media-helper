@@ -79,9 +79,16 @@ func runMain(cmd *cobra.Command, args []string) {
 	mux.HandleFunc("/api/browse", handleBrowse)
 	mux.HandleFunc("/api/pick", handlePick)
 	mux.HandleFunc("/api/triage/start", handleTriageStart)
+	mux.HandleFunc("/api/triage/start/", handleTriageStart) // handle trailing slash
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)
+
+	// Catch-all for unregistered /api/ paths — return 404 JSON instead of the
+	// SPA's index.html, so API clients get a proper error response.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		httpError(w, http.StatusNotFound, "not found")
+	})
 
 	// Frontend static files (SPA fallback)
 	frontendSub, err := fs.Sub(frontendFS, "frontend_dist")

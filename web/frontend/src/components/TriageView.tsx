@@ -29,6 +29,7 @@ function pollResults(id: string) {
     fn: () => getTriageResults(id, sessionId),
     intervalMs: 2000,
     timeoutMs: 15 * 60 * 1000,
+    immediate: true, // pick up already-complete results without a 2s delay
     isDone: (res) => res.status === "complete" || res.status === "error",
     onPoll: (res) => {
       results.value = res;

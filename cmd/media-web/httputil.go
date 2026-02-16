@@ -9,9 +9,16 @@ import (
 
 // containsPathTraversal returns true if the path contains directory traversal
 // sequences that could escape the intended directory. (DDR-028 Problem 6)
+//
+// We check the raw segments before filepath.Clean resolves them, because
+// Clean("/tmp/../etc") silently produces "/etc" with no ".." remaining.
 func containsPathTraversal(p string) bool {
-	cleaned := filepath.Clean(p)
-	return strings.Contains(cleaned, "..")
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
