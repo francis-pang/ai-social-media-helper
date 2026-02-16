@@ -85,16 +85,26 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 			useKey = fr.OriginalKey
 		}
 
+		mimeType := fr.MimeType
+		if mimeType == "" {
+			mimeType, _ = filehandler.GetMIMEType(strings.ToLower(filepath.Ext(fr.Filename)))
+		}
+
+		// For images, prefer the pre-generated thumbnail to keep the Gemini
+		// payload small. Thumbnails are created by the MediaProcess Lambda.
+		ext := strings.ToLower(filepath.Ext(fr.Filename))
+		if filehandler.IsImage(ext) && fr.ThumbnailKey != "" {
+			useKey = fr.ThumbnailKey
+			if m, _ := filehandler.GetMIMEType(strings.ToLower(filepath.Ext(fr.ThumbnailKey))); m != "" {
+				mimeType = m
+			}
+		}
+
 		// Generate presigned URL for the file
 		url, err := s3util.GeneratePresignedURL(ctx, presignClient, mediaBucket, useKey, 15*time.Minute)
 		if err != nil {
 			log.Warn().Err(err).Str("key", useKey).Msg("Failed to generate presigned URL")
 			continue
-		}
-
-		mimeType := fr.MimeType
-		if mimeType == "" {
-			mimeType, _ = filehandler.GetMIMEType(strings.ToLower(filepath.Ext(fr.Filename)))
 		}
 
 		mf := &filehandler.MediaFile{

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,6 +103,12 @@ func BuildMediaTriagePrompt(files []*filehandler.MediaFile) string {
 // Gemini API call. Large batches cause the model to silently drop items from
 // its response — batching into smaller groups ensures every item gets a verdict.
 const triageBatchSize = 20
+
+// maxPresignedURLBytes is the maximum file size that can be referenced via an
+// S3 presigned URL in the Gemini FileData.FileURI field. The Gemini API returns
+// INVALID_ARGUMENT for HTTPS-URL-referenced files above ~15 MiB. We use 10 MiB
+// as a conservative threshold to leave headroom.
+const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB
 
 // AskMediaTriage sends media files to Gemini for triage evaluation.
 // When len(files) > triageBatchSize the work is split into smaller batches
@@ -232,41 +240,90 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 		ext := strings.ToLower(filepath.Ext(file.Path))
 
 		if filehandler.IsImage(ext) {
-			// Generate thumbnail for images
-			log.Debug().
-				Int("index", i+1).
-				Str("file", filepath.Base(file.Path)).
-				Msg("Processing image file for triage")
-			thumbData, mimeType, err := filehandler.GenerateThumbnail(file, filehandler.DefaultThumbnailMaxDimension)
-			if err != nil {
-				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to generate thumbnail, skipping")
-				continue
-			}
-
-			log.Debug().
-				Int("index", i+1).
-				Str("file", filepath.Base(file.Path)).
-				Int("thumb_bytes", len(thumbData)).
-				Str("mime", mimeType).
-				Msg("Image thumbnail ready for triage")
-
-			parts = append(parts, &genai.Part{
-				InlineData: &genai.Blob{
-					MIMEType: mimeType,
-					Data:     thumbData,
-				},
-			})
-
-		} else if filehandler.IsVideo(ext) {
 			if file.PresignedURL != "" {
-				// Direct S3 presigned URL — Gemini fetches from S3 (DDR-060).
-				log.Info().
+				// Cloud mode: use presigned URL directly via FileData (DDR-060).
+				log.Debug().
+					Int("index", i+1).
 					Str("file", filepath.Base(file.Path)).
-					Msg("Using presigned URL for video (skipping compression and Files API upload)")
+					Msg("Using presigned URL for image")
 				parts = append(parts, &genai.Part{
 					FileData: &genai.FileData{
 						MIMEType: file.MIMEType,
 						FileURI:  file.PresignedURL,
+					},
+				})
+			} else {
+				// Local mode: generate thumbnail from disk.
+				log.Debug().
+					Int("index", i+1).
+					Str("file", filepath.Base(file.Path)).
+					Msg("Processing image file for triage")
+				thumbData, mimeType, err := filehandler.GenerateThumbnail(file, filehandler.DefaultThumbnailMaxDimension)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to generate thumbnail, skipping")
+					continue
+				}
+
+				log.Debug().
+					Int("index", i+1).
+					Str("file", filepath.Base(file.Path)).
+					Int("thumb_bytes", len(thumbData)).
+					Str("mime", mimeType).
+					Msg("Image thumbnail ready for triage")
+
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						MIMEType: mimeType,
+						Data:     thumbData,
+					},
+				})
+			}
+
+		} else if filehandler.IsVideo(ext) {
+			if file.PresignedURL != "" && (file.Size == 0 || file.Size <= maxPresignedURLBytes) {
+				// Within size limit — Gemini fetches from S3 via presigned URL (DDR-060).
+				log.Info().
+					Str("file", filepath.Base(file.Path)).
+					Int64("size_bytes", file.Size).
+					Msg("Using presigned URL for video")
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						MIMEType: file.MIMEType,
+						FileURI:  file.PresignedURL,
+					},
+				})
+			} else if file.PresignedURL != "" {
+				// Video exceeds presigned URL size limit — download and upload via Gemini Files API.
+				log.Info().
+					Str("file", filepath.Base(file.Path)).
+					Int64("size_bytes", file.Size).
+					Int64("threshold_bytes", maxPresignedURLBytes).
+					Msg("Video exceeds presigned URL size limit, downloading for Files API upload")
+
+				tmpPath, tmpCleanup, err := downloadFromURL(ctx, file.PresignedURL)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to download video for Gemini upload, skipping")
+					continue
+				}
+				cleanupFuncs = append(cleanupFuncs, tmpCleanup)
+
+				uploaded, err := uploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video to Gemini Files API, skipping")
+					continue
+				}
+				uploadedFiles = append(uploadedFiles, uploaded)
+
+				log.Debug().
+					Int("index", i+1).
+					Str("file", filepath.Base(file.Path)).
+					Str("uri", uploaded.URI).
+					Msg("Video uploaded to Gemini Files API for triage")
+
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{
+						MIMEType: uploaded.MIMEType,
+						FileURI:  uploaded.URI,
 					},
 				})
 			} else {
@@ -341,12 +398,20 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 		}
 	}
 
+	// Verify at least one media part was created — avoid sending a text-only
+	// request when all files were skipped due to processing errors.
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("no media files could be processed for triage (all %d files skipped)", len(files))
+	}
+
 	// Add the text prompt at the end
 	parts = append(parts, &genai.Part{Text: prompt})
 
 	log.Info().
-		Int("num_images", imageCount).
-		Int("num_videos", len(uploadedFiles)).
+		Int("media_parts", len(parts)).
+		Int("images", imageCount).
+		Int("videos", videoCount).
+		Int("files_api_uploads", len(uploadedFiles)).
 		Msg("Sending media to Gemini for batch triage...")
 
 	// Generate content
@@ -437,4 +502,104 @@ func WriteTriageReport(results []TriageResult, outputPath string) error {
 
 	log.Info().Str("path", outputPath).Msg("Triage report written")
 	return nil
+}
+
+// downloadFromURL downloads a file from a URL to a temporary file.
+// Returns the temp file path and a cleanup function that removes the file.
+func downloadFromURL(ctx context.Context, url string) (string, func(), error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+	}
+
+	tmpFile, err := os.CreateTemp("", "gemini-triage-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp file: %w", err)
+	}
+
+	n, err := io.Copy(tmpFile, resp.Body)
+	if err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", nil, fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	log.Debug().
+		Str("path", tmpFile.Name()).
+		Int64("bytes", n).
+		Msg("Downloaded file from presigned URL to temp")
+
+	cleanup := func() { os.Remove(tmpFile.Name()) }
+	return tmpFile.Name(), cleanup, nil
+}
+
+// uploadVideoToGeminiFiles uploads a local video file to the Gemini Files API
+// and waits for it to finish processing. Unlike uploadVideoFile (in selection.go)
+// which hardcodes video/webm, this accepts a custom MIME type for pre-compressed
+// videos downloaded from S3.
+func uploadVideoToGeminiFiles(ctx context.Context, client *genai.Client, localPath, mimeType string) (*genai.File, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat file: %w", err)
+	}
+
+	log.Debug().
+		Str("path", localPath).
+		Int64("size_bytes", info.Size()).
+		Str("mime_type", mimeType).
+		Msg("Uploading video to Gemini Files API (large file fallback)")
+
+	uploadStart := time.Now()
+	file, err := client.Files.Upload(ctx, f, &genai.UploadFileConfig{
+		MIMEType: mimeType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload file: %w", err)
+	}
+
+	// Poll until the file is ACTIVE (processed) or FAILED.
+	const pollInterval = 5 * time.Second
+	const pollTimeout = 5 * time.Minute
+	deadline := time.Now().Add(pollTimeout)
+
+	for file.State == genai.FileStateProcessing {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timeout waiting for Gemini file processing after %v", pollTimeout)
+		}
+		time.Sleep(pollInterval)
+		file, err = client.Files.Get(ctx, file.Name, nil)
+		if err != nil {
+			return nil, fmt.Errorf("get file state: %w", err)
+		}
+	}
+
+	if file.State == genai.FileStateFailed {
+		return nil, fmt.Errorf("Gemini file processing failed: %s", file.Name)
+	}
+
+	log.Info().
+		Str("name", file.Name).
+		Str("uri", file.URI).
+		Int64("size_bytes", info.Size()).
+		Dur("total_time", time.Since(uploadStart)).
+		Msg("Video uploaded to Gemini Files API")
+
+	return file, nil
 }
