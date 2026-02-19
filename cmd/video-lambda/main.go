@@ -273,43 +273,65 @@ func main() {
 
 // --- DynamoDB Helpers ---
 
-// updateItemError updates the enhancement item in DynamoDB with an error status.
+// updateItemError atomically updates the enhancement item with an error status
+// and increments CompletedCount. Sets job status to "complete" if all items are done.
 func updateItemError(ctx context.Context, event VideoEvent, errMsg string) {
-	job, err := sessionStore.GetEnhancementJob(ctx, event.SessionID, event.JobID)
-	if err != nil || job == nil {
-		log.Warn().Err(err).Msg("Failed to get enhancement job for error update")
+	if event.ItemIndex < 0 {
+		log.Warn().Int("itemIndex", event.ItemIndex).Msg("Invalid item index for error update")
 		return
 	}
 
-	if event.ItemIndex >= 0 && event.ItemIndex < len(job.Items) {
-		job.Items[event.ItemIndex].Phase = "error"
-		job.Items[event.ItemIndex].Error = errMsg
-		job.CompletedCount++
-		if err := sessionStore.PutEnhancementJob(ctx, event.SessionID, job); err != nil {
-			log.Warn().Err(err).Msg("Failed to update enhancement job with error")
+	errItem := store.EnhancementItem{
+		Key:         event.Key,
+		OriginalKey: event.Key,
+		Filename:    filepath.Base(event.Key),
+		Phase:       "error",
+		Error:       errMsg,
+	}
+
+	newCount, totalCount, err := sessionStore.UpdateEnhancementItemResult(ctx, event.SessionID, event.JobID, event.ItemIndex, errItem)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to update enhancement item with error")
+		return
+	}
+
+	if newCount >= totalCount {
+		if err := sessionStore.UpdateEnhancementStatus(ctx, event.SessionID, event.JobID, "complete"); err != nil {
+			log.Warn().Err(err).Msg("Failed to set enhancement job status to complete")
 		}
 	}
 }
 
-// updateVideoComplete updates the enhancement item in DynamoDB with success results.
+// updateVideoComplete atomically updates the enhancement item with success results
+// and increments CompletedCount. Sets job status to "complete" if all items are done.
 func updateVideoComplete(ctx context.Context, event VideoEvent, enhancedKey string, result *chat.VideoEnhancementResult) {
-	job, err := sessionStore.GetEnhancementJob(ctx, event.SessionID, event.JobID)
-	if err != nil || job == nil {
-		log.Warn().Err(err).Msg("Failed to get enhancement job for completion update")
+	if event.ItemIndex < 0 {
+		log.Warn().Int("itemIndex", event.ItemIndex).Msg("Invalid item index for completion update")
 		return
 	}
 
-	if event.ItemIndex >= 0 && event.ItemIndex < len(job.Items) {
-		job.Items[event.ItemIndex].Phase = "complete"
-		job.Items[event.ItemIndex].EnhancedKey = enhancedKey
-		job.Items[event.ItemIndex].OriginalThumbKey = fmt.Sprintf("%s/thumbnails/%s.jpg", event.SessionID,
-			strings.TrimSuffix(filepath.Base(event.Key), filepath.Ext(event.Key)))
-		if result != nil {
-			job.Items[event.ItemIndex].Phase1Text = result.EnhancementSummary
-		}
-		job.CompletedCount++
-		if err := sessionStore.PutEnhancementJob(ctx, event.SessionID, job); err != nil {
-			log.Warn().Err(err).Msg("Failed to update enhancement job with completion")
+	item := store.EnhancementItem{
+		Key:         event.Key,
+		OriginalKey: event.Key,
+		Filename:    filepath.Base(event.Key),
+		Phase:       "complete",
+		EnhancedKey: enhancedKey,
+		OriginalThumbKey: fmt.Sprintf("%s/thumbnails/%s.jpg", event.SessionID,
+			strings.TrimSuffix(filepath.Base(event.Key), filepath.Ext(event.Key))),
+	}
+	if result != nil {
+		item.Phase1Text = result.EnhancementSummary
+	}
+
+	newCount, totalCount, err := sessionStore.UpdateEnhancementItemResult(ctx, event.SessionID, event.JobID, event.ItemIndex, item)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to update enhancement item with completion")
+		return
+	}
+
+	if newCount >= totalCount {
+		if err := sessionStore.UpdateEnhancementStatus(ctx, event.SessionID, event.JobID, "complete"); err != nil {
+			log.Warn().Err(err).Msg("Failed to set enhancement job status to complete")
 		}
 	}
 }

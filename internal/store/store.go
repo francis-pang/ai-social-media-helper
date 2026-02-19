@@ -62,6 +62,11 @@ type SessionStore interface {
 	// UpdateTriageExpectedCount sets the expectedFileCount on a triage job.
 	UpdateTriageExpectedCount(ctx context.Context, sessionID, jobID string, count int) error
 
+	// UpdateTriagePhase atomically updates the phase and status fields on a triage job
+	// without overwriting processedCount. Avoids the race condition where PutItem
+	// clobbers concurrent atomic increments from the MediaProcess Lambda.
+	UpdateTriagePhase(ctx context.Context, sessionID, jobID, phase, status string) error
+
 	// --- Selection jobs ---
 
 	// PutSelectionJob creates or replaces a selection job record.
@@ -77,6 +82,21 @@ type SessionStore interface {
 
 	// GetEnhancementJob retrieves an enhancement job. Returns nil, nil if not found.
 	GetEnhancementJob(ctx context.Context, sessionID, jobID string) (*EnhancementJob, error)
+
+	// --- Enhancement atomic updates (DDR-061: race condition fix) ---
+
+	// UpdateEnhancementItemResult atomically sets a single item in the Items list
+	// and increments CompletedCount. Returns the new completed count and total count
+	// so the caller can determine if all items are done.
+	UpdateEnhancementItemResult(ctx context.Context, sessionID, jobID string, itemIndex int, item EnhancementItem) (newCount, totalCount int, err error)
+
+	// UpdateEnhancementItemFields atomically sets a single item in the Items list
+	// without changing the CompletedCount. Used for feedback updates.
+	UpdateEnhancementItemFields(ctx context.Context, sessionID, jobID string, itemIndex int, item EnhancementItem) error
+
+	// UpdateEnhancementStatus atomically sets the job status, conditioned on
+	// completedCount >= totalCount to prevent races.
+	UpdateEnhancementStatus(ctx context.Context, sessionID, jobID, status string) error
 
 	// --- Download jobs ---
 

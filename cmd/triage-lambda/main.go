@@ -226,20 +226,32 @@ func handleTriageCheckProcessing(ctx context.Context, event TriageEvent) (*Triag
 	expectedCount := job.ExpectedFileCount
 	allProcessed := expectedCount > 0 && processedCount >= expectedCount
 
-	// Count errors from file processing table
+	// Count errors and actual file results from file processing table
 	errorCount := 0
+	fileResultCount := 0
 	if fileProcessStore != nil {
 		results, err := fileProcessStore.GetFileResults(ctx, event.SessionID, event.JobID)
 		if err == nil {
+			fileResultCount = len(results)
 			for _, r := range results {
 				if r.Status == "invalid" || r.Status == "error" {
 					errorCount++
 				}
 			}
 		}
+
+		if fileResultCount > 0 && fileResultCount != processedCount {
+			log.Warn().
+				Int("processedCount", processedCount).
+				Int("fileResultCount", fileResultCount).
+				Int("expectedCount", expectedCount).
+				Str("sessionId", event.SessionID).
+				Msg("processedCount/fileResultCount mismatch — possible counter race condition")
+		}
 	}
 
-	// Update phase based on progress
+	// Update phase based on progress — use UpdateItem (not PutItem) to avoid
+	// clobbering concurrent atomic processedCount increments from MediaProcess Lambda.
 	phase := "uploading"
 	if processedCount > 0 {
 		phase = "processing"
@@ -247,19 +259,12 @@ func handleTriageCheckProcessing(ctx context.Context, event TriageEvent) (*Triag
 	if allProcessed {
 		phase = "analyzing"
 	}
-	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
-		ID:                event.JobID,
-		Status:            "processing",
-		Phase:             phase,
-		ProcessedCount:    processedCount,
-		ExpectedFileCount: expectedCount,
-		TotalFiles:        expectedCount,
-		UploadedFiles:     processedCount,
-	})
+	sessionStore.UpdateTriagePhase(ctx, event.SessionID, event.JobID, phase, "processing")
 
 	log.Info().
 		Bool("allProcessed", allProcessed).
 		Int("processedCount", processedCount).
+		Int("fileResultCount", fileResultCount).
 		Int("expectedCount", expectedCount).
 		Int("errorCount", errorCount).
 		Str("sessionId", event.SessionID).

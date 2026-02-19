@@ -143,19 +143,22 @@ func handleEnhancementFeedback(ctx context.Context, event EnhanceEvent) error {
 			})
 		}
 
-		// Update DynamoDB.
-		job.Items[targetIdx].EnhancedKey = feedbackKey
-		job.Items[targetIdx].EnhancedThumbKey = thumbKey
-		job.Items[targetIdx].Phase = chat.PhaseFeedback
+		// Atomically update only this item (no counter change for feedback).
+		updatedItem := item
+		updatedItem.EnhancedKey = feedbackKey
+		updatedItem.EnhancedThumbKey = thumbKey
+		updatedItem.Phase = chat.PhaseFeedback
 		if feedbackEntry != nil {
-			job.Items[targetIdx].FeedbackHistory = append(job.Items[targetIdx].FeedbackHistory, store.FeedbackEntry{
+			updatedItem.FeedbackHistory = append(updatedItem.FeedbackHistory, store.FeedbackEntry{
 				UserFeedback:  feedbackEntry.UserFeedback,
 				ModelResponse: feedbackEntry.ModelResponse,
 				Method:        feedbackEntry.Method,
 				Success:       feedbackEntry.Success,
 			})
 		}
-		sessionStore.PutEnhancementJob(ctx, event.SessionID, job)
+		if err := sessionStore.UpdateEnhancementItemFields(ctx, event.SessionID, event.JobID, targetIdx, updatedItem); err != nil {
+			log.Warn().Err(err).Msg("Failed to update enhancement item with feedback")
+		}
 		log.Info().Str("jobId", event.JobID).Str("feedbackKey", feedbackKey).Dur("duration", time.Since(jobStart)).Msg("Enhancement feedback complete")
 	}
 

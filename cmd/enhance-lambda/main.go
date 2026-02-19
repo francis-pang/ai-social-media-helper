@@ -94,24 +94,31 @@ func main() {
 	lambda.Start(rawHandler)
 }
 
-// updateItemError updates the enhancement item in DynamoDB with an error status.
+// updateItemError atomically updates the enhancement item with an error status
+// and increments CompletedCount. Sets job status to "complete" if all items are done.
 // Best-effort — errors are logged but don't affect the Lambda response.
 func updateItemError(ctx context.Context, event EnhanceEvent, errMsg string) {
-	job, err := sessionStore.GetEnhancementJob(ctx, event.SessionID, event.JobID)
-	if err != nil || job == nil {
-		log.Warn().Err(err).Msg("Failed to get enhancement job for error update")
+	if event.ItemIndex < 0 {
+		log.Warn().Int("itemIndex", event.ItemIndex).Msg("Invalid item index for error update")
 		return
 	}
 
-	if event.ItemIndex >= 0 && event.ItemIndex < len(job.Items) {
-		job.Items[event.ItemIndex].Phase = chat.PhaseError
-		job.Items[event.ItemIndex].Error = errMsg
-		job.CompletedCount++
-		if job.CompletedCount >= job.TotalCount {
-			job.Status = "complete"
-		}
-		if err := sessionStore.PutEnhancementJob(ctx, event.SessionID, job); err != nil {
-			log.Warn().Err(err).Msg("Failed to update enhancement job with error")
+	errItem := store.EnhancementItem{
+		Key:         event.Key,
+		OriginalKey: event.Key,
+		Phase:       chat.PhaseError,
+		Error:       errMsg,
+	}
+
+	newCount, totalCount, err := sessionStore.UpdateEnhancementItemResult(ctx, event.SessionID, event.JobID, event.ItemIndex, errItem)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to update enhancement item with error")
+		return
+	}
+
+	if newCount >= totalCount {
+		if err := sessionStore.UpdateEnhancementStatus(ctx, event.SessionID, event.JobID, "complete"); err != nil {
+			log.Warn().Err(err).Msg("Failed to set enhancement job status to complete")
 		}
 	}
 }

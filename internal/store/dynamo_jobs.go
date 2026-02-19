@@ -118,6 +118,126 @@ func (s *DynamoStore) GetEnhancementJob(ctx context.Context, sessionID, jobID st
 	return &job, nil
 }
 
+// --- Enhancement atomic update operations (DDR-061: race condition fix) ---
+
+// UpdateEnhancementItemResult atomically updates a single item in the Items list
+// and increments CompletedCount using DynamoDB UpdateItem. This avoids the
+// Get-modify-PutItem race where concurrent Lambdas clobber each other's writes.
+func (s *DynamoStore) UpdateEnhancementItemResult(ctx context.Context, sessionID, jobID string, itemIndex int, item EnhancementItem) (int, int, error) {
+	pk := sessionPK(sessionID)
+	sk := skEnhance + jobID
+
+	itemAV, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return 0, 0, fmt.Errorf("marshal enhancement item: %w", err)
+	}
+
+	idx := strconv.Itoa(itemIndex)
+	result, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression: aws.String("SET items[" + idx + "] = :item ADD completedCount :inc"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":item": &types.AttributeValueMemberM{Value: itemAV},
+			":inc":  &types.AttributeValueMemberN{Value: "1"},
+		},
+		ReturnValues: types.ReturnValueAllNew,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("UpdateEnhancementItemResult %s/%s[%d]: %w", sessionID, jobID, itemIndex, err)
+	}
+
+	newCount := extractIntAttr(result.Attributes, "completedCount")
+	totalCount := extractIntAttr(result.Attributes, "totalCount")
+
+	log.Debug().
+		Str("sessionId", sessionID).Str("jobId", jobID).
+		Int("itemIndex", itemIndex).Int("newCount", newCount).Int("totalCount", totalCount).
+		Msg("Enhancement item result updated atomically")
+	return newCount, totalCount, nil
+}
+
+// UpdateEnhancementItemFields atomically sets a single item in the Items list
+// without touching CompletedCount. Used for feedback-driven re-enhancement.
+func (s *DynamoStore) UpdateEnhancementItemFields(ctx context.Context, sessionID, jobID string, itemIndex int, item EnhancementItem) error {
+	pk := sessionPK(sessionID)
+	sk := skEnhance + jobID
+
+	itemAV, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return fmt.Errorf("marshal enhancement item: %w", err)
+	}
+
+	idx := strconv.Itoa(itemIndex)
+	_, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression: aws.String("SET items[" + idx + "] = :item"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":item": &types.AttributeValueMemberM{Value: itemAV},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateEnhancementItemFields %s/%s[%d]: %w", sessionID, jobID, itemIndex, err)
+	}
+
+	log.Debug().
+		Str("sessionId", sessionID).Str("jobId", jobID).
+		Int("itemIndex", itemIndex).
+		Msg("Enhancement item fields updated atomically")
+	return nil
+}
+
+// UpdateEnhancementStatus atomically sets the job status, conditioned on
+// completedCount >= totalCount. This prevents a slower Lambda from overwriting
+// "complete" back to "pending".
+func (s *DynamoStore) UpdateEnhancementStatus(ctx context.Context, sessionID, jobID, status string) error {
+	pk := sessionPK(sessionID)
+	sk := skEnhance + jobID
+
+	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression: aws.String("SET #st = :status"),
+		ConditionExpression: aws.String("completedCount >= totalCount"),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":status": &types.AttributeValueMemberS{Value: status},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateEnhancementStatus %s/%s -> %s: %w", sessionID, jobID, status, err)
+	}
+
+	log.Debug().
+		Str("sessionId", sessionID).Str("jobId", jobID).Str("status", status).
+		Msg("Enhancement status updated atomically")
+	return nil
+}
+
+// extractIntAttr reads an integer from a DynamoDB attribute map.
+func extractIntAttr(attrs map[string]types.AttributeValue, key string) int {
+	if attr, ok := attrs[key]; ok {
+		if n, ok := attr.(*types.AttributeValueMemberN); ok {
+			if v, err := strconv.Atoi(n.Value); err == nil {
+				return v
+			}
+		}
+	}
+	return 0
+}
+
 // --- Download job operations ---
 
 func (s *DynamoStore) PutDownloadJob(ctx context.Context, sessionID string, job *DownloadJob) error {
@@ -333,6 +453,36 @@ func (s *DynamoStore) UpdateTriageExpectedCount(ctx context.Context, sessionID, 
 	}
 
 	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Int("expectedFileCount", count).Msg("Triage expectedFileCount updated")
+	return nil
+}
+
+// UpdateTriagePhase atomically updates the phase and status fields on a triage job
+// without overwriting processedCount. Uses UpdateItem to avoid clobbering
+// concurrent atomic increments from the MediaProcess Lambda.
+func (s *DynamoStore) UpdateTriagePhase(ctx context.Context, sessionID, jobID, phase, status string) error {
+	pk := sessionPK(sessionID)
+	sk := skTriage + jobID
+
+	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression: aws.String("SET phase = :phase, #st = :status"),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":phase":  &types.AttributeValueMemberS{Value: phase},
+			":status": &types.AttributeValueMemberS{Value: status},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update triage phase %s/%s: %w", sessionID, jobID, err)
+	}
+
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("phase", phase).Str("status", status).Msg("Triage phase updated")
 	return nil
 }
 

@@ -187,50 +187,58 @@ func handleEnhance(ctx context.Context, event EnhanceEvent) (EnhanceResult, erro
 	}, nil
 }
 
-// updateItemComplete updates the enhancement item in DynamoDB with success results.
+// updateItemComplete atomically updates the enhancement item with success results
+// and increments CompletedCount. Sets job status to "complete" if all items are done.
 // Best-effort — errors are logged but don't affect the Lambda response.
 func updateItemComplete(ctx context.Context, event EnhanceEvent, enhancedKey, enhancedThumbKey string, state *chat.EnhancementState) {
-	job, err := sessionStore.GetEnhancementJob(ctx, event.SessionID, event.JobID)
-	if err != nil || job == nil {
-		log.Warn().Err(err).Msg("Failed to get enhancement job for completion update")
+	if event.ItemIndex < 0 {
+		log.Warn().Int("itemIndex", event.ItemIndex).Msg("Invalid item index for completion update")
 		return
 	}
 
-	if event.ItemIndex >= 0 && event.ItemIndex < len(job.Items) {
-		job.Items[event.ItemIndex].Phase = state.Phase
-		job.Items[event.ItemIndex].EnhancedKey = enhancedKey
-		job.Items[event.ItemIndex].EnhancedThumbKey = enhancedThumbKey
-		job.Items[event.ItemIndex].OriginalThumbKey = fmt.Sprintf("%s/thumbnails/%s.jpg", event.SessionID,
-			strings.TrimSuffix(filepath.Base(event.Key), filepath.Ext(event.Key)))
-		job.Items[event.ItemIndex].Phase1Text = state.Phase1Text
-		job.Items[event.ItemIndex].ImagenEdits = state.ImagenEdits
-		if state.Analysis != nil {
-			job.Items[event.ItemIndex].Analysis = &store.AnalysisResult{
-				OverallAssessment:    state.Analysis.OverallAssessment,
-				ProfessionalScore:    state.Analysis.ProfessionalScore,
-				TargetScore:          state.Analysis.TargetScore,
-				NoFurtherEditsNeeded: state.Analysis.NoFurtherEditsNeeded,
-			}
-			for _, imp := range state.Analysis.RemainingImprovements {
-				job.Items[event.ItemIndex].Analysis.RemainingImprovements = append(
-					job.Items[event.ItemIndex].Analysis.RemainingImprovements,
-					store.ImprovementItem{
-						Type:            imp.Type,
-						Description:     imp.Description,
-						Region:          imp.Region,
-						Impact:          imp.Impact,
-						ImagenSuitable:  imp.ImagenSuitable,
-						EditInstruction: imp.EditInstruction,
-					},
-				)
-			}
+	item := store.EnhancementItem{
+		Key:              event.Key,
+		Filename:         filepath.Base(event.Key),
+		OriginalKey:      event.Key,
+		Phase:            state.Phase,
+		EnhancedKey:      enhancedKey,
+		EnhancedThumbKey: enhancedThumbKey,
+		OriginalThumbKey: fmt.Sprintf("%s/thumbnails/%s.jpg", event.SessionID,
+			strings.TrimSuffix(filepath.Base(event.Key), filepath.Ext(event.Key))),
+		Phase1Text:  state.Phase1Text,
+		ImagenEdits: state.ImagenEdits,
+	}
+	if state.Analysis != nil {
+		item.Analysis = &store.AnalysisResult{
+			OverallAssessment:    state.Analysis.OverallAssessment,
+			ProfessionalScore:    state.Analysis.ProfessionalScore,
+			TargetScore:          state.Analysis.TargetScore,
+			NoFurtherEditsNeeded: state.Analysis.NoFurtherEditsNeeded,
 		}
-		job.CompletedCount++
-		if job.CompletedCount >= job.TotalCount {
-			job.Status = "complete"
+		for _, imp := range state.Analysis.RemainingImprovements {
+			item.Analysis.RemainingImprovements = append(
+				item.Analysis.RemainingImprovements,
+				store.ImprovementItem{
+					Type:            imp.Type,
+					Description:     imp.Description,
+					Region:          imp.Region,
+					Impact:          imp.Impact,
+					ImagenSuitable:  imp.ImagenSuitable,
+					EditInstruction: imp.EditInstruction,
+				},
+			)
 		}
-		if err := sessionStore.PutEnhancementJob(ctx, event.SessionID, job); err != nil {
-			log.Warn().Err(err).Msg("Failed to update enhancement job with completion")
+	}
+
+	newCount, totalCount, err := sessionStore.UpdateEnhancementItemResult(ctx, event.SessionID, event.JobID, event.ItemIndex, item)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to update enhancement item with completion")
+		return
+	}
+
+	if newCount >= totalCount {
+		if err := sessionStore.UpdateEnhancementStatus(ctx, event.SessionID, event.JobID, "complete"); err != nil {
+			log.Warn().Err(err).Msg("Failed to set enhancement job status to complete")
 		}
 	}
 }

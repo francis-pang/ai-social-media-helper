@@ -222,6 +222,32 @@ func handleEnhanceResults(w http.ResponseWriter, r *http.Request, jobID string) 
 	}
 	log.Debug().Str("jobId", jobID).Str("status", job.Status).Msg("Enhancement job found in DynamoDB")
 
+	// Self-healing reconciliation: count items where Phase != "pending" and
+	// compare with CompletedCount. Fixes any counter drift from past races.
+	trueCompleted := 0
+	for _, item := range job.Items {
+		if item.Phase != "" && item.Phase != "pending" {
+			trueCompleted++
+		}
+	}
+	if trueCompleted != job.CompletedCount {
+		log.Warn().
+			Str("jobId", jobID).Str("sessionId", sessionID).
+			Int("storedCount", job.CompletedCount).Int("trueCount", trueCompleted).
+			Msg("Enhancement completedCount mismatch — reconciling")
+		job.CompletedCount = trueCompleted
+	}
+	if trueCompleted >= job.TotalCount && job.Status != "complete" {
+		log.Warn().
+			Str("jobId", jobID).Str("sessionId", sessionID).
+			Int("trueCompleted", trueCompleted).Int("totalCount", job.TotalCount).
+			Msg("All items done but status not complete — reconciling")
+		job.Status = "complete"
+		if err := sessionStore.UpdateEnhancementStatus(context.Background(), sessionID, jobID, "complete"); err != nil {
+			log.Warn().Err(err).Msg("Failed to reconcile enhancement status")
+		}
+	}
+
 	resp := map[string]interface{}{
 		"id":             job.ID,
 		"status":         job.Status,
