@@ -14,7 +14,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -ldflags="-s -w" -o /handler ./cmd/media-lambda
 
 # Stage 2: Runtime with ffmpeg + ffprobe
