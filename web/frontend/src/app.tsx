@@ -201,9 +201,9 @@ const stepTitle = computed(() => {
     case "confirm-files":
       return "Confirm Selection";
     case "triage-upload":
-      return "Upload Media";
+      return "Upload & Process Media";
     case "processing":
-      return "Processing...";
+      return "AI Analysis";
     case "results":
       return "Triage Results";
     // Selection flow

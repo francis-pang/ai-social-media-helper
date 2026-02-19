@@ -345,8 +345,8 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 		resp["error"] = job.Error
 	}
 
-	// DDR-061: Include per-file statuses during processing phase
-	if job.Status == "processing" && fileProcessStore != nil {
+	// DDR-061, DDR-063: Include per-file statuses during pending and processing phases
+	if (job.Status == "pending" || job.Status == "processing") && fileProcessStore != nil {
 		fileResults, err := fileProcessStore.GetFileResults(context.Background(), sessionID, jobID)
 		if err == nil && len(fileResults) > 0 {
 			fileStatuses := make([]map[string]interface{}, 0, len(fileResults))

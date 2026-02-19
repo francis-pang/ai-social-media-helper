@@ -29,7 +29,7 @@ function pollResults(id: string) {
   const { promise, abort } = createPoller<TriageResults>({
     fn: () => getTriageResults(id, sessionId),
     intervalMs: 2000,
-    timeoutMs: 15 * 60 * 1000,
+    timeoutMs: 30 * 60 * 1000,
     immediate: true, // pick up already-complete results without a 2s delay
     isDone: (res) => res.status === "complete" || res.status === "error",
     onPoll: (res) => {
@@ -173,13 +173,14 @@ export function TriageView() {
     );
   }
 
-  // Show processing state (DDR-056 — ProcessingIndicator)
+  // Show processing state — Gemini-only phases (DDR-056, DDR-063)
   if (!results.value || results.value.status === "pending" || results.value.status === "processing") {
     const phase = results.value?.phase;
 
-    // Phase-specific title, description, and status label
-    let title = "Analyzing Media with AI";
-    let description = "Evaluating each media file for quality, duplicates, and content issues";
+    // DDR-063: Only show Gemini-specific phases here.
+    // File-level processing is now shown on the upload screen (FileUploader).
+    let title = "AI Analysis";
+    let description = "Preparing media for Gemini AI evaluation";
     let statusLabel: string = results.value?.status ?? "pending";
 
     if (phase === "uploading") {
@@ -196,7 +197,6 @@ export function TriageView() {
       statusLabel = "analyzing";
     }
 
-    // Upload progress (only during uploading phase)
     const showUploadProgress =
       phase === "uploading" &&
       results.value?.totalFiles != null &&

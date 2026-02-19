@@ -75,6 +75,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-060](./DDR-060-s3-presigned-urls-for-gemini.md) | 2026-02-14 | S3 Presigned URLs for Gemini Video Transfer | Accepted |
 | [DDR-061](./DDR-061-s3-event-driven-per-file-processing.md) | 2026-02-15 | S3 Event-Driven Per-File Processing | Accepted |
 | [DDR-062](./DDR-062-observability-and-version-tracking.md) | 2026-02-15 | Observability Gaps and Version Tracking | Accepted |
+| [DDR-063](./DDR-063-split-processing-ui-screens.md) | 2026-02-18 | Split File Processing and Gemini Request into Separate UI Screens | Accepted |
 
 ---
 
@@ -89,4 +90,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-15 (DDR-062)
+**Last Updated**: 2026-02-18 (DDR-063)

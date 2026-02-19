@@ -13,8 +13,8 @@ Available as a CLI tool (`media-triage`), a local web UI (`media-web`), and a cl
 ```mermaid
 flowchart TD
     Upload["Upload / select media"]
-    Preprocess["Preprocess media\n(thumbnails, video compression)"]
-    Gemini["Gemini AI batch evaluation\n(single API call, all media)"]
+    Preprocess["Preprocess media\n(thumbnails, video compression)\nShown inline on upload screen (DDR-063)"]
+    Gemini["Gemini AI batch evaluation\n(single API call, all media)\nDedicated AI Analysis screen (DDR-063)"]
     Categorize["Categorize results\nKEEP vs DISCARD with reasons"]
     StoreThumbs["Store thumbnails to S3\nDelete originals (DDR-059)"]
     Review["User reviews flagged media\n(thumbnail previews)"]
@@ -23,6 +23,13 @@ flowchart TD
 
     Upload --> Preprocess --> Gemini --> Categorize --> StoreThumbs --> Review --> Confirm --> Cleanup
 ```
+
+### Cloud UI Screens (DDR-063)
+
+The cloud triage flow splits into two distinct UI screens:
+
+1. **Upload & Process Media** (`triage-upload`): Users drag-and-drop files. Each file progresses through: Uploading to S3 → Server Processing (thumbnail/compress) → Ready. Files are grouped by status with thumbnails shown inline as they become available. The screen remains active until all per-file processing completes.
+2. **AI Analysis** (`processing`): Once all files are processed, the user transitions to a dedicated Gemini analysis screen showing only the three AI sub-phases: uploading to Gemini, video processing, and analyzing.
 
 ## How It Works
 
@@ -90,7 +97,9 @@ For a typical 36-file session (~500 MB originals), this reduces S3 storage-hours
 - [DDR-042](./design-decisions/DDR-042-landing-page-workflow-switcher.md) — Landing page workflow switcher
 - [DDR-059](./design-decisions/DDR-059-frugal-triage-s3-cleanup.md) — Frugal Triage — Early S3 Cleanup via Thumbnails
 - [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
+- [DDR-061](./design-decisions/DDR-061-s3-event-driven-per-file-processing.md) — S3 Event-Driven Per-File Processing
+- [DDR-063](./design-decisions/DDR-063-split-processing-ui-screens.md) — Split File Processing and Gemini Request into Separate UI Screens
 
 ---
 
-**Last Updated**: 2026-02-14
+**Last Updated**: 2026-02-18
