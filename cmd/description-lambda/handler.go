@@ -43,8 +43,13 @@ func handleDescription(ctx context.Context, event DescriptionEvent) error {
 		})
 	}
 
+	// DDR-065: Create CacheManager for context caching within description.
+	cacheMgr := chat.NewCacheManager(genaiClient)
+	defer cacheMgr.DeleteAll(ctx, event.SessionID)
+
 	result, rawResponse, err := chat.GenerateDescription(
 		ctx, genaiClient, event.GroupLabel, event.TripContext, mediaItems,
+		cacheMgr, event.SessionID,
 	)
 	if err != nil {
 		return jobutil.SetJobError(ctx, event.SessionID, event.JobID, "caption generation failed", func(ctx context.Context, sessionID, jobID, errMsg string) error {

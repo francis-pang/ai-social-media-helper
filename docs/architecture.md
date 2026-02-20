@@ -361,6 +361,20 @@ sequenceDiagram
 - **Confirm cleanup**: When the user confirms triage results, the API Lambda deletes the user-selected discard keys, then cleans up all remaining S3 artifacts (thumbnails, compressed videos) in a background goroutine.
 - **Pipeline timeout**: 30 minutes. Triage Lambda timeout: 10 minutes (2 GB memory, Light container).
 
+## Gemini Context Caching (DDR-065)
+
+The application uses Gemini's Context Caching API to avoid re-sending identical system prompts and media context across multiple `GenerateContent` calls within a session. This reduces both input token costs and latency.
+
+| Pipeline | Cache Key | What's Cached | Benefit |
+|----------|-----------|---------------|---------|
+| Selection | `{sessionID}:selection` | System prompt + all media parts (thumbnails, video refs) | Avoids re-sending media when selection is retried or followed by description |
+| Triage | `{sessionID}:triage` | System prompt + batch media parts | Reuses context across triage batches of 20 files |
+| Description | `{sessionID}:description` | System prompt + media parts for the post group | Reuses context across multi-turn feedback rounds |
+
+**Lifecycle:** Caches are created on-demand with a 1-hour TTL (sufficient for a session) and deleted when the Lambda invocation completes. If cache creation fails (e.g., token count below the 4096 minimum), the system falls back to inline context with no user-visible impact.
+
+**Observability:** New metrics `GeminiCacheHit`, `GeminiCacheMiss`, and `GeminiCachedTokens` track cache effectiveness.
+
 ## Observability
 
 Version identity and structured logging across every layer. See [DDR-062](./design-decisions/DDR-062-observability-and-version-tracking.md).
@@ -473,7 +487,8 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-059](./design-decisions/DDR-059-frugal-triage-s3-cleanup.md) — Frugal Triage — Early S3 Cleanup via Thumbnails
 - [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
 - [DDR-062](./design-decisions/DDR-062-observability-and-version-tracking.md) — Observability gaps and version tracking
+- [DDR-065](./design-decisions/DDR-065-gemini-context-caching-and-batch-api.md) — Gemini Context Caching and Batch API Integration
 
 ---
 
-**Last Updated**: 2026-02-15
+**Last Updated**: 2026-02-19

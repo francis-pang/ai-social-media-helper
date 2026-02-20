@@ -146,7 +146,11 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	})
 
 	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Msg("Calling AskMediaTriage (DDR-061: presigned URLs from manifest)")
-	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper)
+	// DDR-065: Create CacheManager for context caching within triage batches.
+	cacheMgr := chat.NewCacheManager(client)
+	defer cacheMgr.DeleteAll(ctx, event.SessionID)
+
+	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr)
 	if err != nil {
 		return jobutil.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Triage failed: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})

@@ -151,7 +151,11 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		return s3util.UploadCompressedVideo(ctx, s3Client, mediaBucket, sessionID, originalKey, compressedPath)
 	}
 
-	selResult, err := chat.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper)
+	// DDR-065: Create CacheManager for context caching across selection → description.
+	cacheMgr := chat.NewCacheManager(client)
+	defer cacheMgr.DeleteAll(ctx, event.SessionID)
+
+	selResult, err := chat.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper, cacheMgr)
 	if err != nil {
 		errMsg := fmt.Sprintf("selection failed: %v", err)
 		selJob.Status = "error"

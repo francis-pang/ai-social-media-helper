@@ -119,11 +119,12 @@ const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB
 // sessionID is used for storing compressed videos in S3 (optional).
 // storeCompressed is an optional callback to store compressed videos in S3.
 // keyMapper maps local file paths to S3 keys (optional, for cloud mode).
+// cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
 // Returns a slice of TriageResult with one verdict per media item.
 // See DDR-021: Media Triage Command with Batch AI Evaluation.
-func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) ([]TriageResult, error) {
+func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager) ([]TriageResult, error) {
 	if len(files) <= triageBatchSize {
-		return askMediaTriageSingle(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper)
+		return askMediaTriageSingle(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, cacheMgr)
 	}
 
 	totalBatches := (len(files) + triageBatchSize - 1) / triageBatchSize
@@ -150,7 +151,7 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 			Int("offset", batchStart).
 			Msg("Processing triage batch")
 
-		batchResults, err := askMediaTriageSingle(ctx, client, batch, modelName, sessionID, storeCompressed, keyMapper)
+		batchResults, err := askMediaTriageSingle(ctx, client, batch, modelName, sessionID, storeCompressed, keyMapper, cacheMgr)
 		if err != nil {
 			log.Error().Err(err).Int("batch", batchNum).Msg("Batch triage failed")
 			return nil, fmt.Errorf("batch %d/%d triage failed: %w", batchNum, totalBatches, err)
@@ -180,7 +181,7 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 // askMediaTriageSingle sends a single batch of media files to Gemini for
 // triage evaluation. Callers should prefer AskMediaTriage which handles
 // batching automatically.
-func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) ([]TriageResult, error) {
+func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager) ([]TriageResult, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -412,25 +413,51 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 		return nil, fmt.Errorf("no media files could be processed for triage (all %d files skipped)", len(files))
 	}
 
-	// Add the text prompt at the end
-	parts = append(parts, &genai.Part{Text: prompt})
-
 	log.Info().
 		Int("media_parts", len(parts)).
 		Int("images", imageCount).
 		Int("videos", videoCount).
 		Int("files_api_uploads", len(uploadedFiles)).
+		Bool("cache_enabled", cacheMgr != nil).
 		Msg("Sending media to Gemini for batch triage...")
 
-	// Generate content
-	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	systemInstruction := config.SystemInstruction
+
 	geminiStart := time.Now()
-	log.Debug().
-		Str("model", modelName).
-		Int("prompt_length", len(prompt)).
-		Int("media_part_count", len(parts)-1). // -1 for prompt
-		Msg("Starting Gemini API call for media triage")
-	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+	var resp *genai.GenerateContentResponse
+	var err error
+
+	if cacheMgr != nil && sessionID != "" {
+		// DDR-065: Use context caching for triage system instruction + media.
+		mediaParts := parts // All media parts (prompt not yet appended)
+		cacheContents := []*genai.Content{{Role: "user", Parts: mediaParts}}
+		userParts := []*genai.Part{{Text: prompt}}
+
+		log.Debug().
+			Str("model", modelName).
+			Int("media_parts", len(mediaParts)).
+			Msg("Starting cached Gemini API call for media triage")
+
+		resp, err = cacheMgr.GenerateWithCache(ctx, CacheConfig{
+			SessionID: sessionID,
+			Operation: "triage",
+		}, modelName, systemInstruction, cacheContents, userParts, &genai.GenerateContentConfig{
+			MaxOutputTokens: config.MaxOutputTokens,
+		})
+	} else {
+		// Add the text prompt at the end for inline mode
+		parts = append(parts, &genai.Part{Text: prompt})
+		contents := []*genai.Content{{Role: "user", Parts: parts}}
+
+		log.Debug().
+			Str("model", modelName).
+			Int("prompt_length", len(prompt)).
+			Int("media_part_count", len(parts)-1).
+			Msg("Starting Gemini API call for media triage")
+
+		resp, err = client.Models.GenerateContent(ctx, modelName, contents, config)
+	}
+
 	geminiElapsed := time.Since(geminiStart)
 
 	// Emit Gemini API metrics

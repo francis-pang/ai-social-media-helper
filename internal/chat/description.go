@@ -69,12 +69,16 @@ type DescriptionConversationEntry struct {
 // groupLabel is the user's descriptive text for the post group (from Step 6).
 // tripContext is the overall trip/event description (from Step 1).
 // mediaItems contains the thumbnail data and metadata for each item in the group.
+// cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
+// sessionID is required when cacheMgr is provided.
 func GenerateDescription(
 	ctx context.Context,
 	client *genai.Client,
 	groupLabel string,
 	tripContext string,
 	mediaItems []DescriptionMediaItem,
+	cacheMgr *CacheManager,
+	sessionID string,
 ) (*DescriptionResult, string, error) {
 	log.Debug().
 		Str("group_label", truncateString(groupLabel, 100)).
@@ -127,18 +131,41 @@ func GenerateDescription(
 
 	log.Info().
 		Int("media_parts", len(parts)-2). // -2 for reference photo and prompt
+		Bool("cache_enabled", cacheMgr != nil).
 		Msg("Sending media to Gemini for caption generation...")
 
 	// Generate content
 	modelName := GetModelName()
 	callStart := time.Now()
-	log.Debug().
-		Str("model", modelName).
-		Int("prompt_length", len(prompt)).
-		Int("media_part_count", len(parts)-1). // -1 for prompt
-		Msg("Starting Gemini API call for description generation")
-	contents := []*genai.Content{{Role: "user", Parts: parts}}
-	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+
+	var resp *genai.GenerateContentResponse
+	var err error
+
+	if cacheMgr != nil && sessionID != "" {
+		// DDR-065: Use context caching for media + system instruction.
+		mediaParts := parts[:len(parts)-1] // All parts except the text prompt
+		cacheContents := []*genai.Content{{Role: "user", Parts: mediaParts}}
+		userParts := []*genai.Part{{Text: prompt}}
+
+		log.Debug().
+			Str("model", modelName).
+			Int("media_parts", len(mediaParts)).
+			Msg("Starting cached Gemini API call for description generation")
+
+		resp, err = cacheMgr.GenerateWithCache(ctx, CacheConfig{
+			SessionID: sessionID,
+			Operation: "description",
+		}, modelName, config.SystemInstruction, cacheContents, userParts, nil)
+	} else {
+		log.Debug().
+			Str("model", modelName).
+			Int("prompt_length", len(prompt)).
+			Int("media_part_count", len(parts)-1).
+			Msg("Starting Gemini API call for description generation")
+		contents := []*genai.Content{{Role: "user", Parts: parts}}
+		resp, err = client.Models.GenerateContent(ctx, modelName, contents, config)
+	}
+
 	duration := time.Since(callStart)
 	if err != nil {
 		log.Error().Err(err).Dur("duration", duration).Msg("Failed to generate description from Gemini")

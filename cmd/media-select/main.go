@@ -208,7 +208,7 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 	fmt.Println()
 
 	// Ask Gemini to select media using quality-agnostic criteria
-	// Local mode: no sessionID, no S3 storage
+	// Local mode: no sessionID, no S3 storage, no caching
 	response, err := chat.AskMediaSelection(ctx, client, files, chat.DefaultMaxMedia, tripContext, modelFlag, "", nil, nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to get media selection from Gemini")

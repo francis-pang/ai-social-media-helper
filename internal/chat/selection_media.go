@@ -132,7 +132,8 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 // sessionID is used for storing compressed videos in S3 (optional).
 // storeCompressed is an optional callback to store compressed videos in S3.
 // keyMapper maps local file paths to S3 keys (optional, for cloud mode).
-func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper) (*SelectionResult, error) {
+// cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
+func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager) (*SelectionResult, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -150,6 +151,7 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 		Int("videos", videoCount).
 		Bool("has_context", tripContext != "").
 		Str("model", modelName).
+		Bool("cache_enabled", cacheMgr != nil).
 		Msg("Starting structured JSON media selection with Gemini (DDR-030)")
 
 	// Build media parts (thumbnails + uploaded videos)
@@ -162,32 +164,50 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	// Build the prompt
 	prompt := BuildMediaSelectionJSONPrompt(files, tripContext)
 
-	// Configure model with JSON system instruction
-	config := &genai.GenerateContentConfig{
-		SystemInstruction: &genai.Content{
-			Parts: []*genai.Part{{Text: MediaSelectionJSONInstruction}},
-		},
+	systemInstruction := &genai.Content{
+		Parts: []*genai.Part{{Text: MediaSelectionJSONInstruction}},
 	}
-
-	// Add the text prompt at the end
-	parts = append(parts, &genai.Part{Text: prompt})
 
 	log.Info().
 		Int("num_images", imageCount).
 		Int("num_videos", len(uploadedFiles)).
 		Msg("Sending media to Gemini for JSON selection...")
 
-	// Generate content
-	contents := []*genai.Content{{Role: "user", Parts: parts}}
 	geminiStart := time.Now()
-	log.Debug().
-		Str("model", modelName).
-		Int("part_count", len(parts)).
-		Msg("Starting Gemini API call for JSON media selection")
-	resp, err := client.Models.GenerateContent(ctx, modelName, contents, config)
+	var resp *genai.GenerateContentResponse
+
+	if cacheMgr != nil && sessionID != "" {
+		// DDR-065: Use context caching for media + system instruction.
+		cacheContents := []*genai.Content{{Role: "user", Parts: parts}}
+		userParts := []*genai.Part{{Text: prompt}}
+
+		log.Debug().
+			Str("model", modelName).
+			Int("media_parts", len(parts)).
+			Msg("Starting cached Gemini API call for JSON media selection")
+
+		resp, err = cacheMgr.GenerateWithCache(ctx, CacheConfig{
+			SessionID: sessionID,
+			Operation: "selection",
+		}, modelName, systemInstruction, cacheContents, userParts, nil)
+	} else {
+		config := &genai.GenerateContentConfig{
+			SystemInstruction: systemInstruction,
+		}
+		parts = append(parts, &genai.Part{Text: prompt})
+		contents := []*genai.Content{{Role: "user", Parts: parts}}
+
+		log.Debug().
+			Str("model", modelName).
+			Int("part_count", len(parts)).
+			Msg("Starting Gemini API call for JSON media selection")
+
+		resp, err = client.Models.GenerateContent(ctx, modelName, contents, config)
+	}
+
 	geminiElapsed := time.Since(geminiStart)
 
-	// Emit Gemini API metrics
+	// Emit Gemini API metrics (DDR-065: cache hit/miss tracking)
 	m := metrics.New("AiSocialMedia").
 		Dimension("Operation", "jsonSelection").
 		Metric("GeminiApiLatencyMs", float64(geminiElapsed.Milliseconds()), metrics.UnitMilliseconds).
@@ -195,9 +215,19 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	if err != nil {
 		m.Count("GeminiApiErrors")
 	}
+	if cacheMgr != nil && sessionID != "" {
+		if cacheMgr.Get(sessionID, "selection") != "" {
+			m.Count("GeminiCacheHit")
+		} else {
+			m.Count("GeminiCacheMiss")
+		}
+	}
 	if resp != nil && resp.UsageMetadata != nil {
 		m.Metric("GeminiInputTokens", float64(resp.UsageMetadata.PromptTokenCount), metrics.UnitCount)
 		m.Metric("GeminiOutputTokens", float64(resp.UsageMetadata.CandidatesTokenCount), metrics.UnitCount)
+		if resp.UsageMetadata.CachedContentTokenCount > 0 {
+			m.Metric("GeminiCachedTokens", float64(resp.UsageMetadata.CachedContentTokenCount), metrics.UnitCount)
+		}
 	}
 	m.Flush()
 
