@@ -174,12 +174,12 @@ func (c *GeminiImageClient) EditImageMultiTurn(ctx context.Context, imageData []
 	return result, nil
 }
 
-// AnalyzeImage sends an image to Gemini 3 Pro for text-only analysis.
+// AnalyzeImage sends an image to Gemini 3.1 Pro for text-only analysis.
 // Used in Phase 2 to determine what further enhancements are needed.
 func (c *GeminiImageClient) AnalyzeImage(ctx context.Context, imageData []byte, imageMIMEType string, analysisPrompt string, systemInstruction string) (string, error) {
 	startTime := time.Now()
 	log.Debug().
-		Str("model", ModelGemini3ProPreview).
+		Str("model", ModelGemini31ProPreview).
 		Int("image_bytes", len(imageData)).
 		Int("prompt_length", len(analysisPrompt)).
 		Msg("AnalyzeImage: Starting Gemini API call")
@@ -210,7 +210,7 @@ func (c *GeminiImageClient) AnalyzeImage(ctx context.Context, imageData []byte, 
 	}
 
 	// Use Pro (text) model for analysis, not the image model
-	resp, err := c.client.Models.GenerateContent(ctx, ModelGemini3ProPreview, contents, config)
+	resp, err := c.client.Models.GenerateContent(ctx, ModelGemini31ProPreview, contents, config)
 	if err != nil {
 		return "", fmt.Errorf("Gemini image analysis failed: %w", err)
 	}

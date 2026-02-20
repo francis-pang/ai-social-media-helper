@@ -157,7 +157,7 @@ The existing `media-select` command includes a reference photo of Francis for pe
 
 - DDR-014: Thumbnail-Based Multi-Image Selection Strategy
 - DDR-016: Quality-Agnostic Metadata-Driven Photo Selection
-- DDR-018: Video Compression for Gemini 3 Pro Optimization
+- DDR-018: Video Compression for Gemini 3.1 Pro Optimization
 - DDR-019: Externalized Prompt Templates
 - DDR-020: Mixed Media Selection Strategy
 

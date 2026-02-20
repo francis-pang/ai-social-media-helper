@@ -49,7 +49,7 @@ func enhanceFrameGroup(ctx context.Context, geminiClient *GeminiImageClient, ima
 		return nil, fmt.Errorf("failed to read representative frame: %w", err)
 	}
 
-	// --- Phase 3: Gemini 3 Pro Image Enhancement ---
+	// --- Phase 3: Gemini 3 Pro Image Enhancement (unchanged) ---
 	instruction := assets.VideoEnhancementSystemPrompt
 	if config.UserFeedback != "" {
 		instruction = fmt.Sprintf("%s\n\nADDITIONAL USER FEEDBACK:\n%s", instruction, config.UserFeedback)

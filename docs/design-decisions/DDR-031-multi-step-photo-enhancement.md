@@ -10,7 +10,7 @@ After AI selection (Steps 2-3, DDR-030), selected photos need enhancement before
 
 1. **Global creative edits** (color correction, lighting, exposure, white balance, composition) are best handled by Gemini 3 Pro Image, which understands natural language instructions and can perform broad creative adjustments.
 2. **Localized surgical edits** (object removal, background replacement, inpainting, outpainting) are best handled by Imagen 3's mask-based editing, which excels at precise region-specific modifications.
-3. **Analysis and gap identification** requires Gemini 3 Pro's reasoning capability to evaluate the current state of an image and determine what further enhancements would bring it to professional quality.
+3. **Analysis and gap identification** requires Gemini 3.1 Pro's reasoning capability to evaluate the current state of an image and determine what further enhancements would bring it to professional quality.
 
 Key constraints:
 - Gemini 3 Pro Image editing and analysis use the `google.golang.org/genai` SDK (v1.45.0) which natively supports image output via `ResponseModalities`
@@ -28,7 +28,7 @@ Each photo goes through up to three phases of automated enhancement:
 ```
 Phase 1: Gemini 3 Pro Image — Global Enhancement
     ↓ (enhanced image)
-Phase 2: Gemini 3 Pro (Text) — Professional Quality Analysis
+Phase 2: Gemini 3.1 Pro (Text) — Professional Quality Analysis
     ↓ (structured JSON: remaining improvements)
 Phase 3: Imagen 3 Mask-Based — Localized Surgical Edits
     ↓ (may iterate multiple times)
@@ -46,9 +46,9 @@ Send the original photo with an enhancement instruction to `gemini-3-pro-image-p
 
 This uses the `google.golang.org/genai` SDK with `ResponseModalities: ["TEXT", "IMAGE"]` in the `GenerateContentConfig`.
 
-**Phase 2 — Gemini 3 Pro: Professional Quality Analysis**
+**Phase 2 — Gemini 3.1 Pro: Professional Quality Analysis**
 
-Send the Phase 1 result to Gemini 3 Pro (text-only analysis) asking: "What further enhancements would bring this photo to professional quality?" The response is structured JSON:
+Send the Phase 1 result to Gemini 3.1 Pro (text-only analysis) asking: "What further enhancements would bring this photo to professional quality?" The response is structured JSON:
 
 ```json
 {
@@ -95,7 +95,7 @@ User Feedback
 Try Gemini 3 Pro Image first (global or creative edit)
     ↓ (success? → done)
     ↓ (insufficient? → continue)
-Analyze gap with Gemini 3 Pro (text)
+Analyze gap with Gemini 3.1 Pro (text)
     ↓
 Apply Imagen 3 iterations for localized fixes
     ↓

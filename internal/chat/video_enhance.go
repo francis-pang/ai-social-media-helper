@@ -2,7 +2,7 @@ package chat
 
 // video_enhance.go orchestrates the multi-step frame-based video enhancement pipeline.
 // It decomposes a video into frames, groups similar frames by color histogram,
-// enhances representative frames using Gemini 3 Pro Image + Imagen 3, then
+// enhances representative frames using Gemini 3 Pro Image + Gemini 3.1 Pro analysis + Imagen 3, then
 // reassembles the video with the enhancements propagated via color LUT.
 // See DDR-032: Multi-Step Frame-Based Video Enhancement Pipeline.
 

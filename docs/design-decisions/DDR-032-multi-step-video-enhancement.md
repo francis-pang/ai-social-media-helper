@@ -6,7 +6,7 @@
 
 ## Context
 
-DDR-031 established the multi-step photo enhancement pipeline using Gemini 3 Pro Image (Phase 1), Gemini 3 Pro analysis (Phase 2), and Imagen 3 mask-based editing (Phase 3). However, no Google AI service can directly enhance an existing video — Gemini image editing works on still images only, and Veo 3.1 generates new videos rather than enhancing existing footage.
+DDR-031 established the multi-step photo enhancement pipeline using Gemini 3 Pro Image (Phase 1), Gemini 3.1 Pro analysis (Phase 2), and Imagen 3 mask-based editing (Phase 3). However, no Google AI service can directly enhance an existing video — Gemini image editing works on still images only, and Veo 3.1 generates new videos rather than enhancing existing footage.
 
 The plan document (Step 4) originally proposed two options for video: Gemini Analysis + FFmpeg (V1, limited to signal processing) or skipping video enhancement (V4). Both fall short of the quality achievable with AI image enhancement.
 
@@ -33,7 +33,7 @@ Phase 2: Frame Grouping (color histogram similarity)
     ↓ (groups of similar frames)
 Phase 3: Gemini 3 Pro Image — Representative Frame Enhancement
     ↓ (enhanced representative frame per group)
-Phase 4: Gemini 3 Pro Analysis + Imagen 3 — Further Enhancement
+Phase 4: Gemini 3.1 Pro Analysis + Imagen 3 — Further Enhancement
     ↓ (professionally enhanced representative frames, iterated)
 Phase 5: Frame Reassembly (ffmpeg)
     ↓ (final enhanced video with original audio)
@@ -78,11 +78,11 @@ For each frame group's representative frame:
 
 This reuses `GeminiImageClient.EditImage()` from `internal/chat/gemini_image.go`.
 
-**Phase 4 — Gemini 3 Pro Analysis + Imagen 3 Iteration (per group)**
+**Phase 4 — Gemini 3.1 Pro Analysis + Imagen 3 Iteration (per group)**
 
 For each enhanced representative frame:
 
-1. Send to Gemini 3 Pro (text) for professional quality analysis (same as DDR-031 Phase 2)
+1. Send to Gemini 3.1 Pro (text) for professional quality analysis (same as DDR-031 Phase 2)
 2. Parse structured JSON response with remaining improvements
 3. For `imagenSuitable: true` improvements: apply Imagen 3 mask-based edits
 4. For global improvements: send back to Gemini 3 Pro Image for another pass

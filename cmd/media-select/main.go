@@ -41,7 +41,7 @@ Examples:
   media-select --directory /path/to/photos --context "Weekend trip to Kyoto"
   media-select -d ./vacation-photos -c "Birthday party at restaurant then karaoke"
   media-select -d ./photos --max-depth 2 --limit 50
-  media-select -d ./media --model gemini-3-pro-preview
+  media-select -d ./media --model gemini-3.1-pro-preview
   media-select  # Interactive mode - prompts for directory and context`,
 	Run: runMain,
 }
@@ -51,7 +51,7 @@ func init() {
 	rootCmd.Flags().IntVar(&maxDepthFlag, "max-depth", 0, "Maximum recursion depth (0 = unlimited)")
 	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum media items to process (0 = unlimited)")
 	rootCmd.Flags().StringVarP(&contextFlag, "context", "c", "", "Trip/event description for media selection (e.g., 'Birthday party at restaurant then karaoke')")
-	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3-pro-preview)")
+	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3.1-pro-preview)")
 }
 
 func main() {

@@ -72,7 +72,7 @@ graph TD
 | Component | Technology |
 |-----------|-----------|
 | Language | Go 1.24 |
-| AI Model | Gemini 3 (Flash for triage, Pro for selection/enhancement) |
+| AI Model | Gemini 3 (Flash for triage, 3.1 Pro for selection/enhancement) |
 | SDK | `google.golang.org/genai` |
 | CLI Framework | `github.com/spf13/cobra` |
 | Logging | `github.com/rs/zerolog` |

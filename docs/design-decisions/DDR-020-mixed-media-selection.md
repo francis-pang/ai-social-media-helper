@@ -63,7 +63,7 @@ A single ranked list ensures the best 20 media items are selected regardless of 
 
 ### Why upload full videos (not thumbnails)?
 
-Videos contain temporal information (motion, transitions, audio) that static thumbnails cannot capture. Gemini 3 Pro's native video understanding can evaluate the full content.
+Videos contain temporal information (motion, transitions, audio) that static thumbnails cannot capture. Gemini 3.1 Pro's native video understanding can evaluate the full content.
 
 ### Why equal weighting?
 
@@ -154,7 +154,7 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*Media
 
 - DDR-016: Quality-Agnostic Metadata-Driven Photo Selection
 - DDR-017: Francis Reference Photo for Person Identification
-- DDR-018: Video Compression for Gemini 3 Pro Optimization
+- DDR-018: Video Compression for Gemini 3.1 Pro Optimization
 - DDR-019: Externalized Prompt Templates
 
 ## Testing Approach

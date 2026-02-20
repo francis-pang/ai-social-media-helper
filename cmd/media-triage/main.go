@@ -43,7 +43,7 @@ Examples:
   media-triage --directory /path/to/photos
   media-triage -d ./vacation-photos --dry-run
   media-triage -d ./photos --max-depth 2 --limit 100
-  media-triage -d ./media --model gemini-3-pro-preview
+  media-triage -d ./media --model gemini-3.1-pro-preview
   media-triage  # Interactive mode - prompts for directory`,
 	Run: runMain,
 }
@@ -52,7 +52,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&directoryFlag, "directory", "d", "", "Directory containing media to triage")
 	rootCmd.Flags().IntVar(&maxDepthFlag, "max-depth", 0, "Maximum recursion depth (0 = unlimited)")
 	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum media items to process (0 = unlimited)")
-	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3-pro-preview)")
+	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3.1-pro-preview)")
 	rootCmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Show triage report without prompting for deletion")
 }
 

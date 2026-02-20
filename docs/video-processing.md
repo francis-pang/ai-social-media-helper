@@ -58,7 +58,7 @@ sequenceDiagram
     participant Extract as Phase 1 - Extract Frames (ffmpeg)
     participant Group as Phase 2 - Group Frames (histogram)
     participant Enhance as Phase 3 - Gemini 3 Pro Image
-    participant Analyze as Phase 4 - Analysis + Imagen 3
+    participant Analyze as Phase 4 - Gemini 3.1 Pro Analysis + Imagen 3
     participant Reassemble as Phase 5 - Reassemble (ffmpeg)
     participant Output as Enhanced Video
 

@@ -13,11 +13,11 @@ When uploading videos to Gemini for multimodal analysis, large video files (ofte
 3. **Processing time**: Gemini's processing queue is slower for larger files.
 4. **Quota**: The Files API has a 20GB storage limit; large videos exhaust this quickly.
 
-Gemini 3 Pro uses a tiling system for video frames:
+Gemini 3.1 Pro uses a tiling system for video frames:
 - Frames ≤768px: Single tile (258 tokens/frame at MEDIUM, ~70 tokens at LOW)
 - Frames >768px: Multiple tiles, significantly increasing token cost
 
-Gemini 3 Pro has native multimodal audio understanding, making audio quality important but not requiring studio-grade fidelity.
+Gemini 3.1 Pro has native multimodal audio understanding, making audio quality important but not requiring studio-grade fidelity.
 
 ## Decision
 
@@ -87,11 +87,11 @@ Extract metadata from the **original** file before compression, as compression s
 
 ### Why 768px resolution?
 
-Gemini 3 Pro's tiling system treats frames ≤768px as single tiles. Exceeding this threshold causes frame splitting into multiple tiles, multiplying token cost with no benefit for typical social media analysis tasks.
+Gemini 3.1 Pro's tiling system treats frames ≤768px as single tiles. Exceeding this threshold causes frame splitting into multiple tiles, multiplying token cost with no benefit for typical social media analysis tasks.
 
 ### Why 5 FPS?
 
-- Gemini 1.5 sampled at 1 FPS; Gemini 3 Pro can utilize higher frame rates
+- Gemini 1.5 sampled at 1 FPS; Gemini 3.1 Pro can utilize higher frame rates
 - 5 FPS provides good temporal resolution for motion/gesture detection
 - Higher rates waste tokens without improving analysis quality
 - A 35-second video at 5 FPS = 175 frames
@@ -112,7 +112,7 @@ Gemini 3 Pro's tiling system treats frames ≤768px as single tiles. Exceeding t
 | AAC audio | Opus is ~50% more efficient at low bitrates |
 | MP4 container | WebM is native for AV1+Opus, preferred by Google |
 | Square padding (768x768) | Wastes tokens on letterbox/pillarbox regions |
-| 1 FPS (like Gemini 1.5) | Gemini 3 Pro benefits from higher temporal resolution |
+| 1 FPS (like Gemini 1.5) | Gemini 3.1 Pro benefits from higher temporal resolution |
 | Strip audio entirely | Loses valuable context for minimal token savings |
 | Upscale low-quality sources | Wastes bandwidth, creates artificial data |
 

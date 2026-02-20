@@ -4,17 +4,17 @@ import "os"
 
 // Gemini Model IDs
 //
-// | Model Name                | API Model ID              | Use Case                      |
-// |---------------------------|---------------------------|-------------------------------|
-// | Gemini 3 Pro (Preview)    | gemini-3-pro-preview      | Best for complex reasoning    |
-// | Gemini 3 Flash (Preview)  | gemini-3-flash-preview    | Best for speed + intelligence |
-// | Gemini 2.5 Pro            | gemini-2.5-pro            | Stable, high-reasoning tasks  |
-// | Gemini 2.5 Flash          | gemini-2.5-flash          | Stable, balanced performance  |
-// | Gemini 2.5 Flash-Lite     | gemini-2.5-flash-lite     | High-throughput, lowest cost  |
-// | Gemini 3 Pro Image        | gemini-3-pro-image-preview| Advanced image generation     |
+// | Model Name                  | API Model ID                | Use Case                      |
+// |-----------------------------|---------------------------  |-------------------------------|
+// | Gemini 3.1 Pro (Preview)    | gemini-3.1-pro-preview      | Best for complex reasoning    |
+// | Gemini 3 Flash (Preview)    | gemini-3-flash-preview      | Best for speed + intelligence |
+// | Gemini 2.5 Pro              | gemini-2.5-pro              | Stable, high-reasoning tasks  |
+// | Gemini 2.5 Flash            | gemini-2.5-flash            | Stable, balanced performance  |
+// | Gemini 2.5 Flash-Lite       | gemini-2.5-flash-lite       | High-throughput, lowest cost  |
+// | Gemini 3 Pro Image          | gemini-3-pro-image-preview  | Advanced image generation     |
 const (
-	// ModelGemini3ProPreview is best for complex reasoning/coding.
-	ModelGemini3ProPreview = "gemini-3-pro-preview"
+	// ModelGemini31ProPreview is best for complex reasoning/coding (1M context).
+	ModelGemini31ProPreview = "gemini-3.1-pro-preview"
 
 	// ModelGemini3FlashPreview is best for speed + intelligence.
 	ModelGemini3FlashPreview = "gemini-3-flash-preview"
@@ -41,7 +41,7 @@ const DefaultModelName = ModelGemini3FlashPreview
 // 2. Default: gemini-3-flash-preview (best for speed + intelligence)
 //
 // Available models:
-//   - "gemini-3-pro-preview"       - Best for complex reasoning/coding
+//   - "gemini-3.1-pro-preview"     - Best for complex reasoning/coding (1M context)
 //   - "gemini-3-flash-preview"     - Best for speed + intelligence (default)
 //   - "gemini-2.5-pro"             - Stable, high-reasoning tasks
 //   - "gemini-2.5-flash"           - Stable, balanced performance

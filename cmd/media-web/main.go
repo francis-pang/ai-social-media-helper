@@ -39,7 +39,7 @@ and confirm actions through your browser.
 Examples:
   media-web
   media-web --port 9090
-  media-web --model gemini-3-pro-preview`,
+  media-web --model gemini-3.1-pro-preview`,
 	Run: runMain,
 }
 

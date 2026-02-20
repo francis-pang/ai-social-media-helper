@@ -61,7 +61,7 @@ The photo enhancement pipeline applies AI models in three automated phases to br
 sequenceDiagram
     participant Original as Original Photo
     participant Gemini as Gemini 3 Pro Image
-    participant Analysis as Gemini 3 Pro (Text)
+    participant Analysis as Gemini 3.1 Pro (Text)
     participant Imagen as Imagen 3 (Vertex AI)
     participant Enhanced as Enhanced Photo
 

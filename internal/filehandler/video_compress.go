@@ -12,11 +12,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Compression constants for Gemini 3 Pro optimization (DDR-018).
+// Compression constants for Gemini 3.1 Pro optimization (DDR-018).
 // These are MAXIMUM values - we never upscale lower quality sources.
 const (
 	// MaxResolution is the maximum resolution (longest edge) for single-tile processing.
-	// Gemini 3 Pro treats frames ≤768px as single tiles (258 tokens/frame at MEDIUM).
+	// Gemini 3.1 Pro treats frames ≤768px as single tiles (258 tokens/frame at MEDIUM).
 	MaxResolution = 768
 
 	// MaxFrameRate is the maximum frames per second for temporal analysis.
@@ -54,7 +54,7 @@ func IsFFmpegAvailable() bool {
 	return CheckFFmpegAvailable() == nil
 }
 
-// CompressVideoForGemini compresses a video for optimal Gemini 3 Pro upload.
+// CompressVideoForGemini compresses a video for optimal Gemini 3.1 Pro upload.
 // Uses AV1 video codec and Opus audio codec for maximum efficiency (DDR-018).
 //
 // Key features:

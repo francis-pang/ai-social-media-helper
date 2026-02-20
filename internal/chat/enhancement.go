@@ -5,7 +5,7 @@ package chat
 //
 // The pipeline has three phases per photo:
 //   Phase 1: Gemini 3 Pro Image — global creative enhancement
-//   Phase 2: Gemini 3 Pro (text) — professional quality analysis
+//   Phase 2: Gemini 3.1 Pro (text) — professional quality analysis
 //   Phase 3: Imagen 3 — localized surgical edits (if applicable)
 
 import (
@@ -22,7 +22,7 @@ import (
 const (
 	PhaseInitial  = "initial"  // Not yet started
 	PhaseOne      = "phase1"   // Gemini 3 Pro Image: global enhancement
-	PhaseTwo      = "phase2"   // Gemini 3 Pro: analysis
+	PhaseTwo      = "phase2"   // Gemini 3.1 Pro: analysis
 	PhaseThree    = "phase3"   // Imagen 3: surgical edits
 	PhaseFeedback = "feedback" // User feedback loop
 	PhaseComplete = "complete" // Enhancement finished

@@ -117,7 +117,7 @@ func RunFullEnhancement(ctx context.Context, geminiClient *GeminiImageClient, im
 	return state, nil
 }
 
-// ProcessFeedback handles user feedback by first trying Gemini 3 Pro Image,
+// ProcessFeedback handles user feedback by first trying Gemini 3 Pro Image (unchanged),
 // then falling back to Imagen 3 if needed. Returns updated image and state.
 func ProcessFeedback(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, feedback string, history []FeedbackEntry, imageWidth, imageHeight int) ([]byte, string, *FeedbackEntry, error) {
 	log.Debug().
@@ -164,7 +164,7 @@ func ProcessFeedback(ctx context.Context, geminiClient *GeminiImageClient, image
 	}
 
 	if err != nil {
-		log.Warn().Err(err).Msg("Feedback: Gemini 3 Pro Image failed, analyzing for Imagen fallback")
+		log.Warn().Err(err).Msg("Feedback: Gemini Pro Image failed, analyzing for Imagen fallback")
 	}
 
 	// Step 2: Analyze what Gemini couldn't do and try Imagen 3
