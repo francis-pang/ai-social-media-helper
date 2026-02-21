@@ -154,11 +154,11 @@ func interleaveMedia(files []*filehandler.MediaFile, keys []string) ([]*filehand
 func deleteOriginals(ctx context.Context, sessionID string, originalKeys []string) {
 	deleted := 0
 	for _, key := range originalKeys {
-		// Skip keys under thumbnails/ or compressed/ — those are generated artifacts.
+		// Skip keys under thumbnails/, compressed/, or processed/ — those are generated artifacts.
 		parts := strings.SplitN(key, "/", 2)
 		if len(parts) == 2 {
 			suffix := parts[1]
-			if strings.HasPrefix(suffix, "thumbnails/") || strings.HasPrefix(suffix, "compressed/") {
+			if strings.HasPrefix(suffix, "thumbnails/") || strings.HasPrefix(suffix, "compressed/") || strings.HasPrefix(suffix, "processed/") {
 				continue
 			}
 		}

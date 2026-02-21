@@ -42,7 +42,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # Need parent commit for diff
+          fetch-depth: 0  # Full history for diffing against last deployed commit
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Analyze changed files
         id: changes
@@ -74,23 +81,56 @@ jobs:
             fi
           fi
 
-          # Auto-detect: compare HEAD with its parent
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
-          echo "=== Changed files ==="
-          echo "$CHANGED_FILES"
-          echo ""
+          # Query the last successfully deployed commit for each pipeline.
+          # This avoids the HEAD~1 pitfall where batched pushes or sequential
+          # backend-only commits cause frontend changes to be silently skipped.
+          get_last_deployed_commit() {
+            local pipeline_name=$1
+            aws codepipeline list-pipeline-executions \
+              --pipeline-name "$pipeline_name" \
+              --max-results 20 \
+              --query 'pipelineExecutionSummaries[?status==`Succeeded`] | [0].sourceRevisions[0].revisionId' \
+              --output text 2>/dev/null || echo ""
+          }
+
+          BE_LAST=$(get_last_deployed_commit "$BACKEND_PIPELINE")
+          FE_LAST=$(get_last_deployed_commit "$FRONTEND_PIPELINE")
+          echo "Last deployed backend commit: ${BE_LAST:-unknown}"
+          echo "Last deployed frontend commit: ${FE_LAST:-unknown}"
 
           BACKEND=false
           FRONTEND=false
 
-          # Frontend paths: web/
-          if echo "$CHANGED_FILES" | grep -qE '^web/'; then
-            FRONTEND=true
+          # Diff HEAD against each pipeline's last deployed commit.
+          # If a pipeline has never succeeded, treat it as needing deployment.
+          if [ -n "$BE_LAST" ] && [ "$BE_LAST" != "None" ] && git cat-file -t "$BE_LAST" >/dev/null 2>&1; then
+            BE_CHANGED=$(git diff --name-only "$BE_LAST" HEAD 2>/dev/null || echo "")
+          else
+            BE_CHANGED=$(git diff --name-only HEAD)
+            echo "Backend baseline unknown — treating all files as changed"
           fi
 
-          # Backend paths: cmd/, internal/, go.mod, go.sum, Dockerfile*
-          if echo "$CHANGED_FILES" | grep -qE '^(cmd/|internal/|go\.(mod|sum)$|.*Dockerfile)'; then
+          if [ -n "$FE_LAST" ] && [ "$FE_LAST" != "None" ] && git cat-file -t "$FE_LAST" >/dev/null 2>&1; then
+            FE_CHANGED=$(git diff --name-only "$FE_LAST" HEAD 2>/dev/null || echo "")
+          else
+            FE_CHANGED=$(git diff --name-only HEAD)
+            echo "Frontend baseline unknown — treating all files as changed"
+          fi
+
+          echo ""
+          echo "=== Files changed since last backend deploy ==="
+          echo "$BE_CHANGED"
+          echo ""
+          echo "=== Files changed since last frontend deploy ==="
+          echo "$FE_CHANGED"
+          echo ""
+
+          if echo "$BE_CHANGED" | grep -qE '^(cmd/|internal/|go\.(mod|sum)$|.*Dockerfile)'; then
             BACKEND=true
+          fi
+
+          if echo "$FE_CHANGED" | grep -qE '^web/'; then
+            FRONTEND=true
           fi
 
           # Determine scope

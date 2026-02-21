@@ -145,17 +145,23 @@ func handleCompressedVideo(w http.ResponseWriter, r *http.Request) {
 	sessionID := parts[0]
 	filename := filepath.Base(key)
 
-	// Change extension to .webm
+	// Change extension to .webm and check both storage prefixes:
+	//   /processed/ — MediaProcess Lambda (DDR-061 pipeline)
+	//   /compressed/ — storeCompressed callback (triage/selection Gemini flow)
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
-	compressedKey := fmt.Sprintf("%s/compressed/%s.webm", sessionID, baseName)
+	candidateKeys := []string{
+		fmt.Sprintf("%s/processed/%s.webm", sessionID, baseName),
+		fmt.Sprintf("%s/compressed/%s.webm", sessionID, baseName),
+	}
 
-	// Check if compressed version exists
-	_, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
-		Bucket: &mediaBucket,
-		Key:    &compressedKey,
-	})
-	if err == nil {
-		// Compressed version exists, return presigned URL
+	for _, compressedKey := range candidateKeys {
+		_, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+			Bucket: &mediaBucket,
+			Key:    &compressedKey,
+		})
+		if err != nil {
+			continue
+		}
 		result, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: &mediaBucket,
 			Key:    &compressedKey,
@@ -172,8 +178,8 @@ func handleCompressedVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compressed version doesn't exist, fall back to original
-	log.Debug().Str("compressed_key", compressedKey).Msg("Compressed video not found, falling back to original")
+	// No compressed version found, fall back to original
+	log.Debug().Str("key", key).Msg("Compressed video not found in any prefix, falling back to original")
 	result, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
 		Bucket: &mediaBucket,
 		Key:    &key,

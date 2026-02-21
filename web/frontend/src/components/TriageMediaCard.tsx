@@ -66,30 +66,27 @@ export function MediaCard({
           cursor: "zoom-in",
         }}
       >
-        {/* For photos: load thumbnail image; for videos: skip (no ffmpeg in triage pipeline) */}
-        {!isVideoFile(item.filename) ? (
-          <img
-            src={itemThumb(item)}
-            alt={item.filename}
-            title={item.filename}
-            loading="lazy"
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
-            onError={(e) => {
-              const img = e.target as HTMLImageElement;
-              img.style.display = "none";
-              const fallback = img.nextElementSibling as HTMLElement | null;
-              if (fallback) fallback.style.display = "flex";
-            }}
-          />
-        ) : null}
-        {/* Fallback placeholder: always visible for videos, hidden until onError for photos */}
+        <img
+          src={itemThumb(item)}
+          alt={item.filename}
+          title={item.filename}
+          loading="lazy"
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+          onError={(e) => {
+            const img = e.target as HTMLImageElement;
+            img.style.display = "none";
+            const fallback = img.nextElementSibling as HTMLElement | null;
+            if (fallback) fallback.style.display = "flex";
+          }}
+        />
+        {/* Fallback placeholder: hidden until onError triggers */}
         <div
           style={{
-            display: isVideoFile(item.filename) ? "flex" : "none",
+            display: "none",
             position: "absolute",
             inset: 0,
             flexDirection: "column",
