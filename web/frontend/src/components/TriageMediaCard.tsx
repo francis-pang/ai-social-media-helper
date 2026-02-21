@@ -49,10 +49,12 @@ export function MediaCard({
       <div
         onClick={(e) => {
           e.stopPropagation();
+          const isVideo = isVideoFile(item.filename);
           openMediaPlayer(
             itemId(item),
-            isVideoFile(item.filename) ? "Video" : "Photo",
+            isVideo ? "Video" : "Photo",
             item.filename,
+            isVideo ? undefined : itemThumb(item),
           );
         }}
         style={{

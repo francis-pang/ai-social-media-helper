@@ -22,6 +22,9 @@ const resolvedUrl = signal<string | null>(null);
 /** Whether the URL is still loading. */
 const loading = signal(false);
 
+/** Pre-resolved URL provided by the caller (e.g. thumbnail for deleted originals). */
+const fallbackUrl = signal<string | null>(null);
+
 // --- Public API ---
 
 /**
@@ -30,18 +33,28 @@ const loading = signal(false);
  * @param key - S3 key or local filesystem path of the media file.
  * @param type - Whether the media is a photo or video.
  * @param filename - Display filename for the overlay header.
+ * @param preResolvedUrl - Optional URL to use directly, skipping the full-resolution lookup.
+ *                         Used when the original file has been deleted (e.g. after triage).
  */
 export function openMediaPlayer(
   key: string,
   type: "Photo" | "Video",
   filename: string,
+  preResolvedUrl?: string,
 ) {
   mediaKey.value = key;
   mediaType.value = type;
   mediaFilename.value = filename;
   resolvedUrl.value = null;
+  fallbackUrl.value = preResolvedUrl ?? null;
   loading.value = true;
   isOpen.value = true;
+
+  if (preResolvedUrl) {
+    resolvedUrl.value = preResolvedUrl;
+    loading.value = false;
+    return;
+  }
 
   // Resolve the full-resolution URL asynchronously
   // Pass media type to prefer compressed videos
@@ -156,7 +169,11 @@ export function MediaPlayer() {
             class="outline"
             onClick={(e) => {
               e.stopPropagation();
-              openFullImage(mediaKey.value);
+              if (fallbackUrl.value) {
+                window.open(fallbackUrl.value, "_blank");
+              } else {
+                openFullImage(mediaKey.value);
+              }
             }}
             style={{
               fontSize: "0.875rem",
@@ -216,7 +233,11 @@ export function MediaPlayer() {
               class="outline"
               onClick={(e) => {
                 e.stopPropagation();
-                openFullImage(mediaKey.value);
+                if (fallbackUrl.value) {
+                  window.open(fallbackUrl.value, "_blank");
+                } else {
+                  openFullImage(mediaKey.value);
+                }
               }}
               style={{
                 fontSize: "0.75rem",
