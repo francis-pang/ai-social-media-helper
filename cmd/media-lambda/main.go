@@ -42,6 +42,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -180,6 +181,9 @@ func init() {
 		log.Warn().Msg("Instagram credentials not configured — publishing disabled")
 	}
 
+	// EventBridge client for RAG override feedback events.
+	ebClient = eventbridge.NewFromConfig(cfg)
+
 	// Emit consolidated cold-start log for troubleshooting (DDR-062: version identity).
 	logging.NewStartupLogger("media-lambda").
 		CommitHash(commitHash).
@@ -226,6 +230,7 @@ func main() {
 	mux.HandleFunc("/api/publish/start", handlePublishStart)           // DDR-040
 	mux.HandleFunc("/api/publish/", handlePublishRoutes)               // DDR-040
 	mux.HandleFunc("/api/session/invalidate", handleSessionInvalidate) // DDR-037
+	mux.HandleFunc("/api/overrides/", handleOverrideRoutes)
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
 	mux.HandleFunc("/api/media/full", handleFullImage)
 	mux.HandleFunc("/api/media/compressed", handleCompressedVideo)
@@ -247,6 +252,7 @@ func main() {
 		"/api/description/generate", "/api/description/",
 		"/api/publish/start", "/api/publish/",
 		"/api/session/invalidate",
+		"/api/overrides/",
 		"/api/media/thumbnail", "/api/media/full", "/api/media/compressed",
 	}
 	log.Info().Strs("routes", routes).Int("count", len(routes)).Msg("HTTP routes registered")

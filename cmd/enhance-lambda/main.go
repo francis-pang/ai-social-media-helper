@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
 
@@ -39,6 +40,7 @@ var (
 	s3Client     *s3.Client
 	sessionStore *store.DynamoStore
 	mediaBucket  string
+	ebClient     *eventbridge.Client
 )
 
 var coldStart = true
@@ -47,12 +49,14 @@ func init() {
 	initStart := time.Now()
 	logging.Init()
 
-	aws := lambdaboot.InitAWS()
-	s3s := lambdaboot.InitS3(aws.Config, "MEDIA_BUCKET_NAME")
+	awsClients := lambdaboot.InitAWS()
+	s3s := lambdaboot.InitS3(awsClients.Config, "MEDIA_BUCKET_NAME")
 	s3Client = s3s.Client
 	mediaBucket = s3s.Bucket
-	sessionStore = lambdaboot.InitDynamo(aws.Config, "DYNAMO_TABLE_NAME")
-	lambdaboot.LoadGeminiKey(aws.SSM)
+	sessionStore = lambdaboot.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
+	lambdaboot.LoadGeminiKey(awsClients.SSM)
+
+	ebClient = eventbridge.NewFromConfig(awsClients.Config)
 
 	lambdaboot.StartupLog("enhance-lambda", initStart).
 		S3Bucket("mediaBucket", mediaBucket).

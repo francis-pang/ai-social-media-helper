@@ -15,6 +15,8 @@ import {
   startSelection,
   getSelectionResults,
   isVideoFile,
+  postOverrideAction,
+  postOverrideFinalize,
 } from "../api/client";
 import { enhancementKeys } from "./EnhancementView";
 import { ActionBar } from "./shared/ActionBar";
@@ -108,10 +110,12 @@ function pollResults(id: string, sessionId: string) {
 // --- Override helpers ---
 
 function toggleOverride(item: SelectionItem | ExcludedItem, isCurrentlySelected: boolean) {
+  const sessionId = uploadSessionId.value;
   if (isCurrentlySelected) {
     // Move from selected to excluded
     const next = new Set(removedFromSelection.value);
-    if (next.has(item.key)) {
+    const wasUndo = next.has(item.key);
+    if (wasUndo) {
       next.delete(item.key); // Undo override
     } else {
       next.add(item.key);
@@ -122,10 +126,25 @@ function toggleOverride(item: SelectionItem | ExcludedItem, isCurrentlySelected:
     const added = new Set(addedToSelection.value);
     added.delete(item.key);
     addedToSelection.value = added;
+
+    // Fire-and-forget: emit override action for RAG (only when applying, not undoing)
+    if (!wasUndo && sessionId) {
+      const selItem = item as SelectionItem;
+      const mediaType = "type" in selItem ? selItem.type : isVideoFile(item.filename) ? "Video" : "Photo";
+      const aiReason = "justification" in selItem ? selItem.justification : (item as ExcludedItem).reason;
+      postOverrideAction(sessionId, {
+        action: "removed",
+        mediaKey: item.key,
+        filename: item.filename || "",
+        mediaType,
+        aiReason,
+      }).catch(() => {});
+    }
   } else {
     // Move from excluded to selected
     const next = new Set(addedToSelection.value);
-    if (next.has(item.key)) {
+    const wasUndo = next.has(item.key);
+    if (wasUndo) {
       next.delete(item.key); // Undo override
     } else {
       next.add(item.key);
@@ -136,6 +155,18 @@ function toggleOverride(item: SelectionItem | ExcludedItem, isCurrentlySelected:
     const removed = new Set(removedFromSelection.value);
     removed.delete(item.key);
     removedFromSelection.value = removed;
+
+    // Fire-and-forget: emit override action for RAG (only when applying, not undoing)
+    if (!wasUndo && sessionId) {
+      const excItem = item as ExcludedItem;
+      postOverrideAction(sessionId, {
+        action: "added_back",
+        mediaKey: item.key,
+        filename: item.filename || "",
+        mediaType: isVideoFile(item.filename) ? "Video" : "Photo",
+        aiReason: excItem.reason,
+      }).catch(() => {});
+    }
   }
 }
 
@@ -207,6 +238,21 @@ function handleConfirmSelection() {
   // Collect effective selected keys and pass to enhancement (DDR-031)
   const selected = getEffectiveSelected();
   enhancementKeys.value = selected.map((item) => item.key);
+
+  // Fire-and-forget: emit finalized overrides for RAG before navigating
+  const sessionId = uploadSessionId.value;
+  if (sessionId && (addedToSelection.value.size > 0 || removedFromSelection.value.size > 0)) {
+    const added = [...addedToSelection.value].map((key) => {
+      const item = results.value?.excluded?.find((e) => e.key === key);
+      return { mediaKey: key, filename: item?.filename || "", aiReason: item?.reason };
+    });
+    const removed = [...removedFromSelection.value].map((key) => {
+      const item = results.value?.selected?.find((s) => s.key === key);
+      return { mediaKey: key, filename: item?.filename || "", aiReason: item?.justification };
+    });
+    postOverrideFinalize(sessionId, { added, removed }).catch(() => {});
+  }
+
   navigateToStep("enhancing");
 }
 

@@ -127,16 +127,19 @@ Stacks must deploy in dependency order. CDK enforces this via `addDependency()`.
 1. StorageStack           (stateful: S3 buckets, DynamoDB — DDR-045)
 2. RegistryStack          (ECR repos — DDR-046)
 3. BackendStack           (9 Lambdas, API Gateway, Cognito, Step Functions)
-4. FrontendStack          (CloudFront + OAC)
-5. WebhookStack           (Meta webhook + OAuth Lambdas — DDR-044)
-6. FrontendPipelineStack  (CodePipeline for Preact SPA)
-7. BackendPipelineStack   (CodePipeline for 11 Docker images)
-8. OperationsAlertStack   (CloudWatch alarms, SNS)
-9. OperationsMonitoringStack (Metric filters, Firehose, Glue)
-10. OperationsDashboardStack (CloudWatch dashboard)
+4. RagStack               (Aurora Serverless v2, EventBridge, SQS, 5 RAG Lambdas — DDR-066)
+5. FrontendStack          (CloudFront + OAC)
+6. WebhookStack           (Meta webhook + OAuth Lambdas — DDR-044)
+7. FrontendPipelineStack  (CodePipeline for Preact SPA)
+8. BackendPipelineStack   (CodePipeline for 11 Docker images)
+9. OperationsAlertStack   (CloudWatch alarms, SNS)
+10. OperationsMonitoringStack (Metric filters, Firehose, Glue)
+11. OperationsDashboardStack (CloudWatch dashboard)
 ```
 
 **Rule:** StorageStack and RegistryStack must deploy before everything else. They hold stateful resources that other stacks reference.
+
+**RAG stack (DDR-066):** The first-time RAG deployment and any change that adds or modifies the RAG stack (e.g. new Lambdas, Aurora, EventBridge rules) **must be deployed manually**. Use **Actions > CDK Deploy > Run workflow** and choose a target that includes the RAG stack (e.g. `full`), or run `cdk deploy RagStack` locally. Do not rely on the default automatic CDK deploy for introducing the RAG stack.
 
 ---
 

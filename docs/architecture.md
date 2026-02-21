@@ -199,6 +199,11 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min | Gemini |
 | Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s | None |
 | OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s | Instagram |
+| RAG Ingest | SQS → Bedrock Titan → Aurora pgvector (DDR-066) | Light | 1 GB | 2 min | Bedrock |
+| RAG Query | Vector + DynamoDB profile retrieval for triage/selection/caption | Light | 512 MB | 30s | Aurora Data API, DynamoDB |
+| RAG Status | Aurora cluster state + start if stopped | Light | 256 MB | 30s | RDS |
+| RAG Auto-Stop | Scheduled: stop Aurora if idle > 2h | Light | 256 MB | 30s | RDS, DynamoDB |
+| RAG Profile | Weekly: compute preference profile, write DynamoDB | Light | 2 GB | 5 min | Aurora Data API, SSM, Gemini |
 
 "Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. Webhook and OAuth Lambdas are deployed in a separate WebhookStack with their own CloudFront distribution (DDR-044, DDR-048). See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md), [DDR-053](./design-decisions/DDR-053-granular-lambda-split.md), and [docker-images.md](./docker-images.md).
 
@@ -374,6 +379,15 @@ The application uses Gemini's Context Caching API to avoid re-sending identical 
 **Lifecycle:** Caches are created on-demand with a 1-hour TTL (sufficient for a session) and deleted when the Lambda invocation completes. If cache creation fails (e.g., token count below the 4096 minimum), the system falls back to inline context with no user-visible impact.
 
 **Observability:** New metrics `GeminiCacheHit`, `GeminiCacheMiss`, and `GeminiCachedTokens` track cache effectiveness.
+
+## RAG Decision Memory (DDR-066)
+
+The system persists user decisions (triage, selection, overrides, captions, publish) and injects a **preference profile** or **caption style examples** into AI prompts so recommendations improve with use. See [rag-decision-memory.md](./rag-decision-memory.md).
+
+- **Feedback pipeline:** Triage, Selection, Description, Publish, and API Lambdas emit `ContentFeedback` events to the default EventBridge bus; a rule routes to SQS. The RAG Ingest Lambda embeds each event with Bedrock Titan (1024d) and upserts into Aurora PostgreSQL (pgvector, five tables by event type).
+- **Retrieval:** Before building prompts, Triage/Selection/Description Lambdas invoke the RAG Query Lambda with `queryType` (triage, selection, caption). The Lambda returns pre-computed profile text from DynamoDB; when Aurora is available it can also run vector similarity search. If Aurora is stopped, the Lambda serves the last profile from DynamoDB (stale cache fallback).
+- **Profile batch:** A weekly scheduled Lambda queries Aurora, computes rule-based stats, calls Gemini to generate a natural-language preference profile, and writes it (and caption style examples) to DynamoDB.
+- **Aurora lifecycle:** Auto-Stop Lambda runs every 15 min and stops the cluster if last activity &gt; 2h. The frontend calls `GET /api/rag/status` on load; RAG Status Lambda starts the cluster if stopped. All RAG behavior is best-effort and does not block main flows.
 
 ## Observability
 

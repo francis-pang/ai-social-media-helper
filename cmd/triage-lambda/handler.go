@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/rs/zerolog/log"
 
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
 	"github.com/fpang/gemini-media-cli/internal/jobutil"
 	"github.com/fpang/gemini-media-cli/internal/metrics"
+	"github.com/fpang/gemini-media-cli/internal/rag"
 	"github.com/fpang/gemini-media-cli/internal/s3util"
 	"github.com/fpang/gemini-media-cli/internal/store"
 )
@@ -145,12 +148,23 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		TotalFiles: len(allMediaFiles),
 	})
 
+	// RAG retrieval — best effort
+	ragContext := ""
+	if ragQueryArn != "" {
+		ragCtx, err := invokeRAGQuery(ctx, "triage", event.SessionID, "")
+		if err != nil {
+			log.Warn().Err(err).Msg("RAG query failed, proceeding without context")
+		} else {
+			ragContext = ragCtx
+		}
+	}
+
 	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Msg("Calling AskMediaTriage (DDR-061: presigned URLs from manifest)")
 	// DDR-065: Create CacheManager for context caching within triage batches.
 	cacheMgr := chat.NewCacheManager(client)
 	defer cacheMgr.DeleteAll(ctx, event.SessionID)
 
-	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr)
+	triageResults, err := chat.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
 	if err != nil {
 		return jobutil.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Triage failed: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
@@ -223,6 +237,40 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		ID: event.JobID, Status: "complete", Keep: keep, Discard: discard,
 	})
 
+	// Emit triage decisions to EventBridge — best effort
+	if ebClient != nil {
+		for _, tr := range triageResults {
+			verdict := "discard"
+			if tr.Saveable {
+				verdict = "keep"
+			}
+			mediaType := "Photo"
+			if ext := strings.ToLower(filepath.Ext(tr.Filename)); filehandler.IsVideo(ext) {
+				mediaType = "Video"
+			}
+			mediaKey := tr.Filename
+			if idx := tr.Media - 1; idx >= 0 && idx < len(s3Keys) {
+				mediaKey = s3Keys[idx]
+			}
+			feedback := rag.ContentFeedback{
+				EventType:   rag.EventTriageFinalized,
+				SessionID:   event.SessionID,
+				JobID:       event.JobID,
+				Timestamp:   time.Now().UTC().Format(time.RFC3339),
+				UserID:      event.SessionID,
+				MediaKey:    mediaKey,
+				MediaType:   mediaType,
+				AIVerdict:   verdict,
+				UserVerdict: verdict,
+				Reason:      tr.Reason,
+				Model:       "gemini",
+			}
+			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
+				log.Warn().Err(err).Str("filename", tr.Filename).Msg("failed to emit triage feedback")
+			}
+		}
+	}
+
 	log.Info().Int("keep", len(keep)).Int("discard", len(discard)).Dur("duration", time.Since(jobStart)).Msg("Triage complete (DDR-061)")
 
 	// Delete original uploads (processed files and thumbnails remain)
@@ -242,4 +290,29 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		Flush()
 
 	return nil
+}
+
+func invokeRAGQuery(ctx context.Context, queryType, userID, sessionContext string) (string, error) {
+	if lambdaClient == nil || ragQueryArn == "" {
+		return "", nil
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"queryType":      queryType,
+		"userId":         userID,
+		"sessionContext": sessionContext,
+	})
+	result, err := lambdaClient.Invoke(ctx, &lambdasvc.InvokeInput{
+		FunctionName: &ragQueryArn,
+		Payload:      payload,
+	})
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		RAGContext string `json:"ragContext"`
+	}
+	if err := json.Unmarshal(result.Payload, &resp); err != nil {
+		return "", err
+	}
+	return resp.RAGContext, nil
 }

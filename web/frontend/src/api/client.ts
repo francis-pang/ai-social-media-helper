@@ -638,3 +638,43 @@ export function invalidateSession(
     body: JSON.stringify(req),
   });
 }
+
+// --- Override capture APIs (RAG feedback) ---
+
+/** POST a single override action (real-time). */
+export async function postOverrideAction(
+  sessionId: string,
+  action: {
+    action: "added_back" | "removed";
+    mediaKey: string;
+    filename: string;
+    mediaType: string;
+    aiReason?: string;
+  },
+): Promise<{ ok: boolean }> {
+  return fetchJSON(`/api/overrides/${sessionId}`, {
+    method: "POST",
+    body: JSON.stringify(action),
+  });
+}
+
+/** POST finalized override delta when proceeding to enhancement. */
+export async function postOverrideFinalize(
+  sessionId: string,
+  delta: {
+    added: Array<{ mediaKey: string; filename: string; aiReason?: string }>;
+    removed: Array<{ mediaKey: string; filename: string; aiReason?: string }>;
+  },
+): Promise<{ ok: boolean }> {
+  return fetchJSON(`/api/overrides/${sessionId}/finalize`, {
+    method: "POST",
+    body: JSON.stringify(delta),
+  });
+}
+
+/** Check RAG system status (Aurora cluster state). */
+export async function getRAGStatus(): Promise<{
+  status: "available" | "starting" | "stopped" | "unknown";
+}> {
+  return fetchJSON("/api/rag/status");
+}

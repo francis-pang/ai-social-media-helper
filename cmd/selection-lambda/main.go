@@ -22,6 +22,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
@@ -36,6 +38,9 @@ var (
 	presignClient *s3.PresignClient
 	sessionStore  store.SessionStore
 	mediaBucket   string
+	ebClient      *eventbridge.Client
+	lambdaClient  *lambdasvc.Client
+	ragQueryArn   string
 )
 
 var coldStart = true
@@ -82,6 +87,24 @@ func init() {
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
 		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
+	}
+
+	ebClient = eventbridge.NewFromConfig(cfg)
+	lambdaClient = lambdasvc.NewFromConfig(cfg)
+	ragQueryArn = os.Getenv("RAG_QUERY_LAMBDA_ARN")
+	if ragQueryArn == "" {
+		paramPath := os.Getenv("RAG_QUERY_LAMBDA_ARN_PARAM")
+		if paramPath != "" {
+			ssmClient := ssm.NewFromConfig(cfg)
+			result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
+				Name:           aws.String(paramPath),
+				WithDecryption: aws.Bool(false),
+			})
+			if err == nil && result.Parameter != nil && result.Parameter.Value != nil {
+				ragQueryArn = *result.Parameter.Value
+				log.Debug().Str("param", paramPath).Msg("RAG Query Lambda ARN loaded from SSM")
+			}
+		}
 	}
 
 	// Emit consolidated cold-start log for troubleshooting.

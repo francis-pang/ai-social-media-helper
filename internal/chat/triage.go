@@ -30,7 +30,7 @@ type TriageResult struct {
 
 // BuildMediaTriagePrompt creates a prompt asking Gemini to evaluate each media item
 // for saveability. Media metadata is included so Gemini can reference items by number.
-func BuildMediaTriagePrompt(files []*filehandler.MediaFile) string {
+func BuildMediaTriagePrompt(files []*filehandler.MediaFile, ragContext string) string {
 	var sb strings.Builder
 
 	// Count media types
@@ -96,7 +96,11 @@ func BuildMediaTriagePrompt(files []*filehandler.MediaFile) string {
 	sb.WriteString("Respond with ONLY a valid JSON array. One entry per media item, in order.\n")
 	sb.WriteString("Each entry: {\"media\": N, \"filename\": \"name\", \"saveable\": true/false, \"reason\": \"brief explanation\"}\n")
 
-	return sb.String()
+	prompt := sb.String()
+	if ragContext != "" {
+		prompt = ragContext + "\n\n" + prompt
+	}
+	return prompt
 }
 
 // triageBatchSize is the maximum number of media items to send in a single
@@ -122,9 +126,9 @@ const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB
 // cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
 // Returns a slice of TriageResult with one verdict per media item.
 // See DDR-021: Media Triage Command with Batch AI Evaluation.
-func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager) ([]TriageResult, error) {
+func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string) ([]TriageResult, error) {
 	if len(files) <= triageBatchSize {
-		return askMediaTriageSingle(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, cacheMgr)
+		return askMediaTriageSingle(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
 	}
 
 	totalBatches := (len(files) + triageBatchSize - 1) / triageBatchSize
@@ -151,7 +155,7 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 			Int("offset", batchStart).
 			Msg("Processing triage batch")
 
-		batchResults, err := askMediaTriageSingle(ctx, client, batch, modelName, sessionID, storeCompressed, keyMapper, cacheMgr)
+		batchResults, err := askMediaTriageSingle(ctx, client, batch, modelName, sessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
 		if err != nil {
 			log.Error().Err(err).Int("batch", batchNum).Msg("Batch triage failed")
 			return nil, fmt.Errorf("batch %d/%d triage failed: %w", batchNum, totalBatches, err)
@@ -181,7 +185,7 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*filehand
 // askMediaTriageSingle sends a single batch of media files to Gemini for
 // triage evaluation. Callers should prefer AskMediaTriage which handles
 // batching automatically.
-func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager) ([]TriageResult, error) {
+func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string) ([]TriageResult, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -219,7 +223,7 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 	}()
 
 	// Build the prompt with metadata
-	prompt := BuildMediaTriagePrompt(files)
+	prompt := BuildMediaTriagePrompt(files, ragContext)
 
 	// Configure model with triage system instruction
 	// MaxOutputTokens must be set high enough for large batches — each media item

@@ -20,7 +20,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 
 	"github.com/fpang/gemini-media-cli/internal/chat"
@@ -46,23 +50,43 @@ var (
 	mediaBucket      string
 	sessionStore     *store.DynamoStore
 	fileProcessStore *store.FileProcessingStore
+	ebClient         *eventbridge.Client
+	lambdaClient     *lambdasvc.Client
+	ragQueryArn      string
 )
 
 func init() {
 	initStart := time.Now()
 	logging.Init()
 
-	aws := lambdaboot.InitAWS()
-	s3s := lambdaboot.InitS3(aws.Config, "MEDIA_BUCKET_NAME")
+	awsClients := lambdaboot.InitAWS()
+	s3s := lambdaboot.InitS3(awsClients.Config, "MEDIA_BUCKET_NAME")
 	s3Client = s3s.Client
 	presignClient = s3s.Presigner
 	mediaBucket = s3s.Bucket
-	sessionStore = lambdaboot.InitDynamo(aws.Config, "DYNAMO_TABLE_NAME")
-	lambdaboot.LoadGeminiKey(aws.SSM)
+	sessionStore = lambdaboot.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
+	lambdaboot.LoadGeminiKey(awsClients.SSM)
 
 	fpTableName := os.Getenv("FILE_PROCESSING_TABLE_NAME")
 	if fpTableName != "" {
 		fileProcessStore = store.NewFileProcessingStore(sessionStore.Client(), fpTableName)
+	}
+
+	ebClient = eventbridge.NewFromConfig(awsClients.Config)
+	lambdaClient = lambdasvc.NewFromConfig(awsClients.Config)
+	ragQueryArn = os.Getenv("RAG_QUERY_LAMBDA_ARN")
+	if ragQueryArn == "" {
+		paramPath := os.Getenv("RAG_QUERY_LAMBDA_ARN_PARAM")
+		if paramPath != "" {
+			result, err := awsClients.SSM.GetParameter(context.Background(), &ssm.GetParameterInput{
+				Name:           aws.String(paramPath),
+				WithDecryption: aws.Bool(false),
+			})
+			if err == nil && result.Parameter != nil && result.Parameter.Value != nil {
+				ragQueryArn = *result.Parameter.Value
+				log.Debug().Str("param", paramPath).Msg("RAG Query Lambda ARN loaded from SSM")
+			}
+		}
 	}
 
 	lambdaboot.StartupLog("triage-lambda", initStart).

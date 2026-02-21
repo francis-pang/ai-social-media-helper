@@ -78,6 +78,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-063](./DDR-063-split-processing-ui-screens.md) | 2026-02-18 | Split File Processing and Gemini Request into Separate UI Screens | Accepted |
 | [DDR-064](./DDR-064-gemini-3.1-pro-model-upgrade.md) | 2026-02-19 | Model Upgrade: gemini-3-pro-preview to gemini-3.1-pro-preview | Accepted |
 | [DDR-065](./DDR-065-gemini-context-caching-and-batch-api.md) | 2026-02-19 | Gemini Context Caching and Batch API Integration | Accepted |
+| [DDR-066](./DDR-066-rag-decision-memory.md) | 2026-02-20 | RAG Decision Memory — Feedback-Driven Personalization | Implemented |
 
 ---
 
@@ -92,4 +93,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-19 (DDR-065)
+**Last Updated**: 2026-02-20 (DDR-066)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -40,4 +41,7 @@ var (
 	// Instagram client for publishing (DDR-040).
 	// nil if Instagram credentials are not configured (publishing disabled).
 	igClient *instagram.Client
+
+	// EventBridge client for RAG feedback events (override capture).
+	ebClient *eventbridge.Client
 )

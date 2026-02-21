@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/rs/zerolog/log"
 
 	"github.com/fpang/gemini-media-cli/internal/chat"
 	"github.com/fpang/gemini-media-cli/internal/filehandler"
+	"github.com/fpang/gemini-media-cli/internal/rag"
 	"github.com/fpang/gemini-media-cli/internal/s3util"
 	"github.com/fpang/gemini-media-cli/internal/store"
 )
@@ -151,11 +154,22 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		return s3util.UploadCompressedVideo(ctx, s3Client, mediaBucket, sessionID, originalKey, compressedPath)
 	}
 
+	// RAG retrieval — best effort
+	ragContext := ""
+	if ragQueryArn != "" {
+		ragCtx, ragErr := invokeRAGQuery(ctx, "selection", event.SessionID, event.TripContext)
+		if ragErr != nil {
+			logger.Warn().Err(ragErr).Msg("RAG query failed, proceeding without context")
+		} else {
+			ragContext = ragCtx
+		}
+	}
+
 	// DDR-065: Create CacheManager for context caching across selection → description.
 	cacheMgr := chat.NewCacheManager(client)
 	defer cacheMgr.DeleteAll(ctx, event.SessionID)
 
-	selResult, err := chat.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper, cacheMgr)
+	selResult, err := chat.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
 	if err != nil {
 		errMsg := fmt.Sprintf("selection failed: %v", err)
 		selJob.Status = "error"
@@ -235,6 +249,55 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		selJob.SceneGroups = append(selJob.SceneGroups, group)
 	}
 
+	// Emit selection decisions to EventBridge — best effort
+	if ebClient != nil {
+		for _, sel := range selResult.Selected {
+			idx := sel.Media - 1
+			if idx >= 0 && idx < len(s3Keys) {
+				feedback := rag.ContentFeedback{
+					EventType:   rag.EventSelectionFinalized,
+					SessionID:   event.SessionID,
+					JobID:       event.JobID,
+					Timestamp:   time.Now().UTC().Format(time.RFC3339),
+					UserID:      event.SessionID,
+					MediaKey:    s3Keys[idx],
+					MediaType:   sel.Type,
+					AIVerdict:   "selected",
+					UserVerdict: "selected",
+					Reason:      sel.Justification,
+					Model:       "gemini",
+				}
+				if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
+					logger.Warn().Err(err).Str("filename", sel.Filename).Msg("failed to emit selection feedback")
+				}
+			}
+		}
+		for _, exc := range selResult.Excluded {
+			idx := exc.Media - 1
+			if idx >= 0 && idx < len(s3Keys) {
+				feedback := rag.ContentFeedback{
+					EventType:   rag.EventSelectionFinalized,
+					SessionID:   event.SessionID,
+					JobID:       event.JobID,
+					Timestamp:   time.Now().UTC().Format(time.RFC3339),
+					UserID:      event.SessionID,
+					MediaKey:    s3Keys[idx],
+					MediaType:   "Photo",
+					AIVerdict:   "excluded",
+					UserVerdict: "excluded",
+					Reason:      exc.Reason,
+					Model:       "gemini",
+				}
+				if ext := strings.ToLower(filepath.Ext(exc.Filename)); filehandler.IsVideo(ext) {
+					feedback.MediaType = "Video"
+				}
+				if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
+					logger.Warn().Err(err).Str("filename", exc.Filename).Msg("failed to emit exclusion feedback")
+				}
+			}
+		}
+	}
+
 	// Write completed results to DynamoDB.
 	selJob.Status = "complete"
 	if err := sessionStore.PutSelectionJob(ctx, event.SessionID, selJob); err != nil {
@@ -256,4 +319,29 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		ExcludedCount:   len(selJob.Excluded),
 		SceneGroupCount: len(selJob.SceneGroups),
 	}, nil
+}
+
+func invokeRAGQuery(ctx context.Context, queryType, userID, sessionContext string) (string, error) {
+	if lambdaClient == nil || ragQueryArn == "" {
+		return "", nil
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"queryType":      queryType,
+		"userId":         userID,
+		"sessionContext": sessionContext,
+	})
+	result, err := lambdaClient.Invoke(ctx, &lambdasvc.InvokeInput{
+		FunctionName: &ragQueryArn,
+		Payload:      payload,
+	})
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		RAGContext string `json:"ragContext"`
+	}
+	if err := json.Unmarshal(result.Payload, &resp); err != nil {
+		return "", err
+	}
+	return resp.RAGContext, nil
 }

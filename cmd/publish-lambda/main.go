@@ -18,12 +18,14 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
 
 	"github.com/fpang/gemini-media-cli/internal/instagram"
 	"github.com/fpang/gemini-media-cli/internal/lambdaboot"
 	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/gemini-media-cli/internal/rag"
 	"github.com/fpang/gemini-media-cli/internal/store"
 )
 
@@ -34,18 +36,20 @@ var (
 	mediaBucket  string
 	sessionStore *store.DynamoStore
 	igClient     *instagram.Client
+	ebClient     *eventbridge.Client
 )
 
 func init() {
 	initStart := time.Now()
 	logging.Init()
 
-	aws := lambdaboot.InitAWS()
-	s3s := lambdaboot.InitS3(aws.Config, "MEDIA_BUCKET_NAME")
+	awsClients := lambdaboot.InitAWS()
+	s3s := lambdaboot.InitS3(awsClients.Config, "MEDIA_BUCKET_NAME")
 	presigner = s3s.Presigner
 	mediaBucket = s3s.Bucket
-	sessionStore = lambdaboot.InitDynamo(aws.Config, "DYNAMO_TABLE_NAME")
-	igClient = lambdaboot.LoadInstagramCreds(aws.SSM)
+	sessionStore = lambdaboot.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
+	igClient = lambdaboot.LoadInstagramCreds(awsClients.SSM)
+	ebClient = eventbridge.NewFromConfig(awsClients.Config)
 
 	lambdaboot.StartupLog("publish-lambda", initStart).
 		S3Bucket("mediaBucket", mediaBucket).
@@ -277,6 +281,37 @@ func handlePublishFinalize(ctx context.Context, event PublishEvent) error {
 		CompletedItems: len(event.ContainerIDs), ContainerIDs: event.ContainerIDs,
 		InstagramPostID: instagramPostID,
 	})
+
+	// Emit publish.finalized to EventBridge — best effort
+	if ebClient != nil && len(event.Keys) > 0 {
+		metadata := map[string]string{
+			"platform":        "instagram",
+			"instagramPostId": instagramPostID,
+			"caption":         event.Caption,
+		}
+		for _, key := range event.Keys {
+			feedback := rag.ContentFeedback{
+				EventType:   rag.EventPublishFinalized,
+				SessionID:   event.SessionID,
+				JobID:       event.JobID,
+				Timestamp:   time.Now().UTC().Format(time.RFC3339),
+				UserID:      event.SessionID,
+				MediaKey:    key,
+				MediaType:   "Photo",
+				AIVerdict:   "published",
+				UserVerdict: "published",
+				Reason:      event.Caption,
+				Model:       "gemini",
+				Metadata:    metadata,
+			}
+			if isVideoKey(key) {
+				feedback.MediaType = "Video"
+			}
+			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
+				log.Warn().Err(err).Str("key", key).Msg("failed to emit publish feedback")
+			}
+		}
+	}
 
 	log.Info().Str("instagramPostId", instagramPostID).Int("items", len(event.ContainerIDs)).Dur("duration", time.Since(jobStart)).Msg("Published to Instagram")
 	return nil

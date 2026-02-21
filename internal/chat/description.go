@@ -79,6 +79,7 @@ func GenerateDescription(
 	mediaItems []DescriptionMediaItem,
 	cacheMgr *CacheManager,
 	sessionID string,
+	ragContext string,
 ) (*DescriptionResult, string, error) {
 	log.Debug().
 		Str("group_label", truncateString(groupLabel, 100)).
@@ -87,7 +88,7 @@ func GenerateDescription(
 		Msg("Starting description generation")
 
 	// Build the user prompt
-	prompt := BuildDescriptionPrompt(groupLabel, tripContext, mediaItems)
+	prompt := BuildDescriptionPrompt(groupLabel, tripContext, mediaItems, ragContext)
 
 	// Configure model with description system instruction
 	config := &genai.GenerateContentConfig{
@@ -262,7 +263,7 @@ func RegenerateDescription(
 	}
 
 	// Add the original prompt
-	prompt := BuildDescriptionPrompt(groupLabel, tripContext, mediaItems)
+	prompt := BuildDescriptionPrompt(groupLabel, tripContext, mediaItems, "")
 	initialParts = append(initialParts, &genai.Part{Text: prompt})
 
 	// Build multi-turn conversation
@@ -356,7 +357,7 @@ func RegenerateDescription(
 
 // BuildDescriptionPrompt creates the user prompt for caption generation.
 // Combines the group label, trip context, and media metadata into a structured prompt.
-func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []DescriptionMediaItem) string {
+func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []DescriptionMediaItem, ragContext string) string {
 	log.Trace().
 		Int("media_count", len(mediaItems)).
 		Msg("Building description prompt")
@@ -420,7 +421,11 @@ func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []
 	sb.WriteString("4. Use GPS coordinates to identify the location for the location tag\n")
 	sb.WriteString("5. Respond with ONLY the JSON object as specified in the system instruction\n")
 
-	return sb.String()
+	prompt := sb.String()
+	if ragContext != "" {
+		prompt = ragContext + "\n\n" + prompt
+	}
+	return prompt
 }
 
 // --- Response parsing ---

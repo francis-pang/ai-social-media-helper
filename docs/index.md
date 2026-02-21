@@ -12,6 +12,7 @@
 |----------|-------------|
 | [media-triage.md](./media-triage.md) | Media triage workflow — AI identification of unsaveable media |
 | [media-selection.md](./media-selection.md) | Media selection workflow — AI-powered selection for Instagram carousels |
+| [rag-decision-memory.md](./rag-decision-memory.md) | RAG Decision Memory — feedback-driven personalization (DDR-066) |
 
 ## Media Processing
 
@@ -41,7 +42,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [design-decisions/](./design-decisions/) | 43 DDRs documenting every architectural choice |
+| [design-decisions/](./design-decisions/) | 66 DDRs documenting every architectural choice |
 | [design-decisions/index.md](./design-decisions/index.md) | Chronological index of all decisions |
 
 ## External References
@@ -52,4 +53,4 @@
 
 ---
 
-**Last Updated**: 2026-02-09
+**Last Updated**: 2026-02-20

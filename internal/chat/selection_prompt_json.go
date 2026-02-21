@@ -11,7 +11,7 @@ import (
 // BuildMediaSelectionJSONPrompt creates a prompt for structured JSON media selection.
 // Unlike BuildMediaSelectionPrompt, this produces a prompt for the JSON output mode
 // without an item limit — the AI selects all worthy items. See DDR-030.
-func BuildMediaSelectionJSONPrompt(files []*filehandler.MediaFile, tripContext string) string {
+func BuildMediaSelectionJSONPrompt(files []*filehandler.MediaFile, tripContext string, ragContext string) string {
 	var sb strings.Builder
 
 	// Count media types
@@ -46,5 +46,9 @@ func BuildMediaSelectionJSONPrompt(files []*filehandler.MediaFile, tripContext s
 	sb.WriteString("### Output\n\n")
 	sb.WriteString("Respond with ONLY the JSON object as specified in the system instruction. No other text.\n")
 
-	return sb.String()
+	prompt := sb.String()
+	if ragContext != "" {
+		prompt = ragContext + "\n\n" + prompt
+	}
+	return prompt
 }

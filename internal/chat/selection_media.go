@@ -133,7 +133,7 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 // storeCompressed is an optional callback to store compressed videos in S3.
 // keyMapper maps local file paths to S3 keys (optional, for cloud mode).
 // cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
-func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager) (*SelectionResult, error) {
+func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*filehandler.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string) (*SelectionResult, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -162,7 +162,7 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 	}
 
 	// Build the prompt
-	prompt := BuildMediaSelectionJSONPrompt(files, tripContext)
+	prompt := BuildMediaSelectionJSONPrompt(files, tripContext, ragContext)
 
 	systemInstruction := &genai.Content{
 		Parts: []*genai.Part{{Text: MediaSelectionJSONInstruction}},
