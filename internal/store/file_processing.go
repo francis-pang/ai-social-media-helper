@@ -31,6 +31,7 @@ type FileResult struct {
 	MimeType     string            `json:"mimeType" dynamodbav:"mimeType"`
 	FileSize     int64             `json:"fileSize" dynamodbav:"fileSize"`
 	Converted    bool              `json:"converted" dynamodbav:"converted"`
+	Fingerprint  string            `json:"fingerprint,omitempty" dynamodbav:"fingerprint,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty" dynamodbav:"metadata,omitempty"`
 	Error        string            `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }
@@ -135,6 +136,82 @@ func (s *FileProcessingStore) GetFileResults(ctx context.Context, sessionID, job
 
 	log.Debug().Str("pk", pk).Int("resultCount", len(results)).Dur("duration", duration).Msg("GetFileResults: query completed")
 	return results, nil
+}
+
+// PutFingerprintMapping stores a fingerprint→filename mapping for dedup (DDR-067).
+// Stored as SK=fp#{fingerprint} so lookups are O(1) key queries.
+func (s *FileProcessingStore) PutFingerprintMapping(ctx context.Context, sessionID, jobID, fingerprint, filename string) error {
+	pk := fileProcessingPK(sessionID, jobID)
+	sk := "fp#" + fingerprint
+
+	_, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: &s.tableName,
+		Item: map[string]types.AttributeValue{
+			"PK":        &types.AttributeValueMemberS{Value: pk},
+			"SK":        &types.AttributeValueMemberS{Value: sk},
+			"filename":  &types.AttributeValueMemberS{Value: filename},
+			"expiresAt": &types.AttributeValueMemberN{Value: strconv.FormatInt(fileProcessingExpiresAt(), 10)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("PutItem fingerprint PK=%s SK=%s: %w", pk, sk, err)
+	}
+	log.Debug().Str("pk", pk).Str("fingerprint", fingerprint).Str("filename", filename).Msg("Fingerprint mapping stored")
+	return nil
+}
+
+// GetFingerprintMapping checks if a fingerprint already exists for this session+job (DDR-067).
+// Returns the original filename if found, empty string otherwise.
+func (s *FileProcessingStore) GetFingerprintMapping(ctx context.Context, sessionID, jobID, fingerprint string) (string, error) {
+	pk := fileProcessingPK(sessionID, jobID)
+	sk := "fp#" + fingerprint
+
+	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		ProjectionExpression: aws.String("filename"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("GetItem fingerprint PK=%s SK=%s: %w", pk, sk, err)
+	}
+	if result.Item == nil {
+		return "", nil
+	}
+	if fnAttr, ok := result.Item["filename"].(*types.AttributeValueMemberS); ok {
+		return fnAttr.Value, nil
+	}
+	return "", nil
+}
+
+// GetFileResultByFilename retrieves a single file result by filename (DDR-067).
+func (s *FileProcessingStore) GetFileResultByFilename(ctx context.Context, sessionID, jobID, filename string) (*FileResult, error) {
+	pk := fileProcessingPK(sessionID, jobID)
+
+	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &s.tableName,
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: filename},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("GetItem file result PK=%s SK=%s: %w", pk, filename, err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var fr FileResult
+	if err := attributevalue.UnmarshalMap(result.Item, &fr); err != nil {
+		return nil, fmt.Errorf("unmarshal file result: %w", err)
+	}
+	fr.Filename = filename
+	fr.SessionID = sessionID
+	fr.JobID = jobID
+	return &fr, nil
 }
 
 // GetFileResultCount returns the count of items for a session+job using SELECT COUNT.

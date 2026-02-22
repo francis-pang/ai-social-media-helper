@@ -6,6 +6,8 @@ import type {
   TriageStartResponse,
   TriageInitRequest,
   TriageInitResponse,
+  TriageFinalizeRequest,
+  TriageFinalizeResponse,
   TriageUpdateFilesRequest,
   TriageResults,
   TriageConfirmRequest,
@@ -361,6 +363,16 @@ export function initTriage(
   req: TriageInitRequest,
 ): Promise<TriageInitResponse> {
   return fetchJSON<TriageInitResponse>("/api/triage/init", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Finalize triage uploads — starts SF execution after all uploads complete (DDR-067). */
+export function finalizeTriageUploads(
+  req: TriageFinalizeRequest,
+): Promise<TriageFinalizeResponse> {
+  return fetchJSON<TriageFinalizeResponse>("/api/triage/finalize", {
     method: "POST",
     body: JSON.stringify(req),
   });

@@ -88,6 +88,18 @@ export interface TriageInitRequest {
   model?: string;
 }
 
+/** Request body for POST /api/triage/finalize (DDR-067). */
+export interface TriageFinalizeRequest {
+  sessionId: string;
+  jobId: string;
+}
+
+/** Response from POST /api/triage/finalize (DDR-067). */
+export interface TriageFinalizeResponse {
+  jobId: string;
+  sessionId: string;
+}
+
 /** Request body for POST /api/triage/update-files (DDR-061). */
 export interface TriageUpdateFilesRequest {
   sessionId: string;

@@ -17,6 +17,8 @@
 //	POST /api/upload-multipart/init     — create S3 multipart upload + presign part URLs (DDR-054)
 //	POST /api/upload-multipart/complete — complete S3 multipart upload with ETags (DDR-054)
 //	POST /api/upload-multipart/abort    — abort S3 multipart upload (DDR-054)
+//	POST /api/triage/init           — create triage job (DDB only, no SF — DDR-067)
+//	POST /api/triage/finalize      — start SF after uploads complete (DDR-067)
 //	POST /api/triage/start         — start triage from uploaded S3 files
 //	GET  /api/triage/{id}/results  — poll triage results
 //	POST /api/triage/{id}/confirm  — delete confirmed files from S3
@@ -216,6 +218,7 @@ func main() {
 	mux.HandleFunc("/api/upload-multipart/complete", handleMultipartComplete) // DDR-054
 	mux.HandleFunc("/api/upload-multipart/abort", handleMultipartAbort)       // DDR-054
 	mux.HandleFunc("/api/triage/init", handleTriageInit)
+	mux.HandleFunc("/api/triage/finalize", handleTriageFinalize) // DDR-067
 	mux.HandleFunc("/api/triage/update-files", handleTriageUpdateFiles)
 	mux.HandleFunc("/api/triage/start", handleTriageStart)
 	mux.HandleFunc("/api/triage/", handleTriageRoutes)
@@ -245,7 +248,7 @@ func main() {
 	routes := []string{
 		"/api/health", "/api/upload-url",
 		"/api/upload-multipart/init", "/api/upload-multipart/complete", "/api/upload-multipart/abort",
-		"/api/triage/init", "/api/triage/update-files", "/api/triage/start", "/api/triage/",
+		"/api/triage/init", "/api/triage/finalize", "/api/triage/update-files", "/api/triage/start", "/api/triage/",
 		"/api/selection/start", "/api/selection/",
 		"/api/enhance/start", "/api/enhance/",
 		"/api/download/start", "/api/download/",

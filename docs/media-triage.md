@@ -12,8 +12,10 @@ Available as a CLI tool (`media-triage`), a local web UI (`media-web`), and a cl
 
 ```mermaid
 flowchart TD
-    Upload["Upload / select media"]
-    Preprocess["Preprocess media\n(thumbnails, video compression)\nShown inline on upload screen (DDR-063)"]
+    Init["Init triage session\n(DDR-067: DDB job only, no SF)"]
+    Upload["Upload / select media\n(content dedup via fingerprinting, DDR-067)"]
+    Preprocess["Preprocess media\n(thumbnails, adaptive video compression)\nShown inline on upload screen (DDR-063)"]
+    Finalize["Finalize uploads\n(DDR-067: starts SF execution,\n30-min timeout begins here)"]
     Gemini["Gemini AI batch evaluation\n(single API call, all media)\nDedicated AI Analysis screen (DDR-063)"]
     Categorize["Categorize results\nKEEP vs DISCARD with reasons"]
     StoreThumbs["Store thumbnails to S3\nDelete originals (DDR-059)"]
@@ -21,7 +23,7 @@ flowchart TD
     Confirm["User confirms deletion\n(multi-select)"]
     Cleanup["Clean up all session S3 artifacts\n(thumbnails, compressed)"]
 
-    Upload --> Preprocess --> Gemini --> Categorize --> StoreThumbs --> Review --> Confirm --> Cleanup
+    Init --> Upload --> Preprocess --> Finalize --> Gemini --> Categorize --> StoreThumbs --> Review --> Confirm --> Cleanup
 ```
 
 ### Cloud UI Screens (DDR-063)
@@ -42,10 +44,11 @@ sequenceDiagram
     participant Gemini as Gemini API
 
     User->>Frontend: Drag-and-drop files (cloud) or pick directory (local)
+    Frontend->>API: POST /api/triage/init (DDR-067: DDB job only)
+    API-->>Frontend: jobId
     Frontend->>S3: Upload via presigned PUT URLs (cloud mode)
-    Frontend->>API: POST /api/triage/start
-    API->>S3: Download files to /tmp (cloud mode)
-    API->>API: Generate thumbnails, compress videos
+    Note over Frontend,S3: MediaProcess Lambda processes files on S3 arrival (DDR-061)
+    Frontend->>API: POST /api/triage/finalize (DDR-067: starts SF)
     API->>Gemini: Single batch call with all media + triage prompt
     Gemini-->>API: JSON array of verdicts (keep/discard + reason)
     API->>API: Generate thumbnails, upload to S3 (DDR-059)

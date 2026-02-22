@@ -27,14 +27,32 @@ const (
 	// AV1 handles higher CRF values well (range 0-63). 35 provides good quality/size balance.
 	VideoCRF = 35
 
-	// VideoPreset controls encoding speed vs efficiency (0-13, lower = slower but better).
-	// Preset 4 provides high efficiency since encoding time is not a priority.
-	VideoPreset = 4
+	// DefaultVideoPreset is the baseline preset for short videos (DDR-067: adaptive).
+	// Preset 4 provides highest efficiency for videos ≤10 min.
+	DefaultVideoPreset = 4
 
 	// AudioBitrate is the target audio bitrate for Opus encoding.
 	// Opus excels at low bitrates; 24kbps is sufficient for speech/sound analysis.
 	AudioBitrate = "24k"
 )
+
+// SelectPreset returns the optimal SVT-AV1 preset based on video duration (DDR-067).
+// Shorter videos use slower presets for better compression efficiency;
+// longer videos use faster presets since encoding time scales with frame count
+// and the absolute size difference at these compressed sizes is negligible.
+func SelectPreset(duration time.Duration) int {
+	mins := duration.Minutes()
+	switch {
+	case mins <= 10:
+		return 4 // Quality-optimized, ~0.5–1.5 FPS/vCPU
+	case mins <= 60:
+		return 6 // Same output size as preset 4, 15x faster
+	case mins <= 180:
+		return 8 // ~8% larger output, 35x faster than preset 4
+	default:
+		return 10 // ~15% larger output, 70x faster — acceptable for triage
+	}
+}
 
 // CheckFFmpegAvailable checks if ffmpeg is available in the system PATH.
 // This can be called at startup to validate video compression capability.
@@ -128,8 +146,13 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 		}
 	}
 
-	// Build FFmpeg arguments with smart no-upscaling logic
-	args := buildFFmpegArgs(inputPath, outputPath, metadata)
+	// DDR-067: Select preset based on video duration
+	preset := DefaultVideoPreset
+	if metadata != nil && metadata.Duration > 0 {
+		preset = SelectPreset(metadata.Duration)
+	}
+
+	args := buildFFmpegArgs(inputPath, outputPath, metadata, preset)
 
 	log.Debug().
 		Strs("args", args).
@@ -197,12 +220,13 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 
 // buildFFmpegArgs constructs FFmpeg arguments with smart no-upscaling logic.
 // Never upscales any attribute - if source is lower quality than target, keeps original.
-func buildFFmpegArgs(inputPath, outputPath string, metadata *VideoMetadata) []string {
+// The preset parameter controls encoding speed vs efficiency (DDR-067: adaptive selection).
+func buildFFmpegArgs(inputPath, outputPath string, metadata *VideoMetadata, preset int) []string {
 	args := []string{"-i", inputPath}
 
 	// Video codec: AV1 via libsvtav1
 	args = append(args, "-c:v", "libsvtav1")
-	args = append(args, "-preset", strconv.Itoa(VideoPreset))
+	args = append(args, "-preset", strconv.Itoa(preset))
 	args = append(args, "-crf", strconv.Itoa(VideoCRF))
 
 	// Frame rate: min(MaxFrameRate, source_fps) - never upscale

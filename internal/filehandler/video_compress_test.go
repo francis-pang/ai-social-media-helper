@@ -2,6 +2,7 @@ package filehandler
 
 import (
 	"testing"
+	"time"
 )
 
 func TestCheckFFmpegAvailable(t *testing.T) {
@@ -21,8 +22,33 @@ func TestIsFFmpegAvailable(t *testing.T) {
 	// Just verify it doesn't panic
 }
 
+func TestSelectPreset(t *testing.T) {
+	tests := []struct {
+		duration time.Duration
+		expected int
+	}{
+		{0, 4},
+		{5 * time.Minute, 4},
+		{10 * time.Minute, 4},
+		{10*time.Minute + time.Second, 6},
+		{30 * time.Minute, 6},
+		{60 * time.Minute, 6},
+		{60*time.Minute + time.Second, 8},
+		{120 * time.Minute, 8},
+		{180 * time.Minute, 8},
+		{180*time.Minute + time.Second, 10},
+		{300 * time.Minute, 10},
+	}
+	for _, tc := range tests {
+		result := SelectPreset(tc.duration)
+		if result != tc.expected {
+			t.Errorf("SelectPreset(%v) = %d, expected %d", tc.duration, result, tc.expected)
+		}
+	}
+}
+
 func TestBuildFFmpegArgs_NoMetadata(t *testing.T) {
-	args := buildFFmpegArgs("input.mp4", "output.webm", nil)
+	args := buildFFmpegArgs("input.mp4", "output.webm", nil, DefaultVideoPreset)
 
 	// Verify essential arguments are present
 	assertContains(t, args, "-c:v", "libsvtav1")
@@ -45,7 +71,7 @@ func TestBuildFFmpegArgs_WithHighFPSSource(t *testing.T) {
 		AudioRate: 48000,
 	}
 
-	args := buildFFmpegArgs("input.mp4", "output.webm", metadata)
+	args := buildFFmpegArgs("input.mp4", "output.webm", metadata, DefaultVideoPreset)
 
 	// Verify frame rate is capped at MaxFrameRate (5), not 60
 	assertContains(t, args, "-r", "5.00")
@@ -63,7 +89,7 @@ func TestBuildFFmpegArgs_WithLowFPSSource(t *testing.T) {
 		AudioRate: 22050,
 	}
 
-	args := buildFFmpegArgs("input.mp4", "output.webm", metadata)
+	args := buildFFmpegArgs("input.mp4", "output.webm", metadata, DefaultVideoPreset)
 
 	// Verify frame rate preserves source (3 FPS), not upscaled to 5
 	assertContains(t, args, "-r", "3.00")
@@ -73,7 +99,7 @@ func TestBuildFFmpegArgs_WithLowFPSSource(t *testing.T) {
 }
 
 func TestBuildFFmpegArgs_VideoFilterPresent(t *testing.T) {
-	args := buildFFmpegArgs("input.mp4", "output.webm", nil)
+	args := buildFFmpegArgs("input.mp4", "output.webm", nil, DefaultVideoPreset)
 
 	// Verify video filter includes scale and format
 	found := false

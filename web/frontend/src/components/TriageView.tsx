@@ -56,7 +56,7 @@ function pollResults(id: string) {
         results.value = {
           id,
           status: "error",
-          error: "Processing timed out after 15 minutes",
+          error: "Processing timed out after 30 minutes",
           keep: [],
           discard: [],
         };

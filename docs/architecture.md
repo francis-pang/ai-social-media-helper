@@ -126,7 +126,7 @@ graph TD
         SelectionLambda["Selection Lambda\n(4GB, 15min)"]
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
         VideoLambda["Video Lambda\n(4GB, 15min)"]
-        MediaProcessLambda["MediaProcess Lambda\n(1GB, 5min, DDR-061)"]
+        MediaProcessLambda["MediaProcess Lambda\n(4GB, 15min, DDR-061, DDR-067)"]
         StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish)"]
         DynamoDB["DynamoDB\n(session state, TTL 24h)"]
         FileProcessingDB["DynamoDB\n(file processing, TTL 4h,\nDDR-061)"]
@@ -310,10 +310,15 @@ sequenceDiagram
     participant TL as Triage Lambda
     participant Gemini as Gemini API
 
-    FE->>API: POST /api/triage/start
+    FE->>API: POST /api/triage/init (DDR-067)
     API->>DB: Write pending TriageJob
-    API->>SFN: StartExecution
     API-->>FE: 202 Accepted with jobId
+
+    Note over FE,S3: Files upload to S3; MediaProcess Lambda processes each on arrival
+
+    FE->>API: POST /api/triage/finalize (DDR-067)
+    API->>SFN: StartExecution (30-min timeout starts here)
+    API-->>FE: 200 OK
 
     Note over SFN,TL: Step Function — TriagePipeline
 
@@ -364,7 +369,7 @@ sequenceDiagram
   - Videos and images are interleaved before batching to prevent all-video batches that would overwhelm the Gemini API.
 - **DDR-059 cleanup**: After `AskMediaTriage` succeeds, thumbnails are generated from `/tmp` files and uploaded to S3. Original files are then deleted immediately. The 1-day S3 lifecycle policy acts as a safety net for abandoned sessions.
 - **Confirm cleanup**: When the user confirms triage results, the API Lambda deletes the user-selected discard keys, then cleans up all remaining S3 artifacts (thumbnails, compressed videos) in a background goroutine.
-- **Pipeline timeout**: 30 minutes. Triage Lambda timeout: 10 minutes (2 GB memory, Light container).
+- **Pipeline timeout**: 30 minutes (starts after uploads complete via `/api/triage/finalize` — DDR-067). Triage Lambda timeout: 10 minutes (2 GB memory, Light container). MediaProcess Lambda: 15 minutes (4 GB memory — DDR-067).
 
 ## Gemini Context Caching (DDR-065)
 

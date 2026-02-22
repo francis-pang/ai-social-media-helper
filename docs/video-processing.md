@@ -42,6 +42,7 @@ flowchart LR
 **Compression settings:**
 - Video: AV1 via `libsvtav1` (requires FFmpeg with SVT-AV1 support)
 - Audio: Opus via `libopus`
+- Preset: Adaptive based on duration (DDR-067) — ≤10 min: preset 4, 10–60 min: preset 6, 60–180 min: preset 8, >180 min: preset 10
 - Target: Preserve visual content for AI analysis, not human viewing
 
 **Dependencies:** FFmpeg must be installed with `libsvtav1` and `libopus` support.

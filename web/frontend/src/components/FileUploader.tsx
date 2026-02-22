@@ -1,6 +1,7 @@
 import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
-import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, getTriageResults, startTriage } from "../api/client";
+import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, finalizeTriageUploads, getTriageResults, startTriage } from "../api/client";
+import { quickFingerprint, fullHash } from "../utils/fileHash";
 import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep } from "../app";
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
@@ -45,6 +46,10 @@ const files = signal<UploadedFile[]>([]);
 const error = signal<string | null>(null);
 const triageInitialized = signal<boolean>(false);
 const triagePolling = signal<boolean>(false);
+const triageFinalized = signal<boolean>(false);
+
+/** DDR-067: Content fingerprint map for dedup. Maps fingerprint → filename. */
+const fingerprintMap = new Map<string, string>();
 
 /** Per-file server-side processing statuses from poll results (DDR-063). */
 const serverFileStatuses = signal<FileProcessingStatus[]>([]);
@@ -115,7 +120,7 @@ function handleDragOver(e: DragEvent) {
   e.stopPropagation();
 }
 
-function addFiles(newFiles: File[]) {
+async function addFiles(newFiles: File[]) {
   if (!uploadSessionId.value) {
     uploadSessionId.value = generateSessionId();
     syncUrlToStep(currentStep.value, uploadSessionId.value);
@@ -126,9 +131,33 @@ function addFiles(newFiles: File[]) {
 
   const toAdd: UploadedFile[] = [];
   const fileMap = new Map<string, File>();
+  let skippedDuplicates = 0;
 
   for (const file of newFiles) {
     if (existing.has(file.name)) continue;
+
+    // DDR-067: Content-based dedup via quick fingerprint
+    try {
+      const fp = await quickFingerprint(file);
+      const existingName = fingerprintMap.get(fp);
+      if (existingName) {
+        const existingFile = fileMap.get(existingName) ??
+          newFiles.find((f) => f.name === existingName);
+        if (existingFile) {
+          const fh1 = await fullHash(file);
+          const fh2 = await fullHash(existingFile);
+          if (fh1 === fh2) {
+            skippedDuplicates++;
+            console.info(`Skipping duplicate: ${file.name} matches ${existingName}`);
+            continue;
+          }
+        }
+      }
+      fingerprintMap.set(fp, file.name);
+    } catch {
+      // Fingerprinting failed — proceed with upload (dedup is best-effort)
+    }
+
     existing.add(file.name);
     toAdd.push({
       name: file.name,
@@ -141,6 +170,9 @@ function addFiles(newFiles: File[]) {
     fileMap.set(file.name, file);
   }
 
+  if (skippedDuplicates > 0) {
+    console.info(`DDR-067: Skipped ${skippedDuplicates} duplicate file(s)`);
+  }
   if (toAdd.length === 0) return;
 
   files.value = [...files.value, ...toAdd];
@@ -229,17 +261,28 @@ async function pollTriageResults(jobId: string, sessionId: string) {
         serverExpectedFileCount.value = results.expectedFileCount;
       }
 
-      // DDR-063: Stay on upload screen until all per-file processing completes,
-      // then transition to Gemini analysis screen.
+      // DDR-067: Finalize triage (start SF) when all uploads are done
       const allUploaded = files.value.length > 0 && files.value.every(
         f => f.status === "done" || f.status === "error"
       );
+      if (allUploaded && !triageFinalized.value) {
+        triageFinalized.value = true;
+        const doneCount = files.value.filter(f => f.status === "done").length;
+        if (doneCount > 0) {
+          finalizeTriageUploads({ sessionId, jobId }).catch(
+            (e) => console.error("Failed to finalize triage uploads:", e)
+          );
+        }
+      }
+
+      // DDR-063: Stay on upload screen until all per-file processing completes,
+      // then transition to Gemini analysis screen.
       const allProcessed = results.expectedFileCount != null &&
         results.expectedFileCount > 0 &&
         results.processedCount != null &&
         results.processedCount >= results.expectedFileCount;
 
-      if (allUploaded && allProcessed && results.status !== "pending") {
+      if (allUploaded && allProcessed && results.status !== "pending" && triageFinalized.value) {
         const doneFiles = files.value.filter(f => f.status === "done");
         const errorFiles = files.value.filter(f => f.status === "error");
         if (errorFiles.length > 0 && doneFiles.length > 0) {
@@ -342,6 +385,8 @@ function clearAll() {
   serverFileStatuses.value = [];
   serverProcessedCount.value = 0;
   serverExpectedFileCount.value = 0;
+  triageFinalized.value = false;
+  fingerprintMap.clear();
   stopSpeedTracking();
 }
 
@@ -351,9 +396,11 @@ export function resetFileUploaderState() {
   error.value = null;
   triageInitialized.value = false;
   triagePolling.value = false;
+  triageFinalized.value = false;
   serverFileStatuses.value = [];
   serverProcessedCount.value = 0;
   serverExpectedFileCount.value = 0;
+  fingerprintMap.clear();
   stopSpeedTracking();
 }
 

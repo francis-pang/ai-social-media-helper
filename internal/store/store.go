@@ -164,6 +164,7 @@ type TriageJob struct {
 	SessionID         string       `json:"-" dynamodbav:"-"`
 	Status            string       `json:"status" dynamodbav:"status"`
 	Phase             string       `json:"phase,omitempty" dynamodbav:"phase,omitempty"`
+	Model             string       `json:"model,omitempty" dynamodbav:"model,omitempty"`
 	TotalFiles        int          `json:"totalFiles,omitempty" dynamodbav:"totalFiles,omitempty"`
 	UploadedFiles     int          `json:"uploadedFiles,omitempty" dynamodbav:"uploadedFiles,omitempty"`
 	ExpectedFileCount int          `json:"expectedFileCount,omitempty" dynamodbav:"expectedFileCount,omitempty"`

@@ -63,11 +63,13 @@ func handleTriageInit(w http.ResponseWriter, r *http.Request) {
 
 	jobID := jobs.GenerateID("triage-")
 
-	// Write pending job with expectedFileCount to DynamoDB (DDR-061)
+	// DDR-067: Write pending job to DynamoDB only — SF execution is deferred to
+	// handleTriageFinalize so the 30-min timeout starts after uploads complete.
 	if sessionStore != nil {
 		pendingJob := &store.TriageJob{
 			ID:                jobID,
 			Status:            "pending",
+			Model:             model,
 			ExpectedFileCount: req.ExpectedFileCount,
 		}
 		if err := sessionStore.PutTriageJob(context.Background(), req.SessionID, pendingJob); err != nil {
@@ -77,9 +79,75 @@ func handleTriageInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Start TriagePipeline Step Function (DDR-061: init-session type)
+	log.Info().
+		Str("jobId", jobID).
+		Str("sessionId", req.SessionID).
+		Int("expectedFileCount", req.ExpectedFileCount).
+		Msg("Triage init: DDB job created, SF deferred to finalize (DDR-067)")
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"id":        jobID,
+		"sessionId": req.SessionID,
+	})
+}
+
+// POST /api/triage/finalize (DDR-067)
+// Body: {"sessionId": "uuid", "jobId": "triage-xxx"}
+// Starts the Step Functions execution after all uploads are complete.
+func handleTriageFinalize(w http.ResponseWriter, r *http.Request) {
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleTriageFinalize")
+
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"sessionId"`
+		JobID     string `json:"jobId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" || req.JobID == "" {
+		httpError(w, http.StatusBadRequest, "sessionId and jobId are required")
+		return
+	}
+	if err := validateSessionID(req.SessionID); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if !ensureSessionOwner(w, r, req.SessionID) {
+		return
+	}
+
+	// Read the existing triage job to get model and expectedFileCount
+	if sessionStore == nil {
+		httpError(w, http.StatusServiceUnavailable, "store not configured")
+		return
+	}
+	job, err := sessionStore.GetTriageJob(context.Background(), req.SessionID, req.JobID)
+	if err != nil {
+		log.Error().Err(err).Str("jobId", req.JobID).Msg("Failed to read triage job")
+		httpError(w, http.StatusInternalServerError, "failed to read job")
+		return
+	}
+	if job == nil {
+		httpError(w, http.StatusNotFound, "triage job not found")
+		return
+	}
+
+	model := job.Model
+	if model == "" {
+		model = chat.DefaultModelName
+	}
+
+	// Start TriagePipeline Step Function — timeout starts NOW (DDR-067)
 	if sfnClient == nil || triageSfnArn == "" {
-		log.Error().Str("jobId", jobID).Msg("Triage pipeline not configured")
+		log.Error().Str("jobId", req.JobID).Msg("Triage pipeline not configured")
 		httpError(w, http.StatusServiceUnavailable, "triage processing is not available")
 		return
 	}
@@ -87,29 +155,29 @@ func handleTriageInit(w http.ResponseWriter, r *http.Request) {
 	sfnInput, _ := json.Marshal(map[string]interface{}{
 		"type":              "triage-init-session",
 		"sessionId":         req.SessionID,
-		"jobId":             jobID,
+		"jobId":             req.JobID,
 		"model":             model,
-		"expectedFileCount": req.ExpectedFileCount,
+		"expectedFileCount": job.ExpectedFileCount,
 	})
-	_, err := sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+	_, err = sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
 		StateMachineArn: aws.String(triageSfnArn),
 		Input:           aws.String(string(sfnInput)),
-		Name:            aws.String(jobID),
+		Name:            aws.String(req.JobID),
 	})
 	if err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Msg("Failed to start triage pipeline")
+		log.Error().Err(err).Str("jobId", req.JobID).Msg("Failed to start triage pipeline")
 		httpError(w, http.StatusInternalServerError, fmt.Sprintf("failed to start processing: %v", err))
 		return
 	}
 
 	log.Info().
-		Str("jobId", jobID).
+		Str("jobId", req.JobID).
 		Str("sessionId", req.SessionID).
-		Int("expectedFileCount", req.ExpectedFileCount).
-		Msg("Triage init: SFN started (DDR-061)")
+		Int("expectedFileCount", job.ExpectedFileCount).
+		Msg("Triage finalize: SFN started after uploads complete (DDR-067)")
 
-	respondJSON(w, http.StatusAccepted, map[string]string{
-		"id":        jobID,
+	respondJSON(w, http.StatusOK, map[string]string{
+		"jobId":     req.JobID,
 		"sessionId": req.SessionID,
 	})
 }
