@@ -1,7 +1,5 @@
 import { signal, computed } from "@preact/signals";
-import { useEffect } from "preact/hooks";
-import { isCloudMode, invalidateSession, getRAGStatus } from "./api/client";
-import { createPoller } from "./hooks/usePolling";
+import { isCloudMode, invalidateSession } from "./api/client";
 import {
   isAuthenticated,
   isAuthRequired,
@@ -83,11 +81,6 @@ export const tripContext = signal<string>("");
 
 /** Step history stack for back-navigation in the selection flow. */
 export const stepHistory = signal<Step[]>([]);
-
-/** RAG system status (Aurora cluster). Non-blocking; app works without RAG. */
-export const ragStatus = signal<
-  "loading" | "available" | "starting" | "stopped" | "unknown"
->("loading");
 
 // --- Step Navigation (DDR-037) ---
 
@@ -267,42 +260,6 @@ const isSelectionStep = computed(
 const isOnLanding = computed(() => currentStep.value === "landing");
 
 export function App() {
-  // Check RAG status on mount (cloud mode only, non-blocking)
-  useEffect(() => {
-    if (!isCloudMode) {
-      ragStatus.value = "unknown";
-      return;
-    }
-    (async () => {
-      try {
-        const { status } = await getRAGStatus();
-        ragStatus.value =
-          status === "available" ? "available" : status === "stopped" ? "stopped" : "starting";
-        if (status !== "available") {
-          createPoller<Awaited<ReturnType<typeof getRAGStatus>>>({
-            fn: getRAGStatus,
-            intervalMs: 5000,
-            isDone: (res) => res.status === "available",
-            onPoll: (res) => {
-              ragStatus.value =
-                res.status === "available"
-                  ? "available"
-                  : res.status === "stopped"
-                    ? "stopped"
-                    : "starting";
-            },
-            onPollError: () => {
-              ragStatus.value = "unknown";
-              return false;
-            },
-          });
-        }
-      } catch {
-        ragStatus.value = "unknown";
-      }
-    })();
-  }, []);
-
   // Show loading indicator while checking existing session
   if (authLoading.value) {
     return (
@@ -368,26 +325,6 @@ export function App() {
           )}
         </div>
       </header>
-
-      {/* RAG status banner — subtle indicator when Aurora is starting/stopped */}
-      {isCloudMode &&
-        (ragStatus.value === "starting" || ragStatus.value === "stopped") && (
-          <div
-            style={{
-              padding: "0.5rem 1rem",
-              marginBottom: "1rem",
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              background: "rgba(255, 200, 50, 0.08)",
-              border: "1px solid rgba(255, 200, 50, 0.2)",
-              borderRadius: "var(--radius)",
-            }}
-          >
-            {ragStatus.value === "starting"
-              ? "RAG context is warming up — personalization may improve shortly."
-              : "RAG context is paused."}
-          </div>
-        )}
 
       {/* Landing page — cloud mode workflow chooser (DDR-042) */}
       {currentStep.value === "landing" && isCloudMode && <LandingPage />}

@@ -684,9 +684,3 @@ export async function postOverrideFinalize(
   });
 }
 
-/** Check RAG system status (Aurora cluster state). */
-export async function getRAGStatus(): Promise<{
-  status: "available" | "starting" | "stopped" | "unknown";
-}> {
-  return fetchJSON("/api/rag/status");
-}
