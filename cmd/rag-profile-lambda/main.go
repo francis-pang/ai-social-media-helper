@@ -12,7 +12,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -32,13 +31,12 @@ var (
 	rdsClient      *rds.Client
 	dynamoClient   *dynamodb.Client
 	ssmClient      *ssm.Client
-	bedrockClient  *bedrockruntime.Client
+	genaiClient    *genai.Client
 	clusterARN     string
 	secretARN      string
 	database       string
 	profilesTable  string
 	stagingTable   string
-	embeddingModel string
 )
 
 type stagingItem struct {
@@ -72,6 +70,16 @@ func handler(ctx context.Context) error {
 
 	if err := ensureAuroraAvailable(ctx); err != nil {
 		return err
+	}
+
+	lambdaboot.LoadGeminiKey(ssmClient)
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("Gemini API key not available")
+	}
+	genaiClient, err = chat.NewGeminiClient(ctx, apiKey)
+	if err != nil {
+		return fmt.Errorf("create Gemini client: %w", err)
 	}
 
 	dataAPI := rag.NewDataAPIClient(rdsDataClient, clusterARN, secretARN, database)
@@ -226,7 +234,7 @@ func ingestStagingItems(ctx context.Context, items []stagingItem, dataAPI *rag.D
 
 func embedAndUpsert(ctx context.Context, dataAPI *rag.DataAPIClient, feedback rag.ContentFeedback) error {
 	text := rag.BuildEmbeddingInput(feedback)
-	embedding, err := rag.GenerateEmbedding(ctx, bedrockClient, embeddingModel, text)
+	embedding, err := rag.GenerateEmbedding(ctx, genaiClient, text)
 	if err != nil {
 		return fmt.Errorf("generate embedding: %w", err)
 	}
@@ -376,17 +384,6 @@ func buildAndWriteProfile(ctx context.Context, dataAPI *rag.DataAPIClient) error
 	stats := rag.ComputeStats(triageDecisions, overrideDecisions, selectionDecisions)
 	prompt := rag.FormatStatsForLLM(stats)
 
-	lambdaboot.LoadGeminiKey(ssmClient)
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("Gemini API key not available")
-	}
-
-	geminiClient, err := chat.NewGeminiClient(ctx, apiKey)
-	if err != nil {
-		return fmt.Errorf("create Gemini client: %w", err)
-	}
-
 	systemPrompt := "You are a preference profile writer. Write a concise bullet-point preference profile based on the user's media curation statistics. Be specific. Do not invent patterns not present in the data."
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{
@@ -395,7 +392,7 @@ func buildAndWriteProfile(ctx context.Context, dataAPI *rag.DataAPIClient) error
 	}
 
 	modelName := chat.GetModelName()
-	resp, err := geminiClient.Models.GenerateContent(ctx, modelName, genai.Text(prompt), config)
+	resp, err := genaiClient.Models.GenerateContent(ctx, modelName, genai.Text(prompt), config)
 	if err != nil {
 		return fmt.Errorf("Gemini GenerateContent: %w", err)
 	}
@@ -493,12 +490,32 @@ func deleteStagingItems(ctx context.Context, items []stagingItem) {
 			})
 		}
 
-		if _, err := dynamoClient.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+		result, err := dynamoClient.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
 			RequestItems: map[string][]types.WriteRequest{
 				stagingTable: requests,
 			},
-		}); err != nil {
+		})
+		if err != nil {
 			log.Error().Err(err).Int("batch", i/batchSize).Msg("BatchWriteItem delete failed")
+			continue
+		}
+
+		unprocessed := result.UnprocessedItems[stagingTable]
+		for retries := 0; len(unprocessed) > 0 && retries < 5; retries++ {
+			backoff := time.Duration(1<<retries) * 100 * time.Millisecond
+			log.Debug().Int("unprocessed", len(unprocessed)).Int("retry", retries+1).Dur("backoff", backoff).Msg("deleteStagingItems: retrying unprocessed items")
+			time.Sleep(backoff)
+			retryResult, retryErr := dynamoClient.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+				RequestItems: map[string][]types.WriteRequest{stagingTable: unprocessed},
+			})
+			if retryErr != nil {
+				log.Warn().Err(retryErr).Int("unprocessed", len(unprocessed)).Msg("deleteStagingItems: retry failed")
+				break
+			}
+			unprocessed = retryResult.UnprocessedItems[stagingTable]
+		}
+		if len(unprocessed) > 0 {
+			log.Warn().Int("remaining", len(unprocessed)).Msg("deleteStagingItems: unprocessed items remain after retries")
 		}
 	}
 
@@ -710,18 +727,12 @@ func main() {
 	rdsClient = rds.NewFromConfig(cfg)
 	dynamoClient = dynamodb.NewFromConfig(cfg)
 	ssmClient = ssm.NewFromConfig(cfg)
-	bedrockClient = bedrockruntime.NewFromConfig(cfg)
 
 	clusterARN = os.Getenv("AURORA_CLUSTER_ARN")
 	secretARN = os.Getenv("AURORA_SECRET_ARN")
 	database = os.Getenv("AURORA_DATABASE_NAME")
 	profilesTable = os.Getenv("RAG_PROFILES_TABLE_NAME")
 	stagingTable = os.Getenv("STAGING_TABLE_NAME")
-
-	embeddingModel = os.Getenv("BEDROCK_EMBEDDING_MODEL_ID")
-	if embeddingModel == "" {
-		embeddingModel = "amazon.titan-embed-text-v2:0"
-	}
 
 	if os.Getenv("SSM_API_KEY_PARAM") == "" {
 		os.Setenv("SSM_API_KEY_PARAM", "/ai-social-media/prod/gemini-api-key")

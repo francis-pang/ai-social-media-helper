@@ -137,6 +137,7 @@ func GenerateDescription(
 
 	// Generate content
 	modelName := GetModelName()
+	var streamedText string
 	callStart := time.Now()
 
 	var resp *genai.GenerateContentResponse
@@ -162,9 +163,18 @@ func GenerateDescription(
 			Str("model", modelName).
 			Int("prompt_length", len(prompt)).
 			Int("media_part_count", len(parts)-1).
-			Msg("Starting Gemini API call for description generation")
+			Msg("Starting streaming Gemini API call for description generation")
 		contents := []*genai.Content{{Role: "user", Parts: parts}}
-		resp, err = client.Models.GenerateContent(ctx, modelName, contents, config)
+		var accumulated strings.Builder
+		for streamResp, streamErr := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
+			if streamErr != nil {
+				err = streamErr
+				break
+			}
+			resp = streamResp
+			accumulated.WriteString(streamResp.Text())
+		}
+		streamedText = accumulated.String()
 	}
 
 	duration := time.Since(callStart)
@@ -173,11 +183,14 @@ func GenerateDescription(
 		return nil, "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil {
+	responseText := streamedText
+	if responseText == "" && resp != nil {
+		responseText = resp.Text()
+	}
+	if responseText == "" {
 		return nil, "", fmt.Errorf("received empty response from Gemini API")
 	}
 
-	responseText := resp.Text()
 	log.Debug().
 		Int("response_length", len(responseText)).
 		Dur("duration", duration).

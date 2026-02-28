@@ -86,6 +86,31 @@ func InitDynamoOptional(cfg aws.Config, tableEnvVar string) *store.DynamoStore {
 	return store.NewDynamoStore(ddbClient, tableName)
 }
 
+// LoadParameters fetches multiple SSM parameters in a single GetParameters call.
+func LoadParameters(ssmClient *ssm.Client, names []string) map[string]string {
+	ssmStart := time.Now()
+	result, err := ssmClient.GetParameters(context.Background(), &ssm.GetParametersInput{
+		Names:          names,
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		log.Fatal().Err(err).Strs("params", names).Msg("SSM GetParameters call failed")
+	}
+	params := make(map[string]string, len(result.Parameters))
+	for _, p := range result.Parameters {
+		params[*p.Name] = *p.Value
+	}
+	if len(result.InvalidParameters) > 0 {
+		log.Warn().Strs("params", result.InvalidParameters).Msg("SSM parameters not found")
+	}
+	log.Debug().
+		Int("found", len(result.Parameters)).
+		Int("missing", len(result.InvalidParameters)).
+		Dur("elapsed", time.Since(ssmStart)).
+		Msg("SSM batch fetch complete")
+	return params
+}
+
 // LoadGeminiKey fetches the Gemini API key from SSM Parameter Store if not
 // already set via GEMINI_API_KEY env var. Fatals on error.
 func LoadGeminiKey(ssmClient *ssm.Client) {
@@ -96,16 +121,12 @@ func LoadGeminiKey(ssmClient *ssm.Client) {
 	if paramName == "" {
 		paramName = "/ai-social-media/prod/gemini-api-key"
 	}
-	ssmStart := time.Now()
-	result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
-		Name:           &paramName,
-		WithDecryption: aws.Bool(true),
-	})
-	if err != nil {
-		log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read API key from SSM")
+	params := LoadParameters(ssmClient, []string{paramName})
+	if val, ok := params[paramName]; ok {
+		os.Setenv("GEMINI_API_KEY", val)
+	} else {
+		log.Fatal().Str("param", paramName).Msg("Failed to read API key from SSM")
 	}
-	os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
-	log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 }
 
 // LoadInstagramCreds fetches Instagram access token and user ID from SSM
@@ -125,28 +146,71 @@ func LoadInstagramCreds(ssmClient *ssm.Client) *instagram.Client {
 			userIDParam = "/ai-social-media/prod/instagram-user-id"
 		}
 
-		ssmStart := time.Now()
-		tokenResult, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
-			Name:           &tokenParam,
-			WithDecryption: aws.Bool(true),
-		})
-		if err == nil {
-			igAccessToken = *tokenResult.Parameter.Value
-			log.Debug().Str("param", tokenParam).Dur("elapsed", time.Since(ssmStart)).Msg("Instagram token loaded from SSM")
-		} else {
-			log.Warn().Err(err).Str("param", tokenParam).Msg("Instagram access token not found in SSM — publishing disabled")
+		params := LoadParameters(ssmClient, []string{tokenParam, userIDParam})
+		if v, ok := params[tokenParam]; ok {
+			igAccessToken = v
 		}
+		if v, ok := params[userIDParam]; ok {
+			igUserID = v
+		}
+	}
 
-		ssmStart = time.Now()
-		userIDResult, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
-			Name:           &userIDParam,
-			WithDecryption: aws.Bool(false),
-		})
-		if err == nil {
-			igUserID = *userIDResult.Parameter.Value
-			log.Debug().Str("param", userIDParam).Dur("elapsed", time.Since(ssmStart)).Msg("Instagram user ID loaded from SSM")
+	if igAccessToken != "" && igUserID != "" {
+		client := instagram.NewClient(igAccessToken, igUserID)
+		log.Info().Str("userId", igUserID).Msg("Instagram client initialized")
+		return client
+	}
+	log.Warn().Msg("Instagram credentials not configured — publishing disabled")
+	return nil
+}
+
+// LoadAllParams fetches Gemini + Instagram credentials in a single SSM call.
+// Use instead of separate LoadGeminiKey + LoadInstagramCreds for minimal cold-start latency.
+func LoadAllParams(ssmClient *ssm.Client) *instagram.Client {
+	needGemini := os.Getenv("GEMINI_API_KEY") == ""
+	needIG := os.Getenv("INSTAGRAM_ACCESS_TOKEN") == "" || os.Getenv("INSTAGRAM_USER_ID") == ""
+
+	geminiParam := os.Getenv("SSM_API_KEY_PARAM")
+	if geminiParam == "" {
+		geminiParam = "/ai-social-media/prod/gemini-api-key"
+	}
+	tokenParam := os.Getenv("SSM_INSTAGRAM_TOKEN_PARAM")
+	if tokenParam == "" {
+		tokenParam = "/ai-social-media/prod/instagram-access-token"
+	}
+	userIDParam := os.Getenv("SSM_INSTAGRAM_USER_ID_PARAM")
+	if userIDParam == "" {
+		userIDParam = "/ai-social-media/prod/instagram-user-id"
+	}
+
+	var params map[string]string
+	if needGemini || needIG {
+		var names []string
+		if needGemini {
+			names = append(names, geminiParam)
+		}
+		if needIG {
+			names = append(names, tokenParam, userIDParam)
+		}
+		params = LoadParameters(ssmClient, names)
+	}
+
+	if needGemini {
+		if val, ok := params[geminiParam]; ok {
+			os.Setenv("GEMINI_API_KEY", val)
 		} else {
-			log.Warn().Err(err).Str("param", userIDParam).Msg("Instagram user ID not found in SSM — publishing disabled")
+			log.Fatal().Str("param", geminiParam).Msg("Failed to read API key from SSM")
+		}
+	}
+
+	igAccessToken := os.Getenv("INSTAGRAM_ACCESS_TOKEN")
+	igUserID := os.Getenv("INSTAGRAM_USER_ID")
+	if needIG {
+		if v, ok := params[tokenParam]; ok {
+			igAccessToken = v
+		}
+		if v, ok := params[userIDParam]; ok {
+			igUserID = v
 		}
 	}
 

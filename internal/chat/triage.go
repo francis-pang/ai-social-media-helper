@@ -427,6 +427,7 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 
 	systemInstruction := config.SystemInstruction
 
+	var streamedText string
 	geminiStart := time.Now()
 	var resp *genai.GenerateContentResponse
 	var err error
@@ -449,7 +450,6 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 			MaxOutputTokens: config.MaxOutputTokens,
 		})
 	} else {
-		// Add the text prompt at the end for inline mode
 		parts = append(parts, &genai.Part{Text: prompt})
 		contents := []*genai.Content{{Role: "user", Parts: parts}}
 
@@ -457,9 +457,18 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 			Str("model", modelName).
 			Int("prompt_length", len(prompt)).
 			Int("media_part_count", len(parts)-1).
-			Msg("Starting Gemini API call for media triage")
+			Msg("Starting streaming Gemini API call for media triage")
 
-		resp, err = client.Models.GenerateContent(ctx, modelName, contents, config)
+		var accumulated strings.Builder
+		for streamResp, streamErr := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
+			if streamErr != nil {
+				err = streamErr
+				break
+			}
+			resp = streamResp
+			accumulated.WriteString(streamResp.Text())
+		}
+		streamedText = accumulated.String()
 	}
 
 	geminiElapsed := time.Since(geminiStart)
@@ -483,18 +492,20 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if resp == nil || resp.Text() == "" {
+	responseText := streamedText
+	if responseText == "" && resp != nil {
+		responseText = resp.Text()
+	}
+
+	if responseText == "" {
 		log.Warn().Dur("duration", geminiElapsed).Msg("Received empty response from Gemini")
 		return nil, fmt.Errorf("received empty response from Gemini API")
 	}
 
 	log.Debug().
-		Int("response_length", len(resp.Text())).
+		Int("response_length", len(responseText)).
 		Dur("duration", geminiElapsed).
 		Msg("Gemini API response received for media triage")
-
-	// Extract text from response
-	responseText := resp.Text()
 
 	// Parse JSON response
 	results, err := parseTriageResponse(responseText)

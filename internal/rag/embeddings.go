@@ -1,63 +1,25 @@
 package rag
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/genai"
 )
 
-type titanEmbedRequest struct {
-	InputText   string `json:"inputText"`
-	Dimensions  int    `json:"dimensions"`
-	Normalize   bool   `json:"normalize"`
-}
-
-type titanEmbedResponse struct {
-	Embedding            []float64 `json:"embedding"`
-	InputTextTokenCount  int       `json:"inputTextTokenCount"`
-}
-
-func GenerateEmbedding(ctx context.Context, client *bedrockruntime.Client, modelID string, text string) ([]float32, error) {
-	if modelID == "" {
-		modelID = "amazon.titan-embed-text-v2:0"
-	}
-
-	req := titanEmbedRequest{
-		InputText:  text,
-		Dimensions: 1024,
-		Normalize:  true,
-	}
-	body, err := json.Marshal(req)
+func GenerateEmbedding(ctx context.Context, client *genai.Client, text string) ([]float32, error) {
+	dim := int32(1024)
+	result, err := client.Models.EmbedContent(ctx, "gemini-embedding-001",
+		[]*genai.Content{genai.NewContentFromText(text, genai.RoleUser)},
+		&genai.EmbedContentConfig{OutputDimensionality: &dim},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		log.Error().Err(err).Msg("Gemini EmbedContent failed")
+		return nil, fmt.Errorf("EmbedContent: %w", err)
 	}
-
-	result, err := client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(modelID),
-		ContentType: aws.String("application/json"),
-		Body:        body,
-	})
-	if err != nil {
-		log.Error().Err(err).Str("modelId", modelID).Msg("Bedrock InvokeModel failed")
-		return nil, fmt.Errorf("InvokeModel: %w", err)
-	}
-
-	var resp titanEmbedResponse
-	if err := json.NewDecoder(bytes.NewReader(result.Body)).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	embedding := make([]float32, len(resp.Embedding))
-	for i, v := range resp.Embedding {
-		embedding[i] = float32(v)
-	}
-	return embedding, nil
+	return result.Embeddings[0].Values, nil
 }
 
 func BuildEmbeddingInput(event ContentFeedback) string {

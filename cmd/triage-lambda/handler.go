@@ -239,6 +239,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 
 	// Emit triage decisions to EventBridge — best effort
 	if ebClient != nil {
+		batcher := rag.NewBatchEmitter(ebClient)
 		for _, tr := range triageResults {
 			verdict := "discard"
 			if tr.Saveable {
@@ -252,7 +253,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 			if idx := tr.Media - 1; idx >= 0 && idx < len(s3Keys) {
 				mediaKey = s3Keys[idx]
 			}
-			feedback := rag.ContentFeedback{
+			batcher.Add(rag.ContentFeedback{
 				EventType:   rag.EventTriageFinalized,
 				SessionID:   event.SessionID,
 				JobID:       event.JobID,
@@ -264,10 +265,10 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 				UserVerdict: verdict,
 				Reason:      tr.Reason,
 				Model:       "gemini",
-			}
-			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-				log.Warn().Err(err).Str("filename", tr.Filename).Msg("failed to emit triage feedback")
-			}
+			})
+		}
+		if err := batcher.Flush(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to flush triage feedback batch")
 		}
 	}
 

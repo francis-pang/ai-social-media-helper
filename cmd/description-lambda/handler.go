@@ -95,12 +95,13 @@ func handleDescription(ctx context.Context, event DescriptionEvent) error {
 		if len(result.Hashtags) > 0 {
 			metadata["hashtags"] = strings.Join(result.Hashtags, ",")
 		}
+		batcher := rag.NewBatchEmitter(ebClient)
 		for _, key := range event.Keys {
 			mediaType := "Photo"
 			if ext := strings.ToLower(filepath.Ext(key)); filehandler.IsVideo(ext) {
 				mediaType = "Video"
 			}
-			feedback := rag.ContentFeedback{
+			batcher.Add(rag.ContentFeedback{
 				EventType:   rag.EventDescriptionFinalized,
 				SessionID:   event.SessionID,
 				JobID:       event.JobID,
@@ -113,10 +114,10 @@ func handleDescription(ctx context.Context, event DescriptionEvent) error {
 				Reason:      result.Caption,
 				Model:       "gemini",
 				Metadata:    metadata,
-			}
-			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-				log.Warn().Err(err).Str("key", key).Msg("failed to emit description feedback")
-			}
+			})
+		}
+		if err := batcher.Flush(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to flush description feedback batch")
 		}
 	}
 

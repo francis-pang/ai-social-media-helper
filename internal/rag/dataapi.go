@@ -92,6 +92,23 @@ func (c *DataAPIClient) exec(ctx context.Context, sql string, params []rdsdataty
 	return err
 }
 
+func (c *DataAPIClient) batchExec(ctx context.Context, sql string, paramSets [][]rdsdatatypes.SqlParameter) error {
+	if len(paramSets) == 0 {
+		return nil
+	}
+	if len(paramSets) == 1 {
+		return c.exec(ctx, sql, paramSets[0])
+	}
+	_, err := c.client.BatchExecuteStatement(ctx, &rdsdata.BatchExecuteStatementInput{
+		ResourceArn:   aws.String(c.clusterARN),
+		SecretArn:     aws.String(c.secretARN),
+		Database:      aws.String(c.database),
+		Sql:           aws.String(sql),
+		ParameterSets: paramSets,
+	})
+	return err
+}
+
 func (c *DataAPIClient) UpsertTriageDecision(ctx context.Context, d TriageDecision) error {
 	mediaMeta := "{}"
 	if len(d.MediaMetadata) > 0 {
@@ -250,6 +267,198 @@ func (c *DataAPIClient) UpsertPublishDecision(ctx context.Context, d PublishDeci
 	if err := c.exec(ctx, sql, params); err != nil {
 		log.Error().Err(err).Str("sessionId", d.SessionID).Str("platform", d.Platform).Msg("UpsertPublishDecision failed")
 		return fmt.Errorf("UpsertPublishDecision: %w", err)
+	}
+	return nil
+}
+
+func (c *DataAPIClient) BatchUpsertTriageDecisions(ctx context.Context, decisions []TriageDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+	sql := `INSERT INTO triage_decisions (session_id, user_id, media_key, filename, media_type, saveable, reason, media_metadata, embedding, created_at)
+		VALUES (:session_id, :user_id, :media_key, :filename, :media_type, :saveable, :reason, :media_metadata::jsonb, :embedding::vector, COALESCE(:created_at::timestamptz, NOW()))
+		ON CONFLICT (session_id, media_key) DO UPDATE SET
+			filename = EXCLUDED.filename, media_type = EXCLUDED.media_type, saveable = EXCLUDED.saveable,
+			reason = EXCLUDED.reason, media_metadata = EXCLUDED.media_metadata, embedding = EXCLUDED.embedding, created_at = EXCLUDED.created_at`
+	var paramSets [][]rdsdatatypes.SqlParameter
+	for _, d := range decisions {
+		mediaMeta := "{}"
+		if len(d.MediaMetadata) > 0 {
+			b, _ := json.Marshal(d.MediaMetadata)
+			mediaMeta = string(b)
+		}
+		embStr := formatVector(d.Embedding)
+		paramSets = append(paramSets, []rdsdatatypes.SqlParameter{
+			{Name: aws.String("session_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.SessionID}},
+			{Name: aws.String("user_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.UserID}},
+			{Name: aws.String("media_key"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.MediaKey}},
+			{Name: aws.String("filename"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.Filename}},
+			{Name: aws.String("media_type"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.MediaType}},
+			{Name: aws.String("saveable"), Value: &rdsdatatypes.FieldMemberBooleanValue{Value: d.Saveable}},
+			{Name: aws.String("reason"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.Reason}},
+			{Name: aws.String("media_metadata"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaMeta}, TypeHint: rdsdatatypes.TypeHintJson},
+			{Name: aws.String("embedding"), Value: &rdsdatatypes.FieldMemberStringValue{Value: embStr}},
+			{Name: aws.String("created_at"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CreatedAt}},
+		})
+	}
+	if err := c.batchExec(ctx, sql, paramSets); err != nil {
+		log.Error().Err(err).Int("count", len(decisions)).Msg("BatchUpsertTriageDecisions failed")
+		return fmt.Errorf("BatchUpsertTriageDecisions: %w", err)
+	}
+	return nil
+}
+
+func (c *DataAPIClient) BatchUpsertSelectionDecisions(ctx context.Context, decisions []SelectionDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+	sql := `INSERT INTO selection_decisions (session_id, user_id, media_key, filename, media_type, selected, exclusion_category, exclusion_reason, scene_group, media_metadata, embedding, created_at)
+		VALUES (:session_id, :user_id, :media_key, :filename, :media_type, :selected, :exclusion_category, :exclusion_reason, :scene_group, :media_metadata::jsonb, :embedding::vector, COALESCE(:created_at::timestamptz, NOW()))
+		ON CONFLICT (session_id, media_key) DO UPDATE SET
+			filename = EXCLUDED.filename, media_type = EXCLUDED.media_type, selected = EXCLUDED.selected,
+			exclusion_category = EXCLUDED.exclusion_category, exclusion_reason = EXCLUDED.exclusion_reason,
+			scene_group = EXCLUDED.scene_group, media_metadata = EXCLUDED.media_metadata, embedding = EXCLUDED.embedding, created_at = EXCLUDED.created_at`
+	var paramSets [][]rdsdatatypes.SqlParameter
+	for _, d := range decisions {
+		mediaMeta := "{}"
+		if len(d.MediaMetadata) > 0 {
+			b, _ := json.Marshal(d.MediaMetadata)
+			mediaMeta = string(b)
+		}
+		embStr := formatVector(d.Embedding)
+		paramSets = append(paramSets, []rdsdatatypes.SqlParameter{
+			{Name: aws.String("session_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.SessionID}},
+			{Name: aws.String("user_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.UserID}},
+			{Name: aws.String("media_key"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.MediaKey}},
+			{Name: aws.String("filename"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.Filename}},
+			{Name: aws.String("media_type"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.MediaType}},
+			{Name: aws.String("selected"), Value: &rdsdatatypes.FieldMemberBooleanValue{Value: d.Selected}},
+			{Name: aws.String("exclusion_category"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.ExclusionCategory}},
+			{Name: aws.String("exclusion_reason"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.ExclusionReason}},
+			{Name: aws.String("scene_group"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.SceneGroup}},
+			{Name: aws.String("media_metadata"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaMeta}, TypeHint: rdsdatatypes.TypeHintJson},
+			{Name: aws.String("embedding"), Value: &rdsdatatypes.FieldMemberStringValue{Value: embStr}},
+			{Name: aws.String("created_at"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CreatedAt}},
+		})
+	}
+	if err := c.batchExec(ctx, sql, paramSets); err != nil {
+		log.Error().Err(err).Int("count", len(decisions)).Msg("BatchUpsertSelectionDecisions failed")
+		return fmt.Errorf("BatchUpsertSelectionDecisions: %w", err)
+	}
+	return nil
+}
+
+func (c *DataAPIClient) BatchUpsertOverrideDecisions(ctx context.Context, decisions []OverrideDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+	sql := `INSERT INTO override_decisions (session_id, user_id, media_key, filename, media_type, action, ai_verdict, ai_reason, is_finalized, media_metadata, embedding, created_at)
+		VALUES (:session_id, :user_id, :media_key, :filename, :media_type, :action, :ai_verdict, :ai_reason, :is_finalized, :media_metadata::jsonb, :embedding::vector, COALESCE(:created_at::timestamptz, NOW()))`
+	var paramSets [][]rdsdatatypes.SqlParameter
+	for _, d := range decisions {
+		mediaMeta := "{}"
+		if len(d.MediaMetadata) > 0 {
+			b, _ := json.Marshal(d.MediaMetadata)
+			mediaMeta = string(b)
+		}
+		embStr := formatVector(d.Embedding)
+		paramSets = append(paramSets, []rdsdatatypes.SqlParameter{
+			{Name: aws.String("session_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.SessionID}},
+			{Name: aws.String("user_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.UserID}},
+			{Name: aws.String("media_key"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.MediaKey}},
+			{Name: aws.String("filename"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.Filename}},
+			{Name: aws.String("media_type"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.MediaType}},
+			{Name: aws.String("action"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.Action}},
+			{Name: aws.String("ai_verdict"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.AIVerdict}},
+			{Name: aws.String("ai_reason"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.AIReason}},
+			{Name: aws.String("is_finalized"), Value: &rdsdatatypes.FieldMemberBooleanValue{Value: d.IsFinalized}},
+			{Name: aws.String("media_metadata"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaMeta}, TypeHint: rdsdatatypes.TypeHintJson},
+			{Name: aws.String("embedding"), Value: &rdsdatatypes.FieldMemberStringValue{Value: embStr}},
+			{Name: aws.String("created_at"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CreatedAt}},
+		})
+	}
+	if err := c.batchExec(ctx, sql, paramSets); err != nil {
+		log.Error().Err(err).Int("count", len(decisions)).Msg("BatchUpsertOverrideDecisions failed")
+		return fmt.Errorf("BatchUpsertOverrideDecisions: %w", err)
+	}
+	return nil
+}
+
+func (c *DataAPIClient) BatchUpsertCaptionDecisions(ctx context.Context, decisions []CaptionDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+	sql := `INSERT INTO caption_decisions (session_id, user_id, caption_text, hashtags, location_tag, media_keys, post_group_name, media_metadata, embedding, created_at)
+		VALUES (:session_id, :user_id, :caption_text, :hashtags::text[], :location_tag, :media_keys::text[], :post_group_name, :media_metadata::jsonb, :embedding::vector, COALESCE(:created_at::timestamptz, NOW()))
+		ON CONFLICT (session_id, post_group_name) DO UPDATE SET
+			caption_text = EXCLUDED.caption_text, hashtags = EXCLUDED.hashtags, location_tag = EXCLUDED.location_tag,
+			media_keys = EXCLUDED.media_keys, media_metadata = EXCLUDED.media_metadata, embedding = EXCLUDED.embedding, created_at = EXCLUDED.created_at`
+	var paramSets [][]rdsdatatypes.SqlParameter
+	for _, d := range decisions {
+		mediaMeta := "{}"
+		if len(d.MediaMetadata) > 0 {
+			b, _ := json.Marshal(d.MediaMetadata)
+			mediaMeta = string(b)
+		}
+		embStr := formatVector(d.Embedding)
+		hashtagsStr := formatTextArray(d.Hashtags)
+		mediaKeysStr := formatTextArray(d.MediaKeys)
+		paramSets = append(paramSets, []rdsdatatypes.SqlParameter{
+			{Name: aws.String("session_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.SessionID}},
+			{Name: aws.String("user_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.UserID}},
+			{Name: aws.String("caption_text"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CaptionText}},
+			{Name: aws.String("hashtags"), Value: &rdsdatatypes.FieldMemberStringValue{Value: hashtagsStr}},
+			{Name: aws.String("location_tag"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.LocationTag}},
+			{Name: aws.String("media_keys"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaKeysStr}},
+			{Name: aws.String("post_group_name"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.PostGroupName}},
+			{Name: aws.String("media_metadata"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaMeta}, TypeHint: rdsdatatypes.TypeHintJson},
+			{Name: aws.String("embedding"), Value: &rdsdatatypes.FieldMemberStringValue{Value: embStr}},
+			{Name: aws.String("created_at"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CreatedAt}},
+		})
+	}
+	if err := c.batchExec(ctx, sql, paramSets); err != nil {
+		log.Error().Err(err).Int("count", len(decisions)).Msg("BatchUpsertCaptionDecisions failed")
+		return fmt.Errorf("BatchUpsertCaptionDecisions: %w", err)
+	}
+	return nil
+}
+
+func (c *DataAPIClient) BatchUpsertPublishDecisions(ctx context.Context, decisions []PublishDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+	sql := `INSERT INTO publish_decisions (session_id, user_id, platform, post_group_name, caption_text, hashtags, location_tag, media_keys, media_metadata, embedding, created_at)
+		VALUES (:session_id, :user_id, :platform, :post_group_name, :caption_text, :hashtags::text[], :location_tag, :media_keys::text[], :media_metadata::jsonb, :embedding::vector, COALESCE(:created_at::timestamptz, NOW()))
+		ON CONFLICT (session_id, post_group_name, platform) DO UPDATE SET
+			caption_text = EXCLUDED.caption_text, hashtags = EXCLUDED.hashtags, location_tag = EXCLUDED.location_tag,
+			media_keys = EXCLUDED.media_keys, media_metadata = EXCLUDED.media_metadata, embedding = EXCLUDED.embedding, created_at = EXCLUDED.created_at`
+	var paramSets [][]rdsdatatypes.SqlParameter
+	for _, d := range decisions {
+		mediaMeta := "{}"
+		if len(d.MediaMetadata) > 0 {
+			b, _ := json.Marshal(d.MediaMetadata)
+			mediaMeta = string(b)
+		}
+		embStr := formatVector(d.Embedding)
+		hashtagsStr := formatTextArray(d.Hashtags)
+		mediaKeysStr := formatTextArray(d.MediaKeys)
+		paramSets = append(paramSets, []rdsdatatypes.SqlParameter{
+			{Name: aws.String("session_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.SessionID}},
+			{Name: aws.String("user_id"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.UserID}},
+			{Name: aws.String("platform"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.Platform}},
+			{Name: aws.String("post_group_name"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.PostGroupName}},
+			{Name: aws.String("caption_text"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CaptionText}},
+			{Name: aws.String("hashtags"), Value: &rdsdatatypes.FieldMemberStringValue{Value: hashtagsStr}},
+			{Name: aws.String("location_tag"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.LocationTag}},
+			{Name: aws.String("media_keys"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaKeysStr}},
+			{Name: aws.String("media_metadata"), Value: &rdsdatatypes.FieldMemberStringValue{Value: mediaMeta}, TypeHint: rdsdatatypes.TypeHintJson},
+			{Name: aws.String("embedding"), Value: &rdsdatatypes.FieldMemberStringValue{Value: embStr}},
+			{Name: aws.String("created_at"), Value: &rdsdatatypes.FieldMemberStringValue{Value: d.CreatedAt}},
+		})
+	}
+	if err := c.batchExec(ctx, sql, paramSets); err != nil {
+		log.Error().Err(err).Int("count", len(decisions)).Msg("BatchUpsertPublishDecisions failed")
+		return fmt.Errorf("BatchUpsertPublishDecisions: %w", err)
 	}
 	return nil
 }

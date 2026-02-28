@@ -289,6 +289,7 @@ func handlePublishFinalize(ctx context.Context, event PublishEvent) error {
 			"instagramPostId": instagramPostID,
 			"caption":         event.Caption,
 		}
+		batcher := rag.NewBatchEmitter(ebClient)
 		for _, key := range event.Keys {
 			feedback := rag.ContentFeedback{
 				EventType:   rag.EventPublishFinalized,
@@ -307,9 +308,10 @@ func handlePublishFinalize(ctx context.Context, event PublishEvent) error {
 			if isVideoKey(key) {
 				feedback.MediaType = "Video"
 			}
-			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-				log.Warn().Err(err).Str("key", key).Msg("failed to emit publish feedback")
-			}
+			batcher.Add(feedback)
+		}
+		if err := batcher.Flush(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to flush publish feedback batch")
 		}
 	}
 

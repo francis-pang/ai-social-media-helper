@@ -251,10 +251,11 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 
 	// Emit selection decisions to EventBridge — best effort
 	if ebClient != nil {
+		batcher := rag.NewBatchEmitter(ebClient)
 		for _, sel := range selResult.Selected {
 			idx := sel.Media - 1
 			if idx >= 0 && idx < len(s3Keys) {
-				feedback := rag.ContentFeedback{
+				batcher.Add(rag.ContentFeedback{
 					EventType:   rag.EventSelectionFinalized,
 					SessionID:   event.SessionID,
 					JobID:       event.JobID,
@@ -266,10 +267,7 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 					UserVerdict: "selected",
 					Reason:      sel.Justification,
 					Model:       "gemini",
-				}
-				if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-					logger.Warn().Err(err).Str("filename", sel.Filename).Msg("failed to emit selection feedback")
-				}
+				})
 			}
 		}
 		for _, exc := range selResult.Excluded {
@@ -291,10 +289,11 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 				if ext := strings.ToLower(filepath.Ext(exc.Filename)); filehandler.IsVideo(ext) {
 					feedback.MediaType = "Video"
 				}
-				if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-					logger.Warn().Err(err).Str("filename", exc.Filename).Msg("failed to emit exclusion feedback")
-				}
+				batcher.Add(feedback)
 			}
+		}
+		if err := batcher.Flush(ctx); err != nil {
+			logger.Warn().Err(err).Msg("failed to flush selection feedback batch")
 		}
 	}
 

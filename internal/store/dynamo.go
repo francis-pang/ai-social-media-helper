@@ -236,15 +236,24 @@ func (s *DynamoStore) batchDeleteKeys(ctx context.Context, keys []map[string]typ
 			return fmt.Errorf("BatchWriteItem delete (%d items): %w", len(requests), err)
 		}
 
-		// Count unprocessed items for this batch
-		if unprocessed, ok := result.UnprocessedItems[s.tableName]; ok {
-			unprocessedCount := len(unprocessed)
-			totalUnprocessed += unprocessedCount
+		unprocessed := result.UnprocessedItems[s.tableName]
+		for retries := 0; len(unprocessed) > 0 && retries < 5; retries++ {
+			totalUnprocessed += len(unprocessed)
+			backoff := time.Duration(1<<retries) * 100 * time.Millisecond
+			log.Debug().Int("unprocessed", len(unprocessed)).Int("retry", retries+1).Dur("backoff", backoff).Msg("batchDeleteKeys: retrying unprocessed items")
+			time.Sleep(backoff)
+			retryResult, retryErr := s.client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+				RequestItems: map[string][]types.WriteRequest{s.tableName: unprocessed},
+			})
+			if retryErr != nil {
+				log.Warn().Err(retryErr).Int("unprocessed", len(unprocessed)).Msg("batchDeleteKeys: retry failed")
+				break
+			}
+			unprocessed = retryResult.UnprocessedItems[s.tableName]
 		}
-
-		// Note: UnprocessedItems are not retried here. With PAY_PER_REQUEST
-		// billing and low throughput, unprocessed items are extremely rare.
-		// The 24-hour TTL provides a safety net for any missed deletes.
+		if len(unprocessed) > 0 {
+			log.Warn().Int("remaining", len(unprocessed)).Msg("batchDeleteKeys: unprocessed items remain after retries")
+		}
 	}
 	log.Debug().Int("keyCount", len(keys)).Int("unprocessedCount", totalUnprocessed).Msg("batchDeleteKeys: batch delete completed")
 	return nil

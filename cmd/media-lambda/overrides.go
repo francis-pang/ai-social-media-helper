@@ -143,8 +143,9 @@ func handleOverrideFinalize(w http.ResponseWriter, r *http.Request, sessionID st
 	ctx := r.Context()
 
 	if ebClient != nil {
+		batcher := rag.NewBatchEmitter(ebClient)
 		for _, item := range req.Added {
-			feedback := rag.ContentFeedback{
+			batcher.Add(rag.ContentFeedback{
 				EventType:   rag.EventOverridesFinalized,
 				SessionID:   sessionID,
 				Timestamp:   time.Now().UTC().Format(time.RFC3339),
@@ -159,13 +160,10 @@ func handleOverrideFinalize(w http.ResponseWriter, r *http.Request, sessionID st
 					"action":    "added_back",
 					"finalized": "true",
 				},
-			}
-			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-				log.Warn().Err(err).Str("sessionId", sessionID).Str("mediaKey", item.MediaKey).Msg("Failed to emit override finalize (added) to EventBridge")
-			}
+			})
 		}
 		for _, item := range req.Removed {
-			feedback := rag.ContentFeedback{
+			batcher.Add(rag.ContentFeedback{
 				EventType:   rag.EventOverridesFinalized,
 				SessionID:   sessionID,
 				Timestamp:   time.Now().UTC().Format(time.RFC3339),
@@ -180,10 +178,10 @@ func handleOverrideFinalize(w http.ResponseWriter, r *http.Request, sessionID st
 					"action":    "removed",
 					"finalized": "true",
 				},
-			}
-			if err := rag.EmitContentFeedback(ctx, ebClient, feedback); err != nil {
-				log.Warn().Err(err).Str("sessionId", sessionID).Str("mediaKey", item.MediaKey).Msg("Failed to emit override finalize (removed) to EventBridge")
-			}
+			})
+		}
+		if err := batcher.Flush(ctx); err != nil {
+			log.Warn().Err(err).Str("sessionId", sessionID).Msg("failed to flush override finalize batch")
 		}
 	}
 
