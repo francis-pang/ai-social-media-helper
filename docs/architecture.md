@@ -24,13 +24,15 @@ graph TD
         Auth["auth\n(API key, Cognito)"]
         Chat["chat\n(Gemini API: selection,\ntriage, enhancement)"]
         FileHandler["filehandler\n(EXIF, thumbnails,\ncompression)"]
+        HttpUtil["httputil\n(shared HTTP helpers)"]
         LambdaBoot["lambdaboot\n(shared init, DDR-053)"]
         Logging["logging\n(zerolog)"]
         Assets["assets\n(prompts, reference photos)"]
-        Store["store\n(DynamoDB sessions)"]
+        Store["store\n(DynamoDB sessions,\ncomposable interfaces)"]
         Jobs["jobs\n(job routing)"]
         S3Util["s3util\n(S3 download, upload,\nthumbnail helpers)"]
         JobUtil["jobutil\n(error handling)"]
+        RAG["rag\n(RAG query helpers,\ndecision memory)"]
         Instagram["instagram\n(publishing client,\nOAuth token exchange)"]
         Webhook["webhook\n(Meta event handler)"]
     end
@@ -243,6 +245,49 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
 
 Each processing Lambda is split into multiple files (e.g. `main.go`, `types.go`, `handler.go`); triage, enhance, description, and media-process also have domain-specific modules (gemini, feedback, media_items, processor, store_helpers).
+
+### Shared Internal Packages
+
+The `internal/` directory contains 18 shared packages used across Lambda binaries and CLI tools:
+
+| Package | Purpose | Key Patterns |
+|---------|---------|-------------|
+| `assets` | Embedded prompts and reference photos | `go:embed` directives |
+| `auth` | API key validation, Cognito JWT | Typed error classification |
+| `chat` | Gemini API integration (selection, triage, enhancement, description) | `UploadFileAndWait`, `BuildMediaParts`, `GenerateWithOptionalCache`, `ParseResponse[T]` |
+| `cli` | CLI utilities for `media-select` and `media-triage` | Cobra command builders |
+| `filehandler` | EXIF extraction, thumbnails, video compression | `runFFmpeg`/`runFFprobe` helpers, unified `ScanDirectoryWithOptions` |
+| `httputil` | Shared HTTP response/error helpers used by `media-lambda` and `media-web` | `RespondJSON`, `Error` |
+| `instagram` | Instagram Graph API client, OAuth token exchange | Container publishing, status polling |
+| `jobs` | Job routing, route parsing | `ParseRoute` used by all HTTP handlers |
+| `jobutil` | Error handling utilities for job processing | Retry classification |
+| `jsonutil` | JSON parsing utilities | `ParseJSON[T]` generic parser |
+| `lambdaboot` | Shared Lambda initialization, cold-start detection | `ColdStartLog`, `InitSSMOnly`, AWS client creation |
+| `logging` | zerolog initialization, Lambda context enrichment | `WithLambdaContext`, `WithJob` |
+| `metrics` | CloudWatch EMF metrics | Embedded metric format for Lambda |
+| `rag` | RAG query invocation, decision memory types | `InvokeRAGQuery` (shared across 3 Lambdas) |
+| `s3util` | S3 download, upload, thumbnail helpers | `DownloadToFile` (shared across 2 Lambdas) |
+| `store` | DynamoDB session storage with composable interfaces | Generic `putJob[T]`/`getJob[T]`, interface segregation |
+| `webhook` | Meta webhook event handling | Verification + event dispatch |
+
+#### Store Interface Segregation
+
+The `SessionStore` interface composes domain-specific sub-interfaces, allowing consumers to depend only on the methods they need:
+
+```go
+type SessionStore interface {
+    SessionCoreStore
+    TriageStore
+    SelectionStore
+    EnhancementStore
+    DownloadStore
+    DescriptionStore
+    PublishStore
+    PostGroupStore
+}
+```
+
+A single `DynamoStore` implementation satisfies all interfaces. Domain-specific Lambdas accept only their required sub-interface (e.g., `TriageStore` for the triage Lambda).
 
 ### Media Selection Pipeline
 
@@ -510,4 +555,4 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 
 ---
 
-**Last Updated**: 2026-02-19
+**Last Updated**: 2026-02-28

@@ -38,6 +38,14 @@
 | [offline-latency.md](./offline-latency.md) | Offline mode and latency considerations |
 | [testing.md](./testing.md) | Testing strategy and coverage goals |
 
+## Deployment and Operations
+
+| Document | Description |
+|----------|-------------|
+| [DEPLOYMENT_STRATEGY.md](./DEPLOYMENT_STRATEGY.md) | Deployment workflow — pipelines, CDK, pre-push hooks |
+| [operations.md](./operations.md) | Logging, observability, and error handling |
+| [ui-guidelines.md](./ui-guidelines.md) | Desktop 1440p typography and layout standards |
+
 ## Design Decisions
 
 | Document | Description |
@@ -53,4 +61,4 @@
 
 ---
 
-**Last Updated**: 2026-02-20
+**Last Updated**: 2026-02-28

@@ -105,7 +105,7 @@ All design documentation lives in [docs/](./docs/index.md):
 - **Architecture** — [architecture.md](./docs/architecture.md) — system components, local + cloud deployment
 - **Workflows** — [media-triage.md](./docs/media-triage.md), [media-selection.md](./docs/media-selection.md)
 - **Media processing** — [image-processing.md](./docs/image-processing.md), [video-processing.md](./docs/video-processing.md)
-- **Design decisions** — [53 DDRs](./docs/design-decisions/) documenting every architectural choice
+- **Design decisions** — [66 DDRs](./docs/design-decisions/) documenting every architectural choice
 
 ## Roadmap
 
@@ -121,9 +121,9 @@ All design documentation lives in [docs/](./docs/index.md):
 - [x] Step Functions Lambda entrypoints (Thumbnail, Selection, Enhancement, Video)
 - [x] Step Functions polling for triage + publish (DDR-052: eliminates idle Lambda compute)
 - [x] Granular Lambda split: Worker → 4 domain-specific Lambdas + shared bootstrap (DDR-053)
-- [ ] Media enhancement (Steps 4-5): Gemini 3 Pro Image + Imagen 3
-- [ ] Post grouping and publishing (Steps 6-7, 9)
-- [ ] DynamoDB session state store (handler migration)
+- [x] Gemini context caching for selection, triage, and description (DDR-065)
+- [x] RAG decision memory: feedback-driven personalization (DDR-066)
+- [ ] SOLID/DRY refactoring: shared handler helpers, store generics, chat utilities, interface segregation
 - [ ] Custom domain with ACM certificate
 
 ## Testing

@@ -180,14 +180,26 @@ func init() {
 
 #### Cold start detection (every Lambda)
 
-```go
-var coldStart = true
+Cold start detection is consolidated in `internal/lambdaboot` to avoid 12+ copy-pasted implementations:
 
-func handler(ctx context.Context, event Event) error {
-    if coldStart {
-        coldStart = false
-        log.Info().Str("function", "worker-lambda").Msg("Cold start — first invocation")
+```go
+// internal/lambdaboot/coldstart.go
+var coldStart atomic.Bool
+
+func init() { coldStart.Store(true) }
+
+func ColdStartLog(functionName string) {
+    if coldStart.CompareAndSwap(true, false) {
+        log.Info().Str("function", functionName).Msg("Cold start — first invocation")
     }
+}
+```
+
+Usage in any Lambda handler:
+
+```go
+func handler(ctx context.Context, event Event) error {
+    lambdaboot.ColdStartLog("triage-lambda")
     // ...
 }
 ```
@@ -206,19 +218,40 @@ log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Ge
 
 #### HTTP handlers (API Lambda)
 
+HTTP handlers use shared helper functions from `cmd/media-lambda/handler_helpers.go` to eliminate repeated validation boilerplate. Each helper returns `false` and writes the HTTP error response if validation fails, enabling early-return guard clauses:
+
 ```go
 func handleTriageStart(w http.ResponseWriter, r *http.Request) {
-    log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleTriageStart")
-    // ... validation ...
-    if err != nil {
-        log.Warn().Str("param", "sessionId").Msg("Invalid session ID format")
-        httpError(w, http.StatusBadRequest, "invalid session ID")
+    if !requireMethod(w, r, http.MethodPost) {
         return
     }
+
+    var req triageStartRequest
+    if !decodeBody(w, r, &req) {
+        return
+    }
+    if !requireSessionID(w, req.SessionID) {
+        return
+    }
+    if !requireStore(w) {
+        return
+    }
+
     // ... dispatch ...
     log.Info().Str("jobId", jobID).Str("sessionId", req.SessionID).Msg("Triage job dispatched")
 }
 ```
+
+| Helper | Replaces | Occurrences Consolidated |
+|--------|----------|-------------------------|
+| `requireMethod` | Inline `r.Method != http.MethodPost` check | 20+ |
+| `decodeBody` | Inline `json.NewDecoder` + error handling | 15+ |
+| `requireSessionID` | Empty check + `validateSessionID()` + logging | 10+ |
+| `requireStore` | `sessionStore == nil` check | 10+ |
+| `requireQueryParam` | `r.URL.Query().Get()` + empty check | 6+ |
+| `validateKeysForSession` | S3 key validation loop + session prefix check | 3+ |
+
+Both `cmd/media-lambda/` and `cmd/media-web/` use `internal/httputil` for shared response helpers (`RespondJSON`, `Error`).
 
 #### Worker Lambda job handlers
 
@@ -1019,5 +1052,5 @@ This section documents key design decisions made during implementation.
 
 ---
 
-**Last Updated**: 2026-02-09  
-**Version**: 2.0.0
+**Last Updated**: 2026-02-28  
+**Version**: 2.1.0

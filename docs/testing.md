@@ -131,6 +131,8 @@ go test -v ./...
 - Unsupported file types
 - Missing files
 - Permission errors
+- `ScanDirectoryWithOptions` with different filter functions (images-only vs all supported)
+- `runFFmpeg`/`runFFprobe` helper error handling
 
 ### 3. API Client Tests
 - Successful API calls
@@ -149,6 +151,40 @@ go test -v ./...
 - Argument validation
 - Output formatting
 - Error display
+
+### 6. Shared Utility Tests
+
+#### Store Generics (`internal/store/`)
+- `putJob[T]` and `getJob[T]` with each job type (triage, selection, enhancement, download, description, publish)
+- Round-trip: put then get returns identical data
+- `getJob` returns `nil` for non-existent items
+- `JobIdentifiable` interface compliance for all job types
+
+#### HTTP Handler Helpers (`cmd/media-lambda/handler_helpers.go`)
+- `requireMethod` returns 405 for wrong method
+- `decodeBody` returns 400 for malformed JSON
+- `requireSessionID` rejects empty and invalid formats
+- `requireStore` returns 503 when store is nil
+- `validateKeysForSession` rejects keys outside session prefix
+
+#### Chat Utilities (`internal/chat/`)
+- `UploadFileAndWait` timeout and polling behavior
+- `BuildMediaParts` with mixed image/video input
+- `ParseResponse[T]` with valid and malformed JSON
+- `GenerateWithOptionalCache` fallback when cache is unavailable
+- `AppendReferencePhotoParts` produces correct part count
+
+#### Shared httputil (`internal/httputil/`)
+- `RespondJSON` sets correct content-type and status
+- `Error` logs internal details but returns sanitized client message
+
+#### RAG Query (`internal/rag/`)
+- `InvokeRAGQuery` marshals event and parses response
+- Error handling for Lambda invocation failures
+
+#### Lambda Boot (`internal/lambdaboot/`)
+- `ColdStartLog` fires exactly once (atomic flag behavior)
+- `InitSSMOnly` creates expected client set
 
 ---
 
@@ -213,5 +249,5 @@ jobs:
 
 ---
 
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-02-28
 
