@@ -28,8 +28,8 @@ FROM public.ecr.aws/lambda/provided:al2023
 # ffmpeg cached in ECR to avoid Docker Hub rate limits (DDR-041)
 # Pass --build-arg ECR_ACCOUNT_ID=$(aws sts get-caller-identity --query Account -o text) for deploy
 ARG ECR_ACCOUNT_ID=123456789012
-COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffmpeg /usr/local/bin/
-COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:7.1 /ffprobe /usr/local/bin/
+COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:8.0.1 /ffmpeg /usr/local/bin/
+COPY --from=${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/static-ffmpeg-cache:8.0.1 /ffprobe /usr/local/bin/
 
 # Copy Go binary (changes most often — last layer for optimal caching)
 COPY --from=builder /handler /var/runtime/bootstrap

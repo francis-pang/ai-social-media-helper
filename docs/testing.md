@@ -236,7 +236,7 @@ jobs:
       
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
       
       - name: Run tests
         run: go test -v -coverprofile=coverage.out ./...

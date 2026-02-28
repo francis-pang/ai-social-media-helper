@@ -80,6 +80,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-065](./DDR-065-gemini-context-caching-and-batch-api.md) | 2026-02-19 | Gemini Context Caching and Batch API Integration | Accepted |
 | [DDR-066](./DDR-066-rag-decision-memory.md) | 2026-02-20 | RAG Decision Memory — Feedback-Driven Personalization | Implemented |
 | [DDR-067](./DDR-067-triage-processing-optimization.md) | 2026-02-21 | Triage Processing Optimization | Implemented |
+| [DDR-068](./DDR-068-rag-weekly-batch-staging.md) | 2026-02-28 | RAG Daily Batch Architecture — DynamoDB Staging | Implemented |
 
 ---
 
@@ -94,4 +95,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-21 (DDR-067)
+**Last Updated**: 2026-02-28 (DDR-068)

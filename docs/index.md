@@ -50,7 +50,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [design-decisions/](./design-decisions/) | 66 DDRs documenting every architectural choice |
+| [design-decisions/](./design-decisions/) | 69 DDRs documenting every architectural choice |
 | [design-decisions/index.md](./design-decisions/index.md) | Chronological index of all decisions |
 
 ## External References

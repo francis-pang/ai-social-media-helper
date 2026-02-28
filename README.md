@@ -105,7 +105,7 @@ All design documentation lives in [docs/](./docs/index.md):
 - **Architecture** — [architecture.md](./docs/architecture.md) — system components, local + cloud deployment
 - **Workflows** — [media-triage.md](./docs/media-triage.md), [media-selection.md](./docs/media-selection.md)
 - **Media processing** — [image-processing.md](./docs/image-processing.md), [video-processing.md](./docs/video-processing.md)
-- **Design decisions** — [66 DDRs](./docs/design-decisions/) documenting every architectural choice
+- **Design decisions** — [69 DDRs](./docs/design-decisions/) documenting every architectural choice
 
 ## Roadmap
 
@@ -123,6 +123,7 @@ All design documentation lives in [docs/](./docs/index.md):
 - [x] Granular Lambda split: Worker → 4 domain-specific Lambdas + shared bootstrap (DDR-053)
 - [x] Gemini context caching for selection, triage, and description (DDR-065)
 - [x] RAG decision memory: feedback-driven personalization (DDR-066)
+- [x] RAG daily batch architecture: DynamoDB staging, daily profile rebuild, 3 Lambdas (DDR-068)
 - [ ] SOLID/DRY refactoring: shared handler helpers, store generics, chat utilities, interface segregation
 - [ ] Custom domain with ACM certificate
 
@@ -135,4 +136,4 @@ go test -cover ./...
 
 ## License
 
-[To be determined]
+MIT
