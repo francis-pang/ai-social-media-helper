@@ -211,24 +211,171 @@ func stopAurora(ctx context.Context) {
 // Phase 3: Batch embed + insert to Aurora
 // ---------------------------------------------------------------------------
 
-func ingestStagingItems(ctx context.Context, items []stagingItem, dataAPI *rag.DataAPIClient) []stagingItem {
-	var processed []stagingItem
+type preparedItem struct {
+	staging   stagingItem
+	feedback  rag.ContentFeedback
+	embedding []float32
+	createdAt string
+}
 
+func ingestStagingItems(ctx context.Context, items []stagingItem, dataAPI *rag.DataAPIClient) []stagingItem {
+	var prepared []preparedItem
 	for _, item := range items {
-		var feedback rag.ContentFeedback
-		if err := json.Unmarshal([]byte(item.FeedbackJSON), &feedback); err != nil {
+		var fb rag.ContentFeedback
+		if err := json.Unmarshal([]byte(item.FeedbackJSON), &fb); err != nil {
 			log.Error().Err(err).Str("sk", item.SK).Msg("failed to parse feedback JSON")
 			continue
 		}
-
-		if err := embedAndUpsert(ctx, dataAPI, feedback); err != nil {
-			log.Error().Err(err).Str("sk", item.SK).Str("eventType", feedback.EventType).Msg("embed+upsert failed")
+		text := rag.BuildEmbeddingInput(fb)
+		emb, err := rag.GenerateEmbedding(ctx, genaiClient, text)
+		if err != nil {
+			log.Error().Err(err).Str("sk", item.SK).Msg("embedding failed")
 			continue
 		}
-
-		processed = append(processed, item)
+		createdAt := fb.Timestamp
+		if createdAt == "" {
+			createdAt = time.Now().UTC().Format(time.RFC3339)
+		}
+		prepared = append(prepared, preparedItem{staging: item, feedback: fb, embedding: emb, createdAt: createdAt})
 	}
 
+	if len(prepared) == 0 {
+		return nil
+	}
+
+	if err := batchUpsertAll(ctx, dataAPI, prepared); err != nil {
+		log.Error().Err(err).Msg("batch upsert failed, falling back to per-item")
+		return fallbackPerItem(ctx, dataAPI, prepared)
+	}
+
+	result := make([]stagingItem, len(prepared))
+	for i, p := range prepared {
+		result[i] = p.staging
+	}
+	return result
+}
+
+func batchUpsertAll(ctx context.Context, dataAPI *rag.DataAPIClient, items []preparedItem) error {
+	var triages    []rag.TriageDecision
+	var selections []rag.SelectionDecision
+	var overrides  []rag.OverrideDecision
+	var captions   []rag.CaptionDecision
+	var publishes  []rag.PublishDecision
+
+	for _, p := range items {
+		fb := p.feedback
+		switch fb.EventType {
+		case rag.EventTriageFinalized:
+			saveable := strings.EqualFold(fb.UserVerdict, "keep") || strings.EqualFold(fb.UserVerdict, "save")
+			if fb.UserVerdict == "" {
+				saveable = strings.EqualFold(fb.AIVerdict, "keep") || strings.EqualFold(fb.AIVerdict, "save")
+			}
+			triages = append(triages, rag.TriageDecision{
+				SessionID: fb.SessionID, UserID: fb.UserID, MediaKey: fb.MediaKey,
+				Filename: getMeta(fb.Metadata, "filename"), MediaType: fb.MediaType,
+				Saveable: saveable, Reason: fb.Reason, MediaMetadata: fb.Metadata,
+				Embedding: p.embedding, CreatedAt: p.createdAt,
+			})
+		case rag.EventSelectionFinalized:
+			selected := strings.EqualFold(fb.UserVerdict, "keep") || strings.EqualFold(fb.UserVerdict, "select")
+			if fb.UserVerdict == "" {
+				selected = strings.EqualFold(fb.AIVerdict, "keep") || strings.EqualFold(fb.AIVerdict, "select")
+			}
+			selections = append(selections, rag.SelectionDecision{
+				SessionID: fb.SessionID, UserID: fb.UserID, MediaKey: fb.MediaKey,
+				Filename: getMeta(fb.Metadata, "filename"), MediaType: fb.MediaType,
+				Selected: selected, ExclusionCategory: getMeta(fb.Metadata, "exclusionCategory"),
+				ExclusionReason: getMeta(fb.Metadata, "exclusionReason"),
+				SceneGroup: getMeta(fb.Metadata, "sceneGroup"), MediaMetadata: fb.Metadata,
+				Embedding: p.embedding, CreatedAt: p.createdAt,
+			})
+		case rag.EventOverrideAction, rag.EventOverridesFinalized:
+			action := fb.UserVerdict
+			if action == "" {
+				action = getMeta(fb.Metadata, "action")
+			}
+			overrides = append(overrides, rag.OverrideDecision{
+				SessionID: fb.SessionID, UserID: fb.UserID, MediaKey: fb.MediaKey,
+				Filename: getMeta(fb.Metadata, "filename"), MediaType: fb.MediaType,
+				Action: action, AIVerdict: fb.AIVerdict, AIReason: fb.Reason,
+				IsFinalized: fb.EventType == rag.EventOverridesFinalized, MediaMetadata: fb.Metadata,
+				Embedding: p.embedding, CreatedAt: p.createdAt,
+			})
+		case rag.EventDescriptionFinalized:
+			captionText := fb.AIVerdict
+			if captionText == "" {
+				captionText = getMeta(fb.Metadata, "captionText")
+			}
+			d := rag.CaptionDecision{
+				SessionID: fb.SessionID, UserID: fb.UserID, CaptionText: captionText,
+				Hashtags: parseStringSlice(fb.Metadata, "hashtags"),
+				LocationTag: getMeta(fb.Metadata, "locationTag"),
+				MediaKeys: parseStringSlice(fb.Metadata, "mediaKeys"),
+				PostGroupName: getMeta(fb.Metadata, "postGroupName"), MediaMetadata: fb.Metadata,
+				Embedding: p.embedding, CreatedAt: p.createdAt,
+			}
+			if d.PostGroupName == "" {
+				d.PostGroupName = fb.SessionID + "-caption"
+			}
+			captions = append(captions, d)
+		case rag.EventPublishFinalized:
+			d := rag.PublishDecision{
+				SessionID: fb.SessionID, UserID: fb.UserID,
+				Platform: getMeta(fb.Metadata, "platform"),
+				PostGroupName: getMeta(fb.Metadata, "postGroupName"),
+				CaptionText: getMeta(fb.Metadata, "captionText"),
+				Hashtags: parseStringSlice(fb.Metadata, "hashtags"),
+				LocationTag: getMeta(fb.Metadata, "locationTag"),
+				MediaKeys: parseStringSlice(fb.Metadata, "mediaKeys"), MediaMetadata: fb.Metadata,
+				Embedding: p.embedding, CreatedAt: p.createdAt,
+			}
+			if d.Platform == "" {
+				d.Platform = "instagram"
+			}
+			if d.PostGroupName == "" {
+				d.PostGroupName = fb.SessionID + "-publish"
+			}
+			publishes = append(publishes, d)
+		default:
+			log.Warn().Str("eventType", fb.EventType).Msg("unhandled event type in batch")
+		}
+	}
+
+	log.Info().
+		Int("triages", len(triages)).
+		Int("selections", len(selections)).
+		Int("overrides", len(overrides)).
+		Int("captions", len(captions)).
+		Int("publishes", len(publishes)).
+		Msg("Batch upserting decisions by type")
+
+	if err := dataAPI.BatchUpsertTriageDecisions(ctx, triages); err != nil {
+		return fmt.Errorf("batch triage: %w", err)
+	}
+	if err := dataAPI.BatchUpsertSelectionDecisions(ctx, selections); err != nil {
+		return fmt.Errorf("batch selection: %w", err)
+	}
+	if err := dataAPI.BatchUpsertOverrideDecisions(ctx, overrides); err != nil {
+		return fmt.Errorf("batch override: %w", err)
+	}
+	if err := dataAPI.BatchUpsertCaptionDecisions(ctx, captions); err != nil {
+		return fmt.Errorf("batch caption: %w", err)
+	}
+	if err := dataAPI.BatchUpsertPublishDecisions(ctx, publishes); err != nil {
+		return fmt.Errorf("batch publish: %w", err)
+	}
+	return nil
+}
+
+func fallbackPerItem(ctx context.Context, dataAPI *rag.DataAPIClient, items []preparedItem) []stagingItem {
+	var processed []stagingItem
+	for _, p := range items {
+		if err := embedAndUpsert(ctx, dataAPI, p.feedback); err != nil {
+			log.Error().Err(err).Str("sk", p.staging.SK).Msg("fallback per-item upsert failed")
+			continue
+		}
+		processed = append(processed, p.staging)
+	}
 	return processed
 }
 

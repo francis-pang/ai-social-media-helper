@@ -539,6 +539,128 @@ func parseTriageResponse(response string) ([]TriageResult, error) {
 	return results, nil
 }
 
+// AskMediaTriageMCP uses the MCP bridge for two-pass triage: metadata-only
+// first pass, then model-driven fetch_media for items needing visual inspection.
+// See DDR-070: MCP Server for RAG Tools.
+func AskMediaTriageMCP(
+	ctx context.Context,
+	client *genai.Client,
+	bridge *MCPBridge,
+	files []*filehandler.MediaFile,
+	modelName string,
+) ([]TriageResult, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no files to triage")
+	}
+
+	prompt := BuildMediaTriageMetadataPrompt(files)
+
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: assets.TriageSystemPromptMCP}},
+		},
+		MaxOutputTokens: 65536,
+	}
+
+	contents := []*genai.Content{{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: prompt}},
+	}}
+
+	resp, err := GenerateWithMCP(ctx, client, bridge, modelName, contents, config)
+	if err != nil {
+		return nil, fmt.Errorf("MCP triage: %w", err)
+	}
+
+	responseText := resp.Text()
+	if responseText == "" {
+		return nil, fmt.Errorf("empty response from MCP triage")
+	}
+
+	return parseTriageResponse(responseText)
+}
+
+// BuildMediaTriageMetadataPrompt creates a metadata-only prompt for MCP triage.
+// Unlike BuildMediaTriagePrompt, no media content is sent — the model uses
+// fetch_media to pull media it needs to inspect.
+func BuildMediaTriageMetadataPrompt(files []*filehandler.MediaFile) string {
+	var sb strings.Builder
+
+	var imageCount, videoCount int
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		if filehandler.IsImage(ext) {
+			imageCount++
+		} else if filehandler.IsVideo(ext) {
+			videoCount++
+		}
+	}
+
+	sb.WriteString("## Media Triage Task\n\n")
+	sb.WriteString(fmt.Sprintf("You are evaluating %d media items (%d photos, %d videos).\n",
+		len(files), imageCount, videoCount))
+	sb.WriteString("You have access to the `fetch_media` tool to view actual media content.\n\n")
+
+	sb.WriteString("### Media Metadata\n\n")
+	for i, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		mediaType := "Photo"
+		if filehandler.IsVideo(ext) {
+			mediaType = "Video"
+		}
+
+		sb.WriteString(fmt.Sprintf("**Media %d: %s** [%s]\n", i+1, filepath.Base(file.Path), mediaType))
+		sb.WriteString(fmt.Sprintf("- Size: %s\n", formatFileSize(file.Size)))
+
+		if file.Metadata != nil {
+			if file.Metadata.HasDateData() {
+				sb.WriteString(fmt.Sprintf("- Date: %s\n",
+					file.Metadata.GetDate().Format("Monday, January 2, 2006 at 3:04 PM")))
+			}
+
+			switch m := file.Metadata.(type) {
+			case *filehandler.ImageMetadata:
+				if m.CameraMake != "" || m.CameraModel != "" {
+					sb.WriteString(fmt.Sprintf("- Camera: %s %s\n", m.CameraMake, m.CameraModel))
+				}
+			case *filehandler.VideoMetadata:
+				if m.Duration > 0 {
+					sb.WriteString(fmt.Sprintf("- Duration: %s\n", formatVideoDuration(m.Duration)))
+				}
+				if m.Width > 0 && m.Height > 0 {
+					sb.WriteString(fmt.Sprintf("- Resolution: %dx%d\n", m.Width, m.Height))
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("### Instructions\n\n")
+	sb.WriteString("1. Review the metadata for all items.\n")
+	sb.WriteString("2. For items you can confidently triage from metadata alone ")
+	sb.WriteString("(e.g., very short videos <0.5s are likely accidental), note your decision.\n")
+	sb.WriteString("3. Call `fetch_media` with the indices of items you need to see.\n")
+	sb.WriteString("4. After inspecting the media, output your final triage JSON for ALL items.\n\n")
+	sb.WriteString("You may call `fetch_media` multiple times if needed.\n\n")
+
+	sb.WriteString("### Required Output\n\n")
+	sb.WriteString("After all inspection, respond with ONLY a valid JSON array. ")
+	sb.WriteString("One entry per media item, in order.\n")
+	sb.WriteString(`Each entry: {"media": N, "filename": "name", "saveable": true/false, "reason": "brief explanation"}` + "\n")
+
+	return sb.String()
+}
+
+func formatFileSize(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	if bytes < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+}
+
 // WriteTriageReport writes the triage results as a JSON file alongside the media directory.
 func WriteTriageReport(results []TriageResult, outputPath string) error {
 	data, err := json.MarshalIndent(results, "", "  ")

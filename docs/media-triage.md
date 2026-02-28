@@ -92,6 +92,16 @@ After triage-run completes, original files are no longer needed — the review U
 
 For a typical 36-file session (~500 MB originals), this reduces S3 storage-hours from ~12,000 MB-hours to ~26 MB-hours.
 
+## MCP Triage Mode (DDR-070)
+
+When `RAG_MODE=mcp`, triage switches to a two-pass model-driven approach:
+
+1. **Pass 1 (metadata):** Gemini receives only metadata (filenames, sizes, durations, resolutions) and MCP tool definitions
+2. **Pass 2 (media fetch):** Gemini calls `fetch_media` to pull media for items it needs to visually inspect
+3. **Metadata-only decisions:** Items like sub-0.5s accidental videos are triaged from metadata alone, saving video tokens
+
+This is controlled by the `RAG_MODE` environment variable on the triage Lambda (`preload` for current behavior, `mcp` for the new approach). See [MCP Server](./mcp-server.md).
+
 ## Related DDRs
 
 - [DDR-021](./design-decisions/DDR-021-media-triage-command.md) — Media Triage Command design
@@ -102,6 +112,8 @@ For a typical 36-file session (~500 MB originals), this reduces S3 storage-hours
 - [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
 - [DDR-061](./design-decisions/DDR-061-s3-event-driven-per-file-processing.md) — S3 Event-Driven Per-File Processing
 - [DDR-063](./design-decisions/DDR-063-split-processing-ui-screens.md) — Split File Processing and Gemini Request into Separate UI Screens
+- [DDR-069](./design-decisions/DDR-069-batch-execute-statement-ingest.md) — BatchExecuteStatement for RAG ingest throughput
+- [DDR-070](./design-decisions/DDR-070-mcp-server-rag-tools.md) — MCP Server for RAG Tools
 
 ---
 

@@ -32,6 +32,12 @@ var SelectionSystemPrompt string
 //go:embed prompts/triage-system.txt
 var TriageSystemPrompt string
 
+// TriageSystemPromptMCP provides context for MCP-based media triage with tool use.
+// See DDR-070: MCP Server for RAG Tools.
+//
+//go:embed prompts/triage-system-mcp.txt
+var TriageSystemPromptMCP string
+
 // EnhancementSystemPrompt provides instructions for AI photo enhancement.
 // See DDR-031: Multi-Step Photo Enhancement Pipeline.
 //

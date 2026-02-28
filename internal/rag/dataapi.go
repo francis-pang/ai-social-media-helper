@@ -92,6 +92,8 @@ func (c *DataAPIClient) exec(ctx context.Context, sql string, params []rdsdataty
 	return err
 }
 
+const maxBatchSize = 50
+
 func (c *DataAPIClient) batchExec(ctx context.Context, sql string, paramSets [][]rdsdatatypes.SqlParameter) error {
 	if len(paramSets) == 0 {
 		return nil
@@ -99,14 +101,21 @@ func (c *DataAPIClient) batchExec(ctx context.Context, sql string, paramSets [][
 	if len(paramSets) == 1 {
 		return c.exec(ctx, sql, paramSets[0])
 	}
-	_, err := c.client.BatchExecuteStatement(ctx, &rdsdata.BatchExecuteStatementInput{
-		ResourceArn:   aws.String(c.clusterARN),
-		SecretArn:     aws.String(c.secretARN),
-		Database:      aws.String(c.database),
-		Sql:           aws.String(sql),
-		ParameterSets: paramSets,
-	})
-	return err
+	for i := 0; i < len(paramSets); i += maxBatchSize {
+		end := min(i+maxBatchSize, len(paramSets))
+		chunk := paramSets[i:end]
+		_, err := c.client.BatchExecuteStatement(ctx, &rdsdata.BatchExecuteStatementInput{
+			ResourceArn:   aws.String(c.clusterARN),
+			SecretArn:     aws.String(c.secretARN),
+			Database:      aws.String(c.database),
+			Sql:           aws.String(sql),
+			ParameterSets: chunk,
+		})
+		if err != nil {
+			return fmt.Errorf("BatchExecuteStatement (chunk %d-%d): %w", i, end, err)
+		}
+	}
+	return nil
 }
 
 func (c *DataAPIClient) UpsertTriageDecision(ctx context.Context, d TriageDecision) error {

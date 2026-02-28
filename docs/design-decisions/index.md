@@ -81,6 +81,8 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-066](./DDR-066-rag-decision-memory.md) | 2026-02-20 | RAG Decision Memory — Feedback-Driven Personalization | Implemented |
 | [DDR-067](./DDR-067-triage-processing-optimization.md) | 2026-02-21 | Triage Processing Optimization | Implemented |
 | [DDR-068](./DDR-068-rag-weekly-batch-staging.md) | 2026-02-28 | RAG Daily Batch Architecture — DynamoDB Staging | Implemented |
+| [DDR-069](./DDR-069-batch-execute-statement-ingest.md) | 2026-02-28 | BatchExecuteStatement for RAG ingest throughput | Accepted |
+| [DDR-070](./DDR-070-mcp-server-rag-tools.md) | 2026-02-28 | MCP Server for RAG Tools | Accepted |
 
 ---
 

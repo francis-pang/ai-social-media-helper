@@ -47,6 +47,19 @@ Aurora only runs during the daily batch (~40–60 min/week on active days). The 
 
 There is no auto-stop/start machinery, no frontend health-check endpoint, and no Aurora interaction during user sessions.
 
+## MCP Server (DDR-070)
+
+The MCP server (`internal/mcp/`) exposes RAG data as Model Context Protocol tools, enabling both Lambda-embedded and standalone IDE usage:
+
+- **`get_preference_profile`** — returns the user's curation preference profile from DynamoDB
+- **`get_caption_examples`** — returns past caption style examples
+- **`get_curation_stats`** — returns aggregate curation statistics
+- **`fetch_media`** — fetches actual media content by index (Lambda only)
+
+When `RAG_MODE=mcp`, triage/selection Lambdas use the embedded MCP server via a Gemini bridge instead of invoking the RAG Query Lambda. The model decides when to call tools and which media to fetch, enabling metadata-only triage for obvious items.
+
+See [MCP Server](./mcp-server.md) for full documentation.
+
 ## Operations
 
 - **CDK stack:** `RagStack` in `ai-social-media-helper-deploy/cdk`. Deploy manually when introducing or changing RAG (see [Deployment Strategy](./DEPLOYMENT_STRATEGY.md)).
