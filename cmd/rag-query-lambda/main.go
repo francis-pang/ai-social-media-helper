@@ -41,7 +41,7 @@ type profileItem struct {
 }
 
 // handler returns the pre-computed preference profile from DynamoDB (DDR-068).
-// Aurora is no longer queried at request time; all data comes from the weekly
+// Aurora is no longer queried at request time; all data comes from the daily
 // batch-built profile stored in the rag-preference-profiles table.
 func handler(ctx context.Context, event QueryEvent) (QueryResponse, error) {
 	profile, err := readProfile(ctx)

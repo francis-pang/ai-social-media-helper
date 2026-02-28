@@ -49,7 +49,7 @@ type stagingItem struct {
 	SessionID    string `dynamodbav:"sessionId"`
 }
 
-// handler runs the weekly batch lifecycle (DDR-068):
+// handler runs the daily batch lifecycle (DDR-068):
 // staging ingest → Aurora embed+insert → profile build → cleanup → Aurora stop.
 func handler(ctx context.Context) error {
 	if clusterARN == "" || secretARN == "" || database == "" || profilesTable == "" || stagingTable == "" {
