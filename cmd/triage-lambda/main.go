@@ -125,20 +125,21 @@ func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
 	}
 }
 
-// handleTriageInitSession writes the session record with expectedFileCount
-// and sets the phase to "uploading". (DDR-061)
+// handleTriageInitSession transitions the triage job to "processing" status
+// with phase "uploading". Uses UpdateItem to preserve the processedCount
+// that MediaProcess Lambda may have already incremented. (DDR-061)
 func handleTriageInitSession(ctx context.Context, event TriageEvent) (*TriageInitResult, error) {
 	model := event.Model
 	if model == "" {
 		model = chat.DefaultModelName
 	}
 
-	sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
-		ID:                event.JobID,
-		Status:            "processing",
-		Phase:             "uploading",
-		ExpectedFileCount: event.ExpectedFileCount,
-	})
+	// Use UpdateTriagePhase (UpdateItem) instead of PutTriageJob (PutItem) to avoid
+	// clobbering processedCount that MediaProcess Lambda may have already incremented
+	// while files were uploading concurrently.
+	if err := sessionStore.UpdateTriagePhase(ctx, event.SessionID, event.JobID, "uploading", "processing"); err != nil {
+		log.Error().Err(err).Str("jobId", event.JobID).Msg("Failed to update triage phase to processing")
+	}
 
 	log.Info().
 		Str("sessionId", event.SessionID).
