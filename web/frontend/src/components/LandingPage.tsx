@@ -29,7 +29,7 @@ const WORKFLOWS: WorkflowOption[] = [
     ],
     startStep: "triage-upload",
     accentColor: "var(--color-danger)",
-    accentBg: "rgba(255, 107, 107, 0.1)",
+    accentBg: "rgba(239, 68, 68, 0.08)",
   },
   {
     id: "selection",
@@ -42,7 +42,7 @@ const WORKFLOWS: WorkflowOption[] = [
     ],
     startStep: "upload",
     accentColor: "var(--color-primary)",
-    accentBg: "rgba(108, 140, 255, 0.1)",
+    accentBg: "var(--color-primary-light)",
   },
 ];
 
@@ -97,12 +97,14 @@ export function LandingPage() {
             }}
             onMouseEnter={(e) => {
               const el = e.currentTarget as HTMLElement;
+              el.style.background = "var(--color-surface-hover)";
               el.style.borderColor = option.accentColor;
               el.style.transform = "translateY(-2px)";
-              el.style.boxShadow = `0 4px 12px ${option.accentBg}`;
+              el.style.boxShadow = `0 8px 24px var(--color-shadow)`;
             }}
             onMouseLeave={(e) => {
               const el = e.currentTarget as HTMLElement;
+              el.style.background = "var(--color-surface)";
               el.style.borderColor = "var(--color-border)";
               el.style.transform = "none";
               el.style.boxShadow = "none";

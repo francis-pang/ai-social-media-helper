@@ -77,7 +77,7 @@ Components that have an explicit `type` field (e.g., `SelectionItem.type`) pass 
 | Keep "open in new tab" as primary action | Poor UX — context loss, no inline preview, bad video handling |
 | Third-party lightbox library (e.g., PhotoSwipe, Fancybox) | Unnecessary dependency for what is achievable with ~120 lines of Preact + CSS-in-JS |
 | Per-component inline expansion (expand thumbnail in place) | Disrupts the grid layout; complex to implement per component; doesn't work well for videos |
-| `<dialog>` element | Good accessibility defaults but styling is inconsistent across browsers; requires polyfill considerations; CSS-in-JS overlay is simpler for this dark-themed app |
+| `<dialog>` element | Good accessibility defaults but styling is inconsistent across browsers; requires polyfill considerations; CSS-in-JS overlay is simpler for this app |
 
 ## Consequences
 
@@ -101,3 +101,4 @@ Components that have an explicit `type` field (e.g., `SelectionItem.type`) pass 
 - [DDR-030](./DDR-030-cloud-selection-backend.md) — Selection backend (provides thumbnail URLs)
 - [DDR-031](./DDR-031-multi-step-photo-enhancement.md) — Enhancement pipeline (side-by-side comparison)
 - [DDR-037](./DDR-037-step-navigation-and-state-invalidation.md) — Step navigation (steps 3, 5 use thumbnails)
+- [DDR-073](./DDR-073-light-theme-ui-redesign.md) — Light theme redesign (dark overlay convention preserved for media visibility)

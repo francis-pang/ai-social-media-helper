@@ -14,7 +14,7 @@ export function SelectedCard({
     <div
       style={{
         background: isOverride
-          ? "rgba(108, 140, 255, 0.08)"
+          ? "var(--color-primary-light)"
           : "var(--color-bg)",
         borderRadius: "var(--radius)",
         overflow: "hidden",
@@ -81,8 +81,8 @@ export function SelectedCard({
             borderRadius: "4px",
             background:
               item.type === "Video"
-                ? "rgba(108, 140, 255, 0.85)"
-                : "rgba(81, 207, 102, 0.85)",
+                ? "rgba(124, 58, 237, 0.85)"
+                : "rgba(34, 197, 94, 0.85)",
             color: "#fff",
             fontWeight: 600,
             textTransform: "uppercase",

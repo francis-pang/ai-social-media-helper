@@ -51,6 +51,8 @@ interface MediaFile {
 
 const files = signal<MediaFile[]>([]);
 const error = signal<string | null>(null);
+const isDragging = signal(false);
+let dragEnterCounter = 0;
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -233,6 +235,8 @@ function clearAll() {
 async function handleDrop(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
+  dragEnterCounter = 0;
+  isDragging.value = false;
   if (!e.dataTransfer) return;
 
   const allFiles = await getFilesFromDataTransfer(e.dataTransfer);
@@ -245,6 +249,21 @@ async function handleDrop(e: DragEvent) {
 function handleDragOver(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
+}
+
+function handleDragEnter(e: DragEvent) {
+  e.preventDefault();
+  dragEnterCounter++;
+  isDragging.value = true;
+}
+
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault();
+  dragEnterCounter--;
+  if (dragEnterCounter <= 0) {
+    dragEnterCounter = 0;
+    isDragging.value = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,54 +320,44 @@ export function MediaUploader() {
         folder, or drag and drop.
       </p>
 
-      {/* Picker buttons (File System Access API — DDR-029) — shown when no files yet */}
-      {files.value.length === 0 && (
+      {/* Drop zone: full when empty, compact when files exist */}
+      {files.value.length === 0 ? (
         <div
-          style={{
-            display: "flex",
-            gap: "0.75rem",
-            marginBottom: "1rem",
-          }}
+          class={`drop-zone${isDragging.value ? " drop-zone--active" : ""}`}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          style={{ marginBottom: "1.5rem" }}
         >
-          <button class="primary" onClick={chooseFiles}>
-            Choose Files
-          </button>
-          <button class="outline" onClick={chooseFolder}>
-            Choose Folder
-          </button>
+          <span class="drop-zone__icon">📁</span>
+          <span class="drop-zone__title">Drop your media here</span>
+          <span class="drop-zone__subtitle">
+            JPEG, PNG, GIF, WebP, HEIC, MP4, MOV, AVI, WebM, MKV
+          </span>
+          <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+            <button class="primary" onClick={chooseFiles}>
+              Click to Browse
+            </button>
+            <button class="outline" onClick={chooseFolder}>
+              Choose Folder
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div
+          class={`drop-zone${isDragging.value ? " drop-zone--active" : ""}`}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          style={{ padding: "0.75rem", marginBottom: "1.5rem" }}
+        >
+          <span style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
+            Drop more files here
+          </span>
         </div>
       )}
-
-      {/* Drop zone (DDR-058: compact secondary when files exist) */}
-      <div
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        style={{
-          border: "2px dashed var(--color-border)",
-          borderRadius: "var(--radius)",
-          padding: files.value.length > 0 ? "0.75rem" : "1.5rem",
-          textAlign: "center",
-          marginBottom: "1.5rem",
-          transition: "border-color 0.2s, padding 0.2s",
-        }}
-      >
-        <div
-          style={{
-            fontSize: files.value.length > 0 ? "0.875rem" : "1rem",
-            marginBottom: files.value.length > 0 ? "0" : "0.375rem",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {files.value.length > 0 ? "Drop more files here" : "or drop files here"}
-        </div>
-        {files.value.length === 0 && (
-          <div
-            style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}
-          >
-            JPEG, PNG, GIF, WebP, HEIC, MP4, MOV, AVI, WebM, MKV
-          </div>
-        )}
-      </div>
 
       {/* File list (DDR-058: card-based rows with thumbnails) */}
       {files.value.length > 0 && (
@@ -415,8 +424,8 @@ export function MediaUploader() {
                   borderRadius: "999px",
                   background:
                     f.mediaType === "video"
-                      ? "rgba(108, 140, 255, 0.15)"
-                      : "rgba(81, 207, 102, 0.15)",
+                      ? "var(--color-primary-light)"
+                      : "rgba(34, 197, 94, 0.1)",
                   color:
                     f.mediaType === "video"
                       ? "var(--color-primary)"
@@ -444,7 +453,7 @@ export function MediaUploader() {
               <span
                 class={badgeClass(f.status)}
                 style={f.status === "uploading" ? {
-                  background: `linear-gradient(to right, rgba(108, 140, 255, 0.3) ${f.progress}%, rgba(108, 140, 255, 0.1) ${f.progress}%)`,
+                  background: `linear-gradient(to right, rgba(124, 58, 237, 0.2) ${f.progress}%, rgba(124, 58, 237, 0.06) ${f.progress}%)`,
                 } : undefined}
                 title={f.status === "error" ? (f.error || "Upload failed") : undefined}
               >
@@ -522,21 +531,6 @@ export function MediaUploader() {
         >
           {error.value}
         </div>
-      )}
-
-      {/* Empty state */}
-      {files.value.length === 0 && (
-        <p
-          style={{
-            color: "var(--color-text-secondary)",
-            padding: "1.5rem 1rem",
-            textAlign: "center",
-            fontSize: "0.875rem",
-          }}
-        >
-          No files selected yet. Use the buttons above or drag and drop media
-          files.
-        </p>
       )}
 
       {/* Trip / Event context */}

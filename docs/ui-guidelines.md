@@ -9,7 +9,7 @@
 
 This document defines the visual design standards for the web frontend. All rules are optimized for comfortable use on a 1440p desktop monitor at approximately 1 meter viewing distance, following ISO 9241-303 ergonomic standards.
 
-The design system is centralized in [`style.css`](../web/frontend/src/style.css) and enforced through CSS custom properties, utility classes, and the conventions described here.
+The design system uses a **light theme with purple accents** (`--color-primary: #7c3aed`). It is centralized in [`style.css`](../web/frontend/src/style.css) and enforced through CSS custom properties, utility classes, and the conventions described here.
 
 ---
 
@@ -92,6 +92,58 @@ grid-template-columns: repeat(auto-fill, minmax(var(--grid-card-md), 1fr));
 grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
 ```
 
+### Sidebar Layout
+
+The `.layout-sidebar` class provides a 2-column grid with a fixed-width sidebar.
+
+```css
+.layout-sidebar {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 1.5rem;
+}
+```
+
+Use for screens with a main content area and a side panel (e.g., triage review with metadata sidebar, detail views with actions panel).
+
+Sidebar sections use `.sidebar-panel` — a white card with border and shadow. `h3` children inside a sidebar panel are auto-styled as small-caps section headers.
+
+```html
+<div class="layout-sidebar">
+  <main><!-- primary content --></main>
+  <aside>
+    <div class="sidebar-panel">
+      <h3>Details</h3>
+      <!-- section content -->
+    </div>
+  </aside>
+</div>
+```
+
+### Masonry Grid
+
+The `.masonry-grid` class uses CSS columns for variable-height card layouts (3 columns). Use for triage result screens where cards have different content heights.
+
+```css
+.masonry-grid {
+  columns: 3;
+}
+```
+
+### Drop Zone
+
+The `.drop-zone` class provides a dashed-border container for file upload areas. It includes hover and active states (purple border + light purple background).
+
+```html
+<div class="drop-zone">
+  <span class="drop-zone__icon">📁</span>
+  <span class="drop-zone__title">Drop files here</span>
+  <span class="drop-zone__subtitle">or click to browse</span>
+</div>
+```
+
+All three child elements (`__icon`, `__title`, `__subtitle`) should be present for consistent layout.
+
 ### Border Radii
 
 | Variable | Value | Usage |
@@ -144,23 +196,31 @@ All text inputs must have:
 
 ## Color System
 
-Colors are defined as CSS custom properties in `:root`:
+Colors are defined as CSS custom properties in `:root`. The design uses a light background with purple primary accents.
 
 | Variable | Value | Usage |
 |----------|-------|-------|
-| `--color-bg` | `#0f1117` | Page background |
-| `--color-surface` | `#1a1d27` | Card/panel backgrounds |
-| `--color-surface-hover` | `#242836` | Hover state backgrounds |
-| `--color-border` | `#2e3348` | Borders, dividers |
-| `--color-text` | `#e4e6f0` | Primary text |
-| `--color-text-secondary` | `#8b8fa8` | Secondary/muted text |
-| `--color-primary` | `#6c8cff` | Primary actions, links, current step |
-| `--color-primary-hover` | `#5a7aee` | Primary button hover |
-| `--color-danger` | `#ff6b6b` | Destructive actions, errors |
-| `--color-danger-hover` | `#ee5a5a` | Danger button hover |
-| `--color-success` | `#51cf66` | Success states, completed steps |
+| `--color-bg` | `#f8f9fc` | Page background |
+| `--color-surface` | `#ffffff` | Card/panel backgrounds |
+| `--color-surface-hover` | `#f3f4f6` | Hover state backgrounds |
+| `--color-surface-alt` | `#f1f3f9` | Alternate surface (e.g., sidebar sections, code blocks) |
+| `--color-border` | `#e2e5ef` | Borders, dividers |
+| `--color-text` | `#1a1d2e` | Primary text |
+| `--color-text-secondary` | `#6b7280` | Secondary/muted text |
+| `--color-primary` | `#7c3aed` | Primary actions, links, active states |
+| `--color-primary-hover` | `#6d28d9` | Primary button hover |
+| `--color-primary-light` | `rgba(124, 58, 237, 0.08)` | Tinted backgrounds for selected/active items |
+| `--color-danger` | `#ef4444` | Destructive actions, errors |
+| `--color-danger-hover` | `#dc2626` | Danger button hover |
+| `--color-success` | `#22c55e` | Success states, completed steps |
+| `--color-warning` | `#f59e0b` | Warning states, caution indicators |
+| `--color-shadow` | `rgba(0, 0, 0, 0.06)` | Box shadows |
 
-**Always use CSS variables** for colors — never hardcode hex values in components, except for overlays with explicit alpha channels (e.g., `rgba(108, 140, 255, 0.15)`).
+### Color Rules
+
+- **Always use CSS variables** for colors — never hardcode hex values in components.
+- **`rgba()` convention for tints**: Use `rgba(r, g, b, 0.08)` for tinted backgrounds (e.g., `--color-primary-light` for purple-tinted selection highlights). This keeps tints visually consistent with their base color while staying readable on white surfaces.
+- **Exception — MediaReviewModal**: The full-screen review modal uses a charcoal backdrop (`#1a1a2e`). This is an intentional dark exception for media review where a dark background improves image evaluation. See Component Conventions below.
 
 ---
 
@@ -170,8 +230,131 @@ Colors are defined as CSS custom properties in `:root`:
 
 The codebase uses a mix of inline styles (for layout-specific, one-off styling) and CSS classes (for shared, reusable patterns). Follow these guidelines:
 
-- **CSS classes** for: font sizes (utility classes), card styling (`.card`), button variants (`.primary`, `.outline`, `.danger`), text constraints (`.text-block`).
+- **CSS classes** for: font sizes (utility classes), card styling (`.card`), button variants (`.primary`, `.outline`, `.danger`), text constraints (`.text-block`), layout patterns (`.layout-sidebar`, `.masonry-grid`), component patterns (`.drop-zone`, `.log-console`, `.step-pipeline`).
 - **Inline styles** for: grid layouts with dynamic values, conditional styling, component-specific spacing, positional styling (`position: absolute`, `top`, `left`, etc.).
+
+### Drop Zone
+
+Use `.drop-zone` for any file/media upload area. Required child elements:
+
+| Element | Class | Content |
+|---------|-------|---------|
+| Icon | `.drop-zone__icon` | Upload icon or emoji |
+| Title | `.drop-zone__title` | Primary call-to-action text |
+| Subtitle | `.drop-zone__subtitle` | Secondary hint (e.g., "or click to browse") |
+
+The drop zone shows a dashed border by default, transitioning to a solid purple border with `--color-primary-light` background on hover/drag-active.
+
+### Streaming Log Console
+
+Use `.log-console` for scrollable monospace output areas (e.g., processing logs, server output).
+
+```html
+<div class="log-console">
+  <div class="log-entry log-entry--info">Processing file...</div>
+  <div class="log-entry log-entry--success">✓ Upload complete</div>
+  <div class="log-entry log-entry--warn">⚠ Low resolution detected</div>
+  <div class="log-entry log-entry--error">✗ Failed to process</div>
+  <div class="log-entry log-entry--debug">debug: raw response...</div>
+</div>
+```
+
+| Modifier | Color Purpose |
+|----------|--------------|
+| `.log-entry--info` | Default text color |
+| `.log-entry--success` | `--color-success` |
+| `.log-entry--warn` | `--color-warning` |
+| `.log-entry--error` | `--color-danger` |
+| `.log-entry--debug` | `--color-text-secondary` |
+
+### Step Pipeline Indicator
+
+Use `.step-pipeline` for horizontal multi-step progress indicators with connecting lines.
+
+```html
+<div class="step-pipeline">
+  <div class="step-pipeline__step step-pipeline__step--done">
+    <span class="step-pipeline__icon">✓</span>
+    <span class="step-pipeline__label">Upload</span>
+  </div>
+  <div class="step-pipeline__connector"></div>
+  <div class="step-pipeline__step step-pipeline__step--active">
+    <span class="step-pipeline__icon">2</span>
+    <span class="step-pipeline__label">Triage</span>
+  </div>
+  <div class="step-pipeline__connector"></div>
+  <div class="step-pipeline__step step-pipeline__step--pending">
+    <span class="step-pipeline__icon">3</span>
+    <span class="step-pipeline__label">Export</span>
+  </div>
+</div>
+```
+
+| Modifier | Appearance |
+|----------|------------|
+| `--done` | `--color-success` icon, completed state |
+| `--active` | `--color-primary` icon, current step |
+| `--pending` | `--color-text-secondary` icon, dimmed |
+
+### Reason Filter Pills
+
+Use `.reason-filters` as a flex container for rows of `.reason-pill` buttons. Pills toggle between default and `--active` states to filter content.
+
+```html
+<div class="reason-filters">
+  <button class="reason-pill reason-pill--active">Blurry</button>
+  <button class="reason-pill">Duplicate</button>
+  <button class="reason-pill">Overexposed</button>
+</div>
+```
+
+Active pills use `--color-primary` with a `--color-primary-light` background.
+
+### Sidebar Panels
+
+Use `.sidebar-panel` inside a `.layout-sidebar` aside column. Each panel is a white card with border and shadow. `h3` elements inside are auto-styled as small-caps section headers.
+
+```html
+<div class="sidebar-panel">
+  <h3>AI Analysis</h3>
+  <p>Confidence: 92%</p>
+</div>
+```
+
+### Sticky Action Bar
+
+Use `.sticky-action-bar` for step-level navigation bars (Back / Continue buttons) that remain visible during scroll.
+
+```html
+<div class="sticky-action-bar">
+  <button class="outline">Back</button>
+  <button class="primary">Continue</button>
+</div>
+```
+
+The bar uses `position: sticky`, `bottom: 1rem`, and a box shadow via `--color-shadow`.
+
+### Progress Top Bar
+
+Use `.progress-top-bar` with `.progress-top-bar__fill` for a thin fixed-position progress indicator at the top of the viewport.
+
+```html
+<div class="progress-top-bar">
+  <div class="progress-top-bar__fill" style="width: 45%"></div>
+</div>
+```
+
+### MediaReviewModal
+
+The MediaReviewModal uses a full-screen charcoal backdrop (`#1a1a2e`) — an intentional dark exception to the light theme. Dark backgrounds are appropriate when the primary task is evaluating visual media (photos, video frames), as they reduce glare and improve perceived contrast of the content being reviewed.
+
+Features:
+- AI Vision brightness toggle and exposure slider for image evaluation
+- Floating AI reasoning card overlaying the media
+- Thumbnail queue strip along the bottom edge
+- Keyboard navigation (arrow keys, Escape to close)
+
+**When to use dark vs. light backgrounds**: Use the light theme (default) for all workflow, form, and data screens. Use a dark backdrop only for full-screen media review where accurate color/exposure evaluation is required.
 
 ### Badges and Status Indicators
 
@@ -188,23 +371,6 @@ Thumbnail containers should:
 - Use `object-fit: cover` for images
 - Include `loading="lazy"` for off-screen images
 - Provide `onError` handlers to gracefully hide broken images
-
-### Sticky Action Bars
-
-Step-level action bars (containing Back / Continue buttons) should use:
-
-```jsx
-style={{
-  position: "sticky",
-  bottom: "1rem",
-  padding: "1rem 1.5rem",
-  background: "var(--color-surface)",
-  borderRadius: "var(--radius-lg)",
-  border: "1px solid var(--color-border)",
-}}
-```
-
-This keeps navigation controls visible as the user scrolls through content.
 
 ---
 
@@ -239,11 +405,16 @@ When adding a new component, verify:
 - [ ] All text uses a permitted font size tier (minimum `0.75rem`)
 - [ ] Buttons and interactive elements meet the 44px click target
 - [ ] Grids use `--grid-card-*` variables, not hardcoded pixel values
-- [ ] Colors reference CSS custom properties
+- [ ] Colors reference CSS custom properties (no hardcoded hex except `rgba()` tints)
 - [ ] Prose text uses `.text-block` for line-length constraint
 - [ ] File names use `--font-mono` font family
 - [ ] Thumbnails use `aspect-ratio: 1`, `object-fit: cover`, and `loading="lazy"`
 - [ ] Error states are at least `0.875rem` and use `--color-danger`
+- [ ] Upload areas use `.drop-zone` with all three child elements
+- [ ] Log output uses `.log-console` with appropriate `--info`/`--success`/`--warn`/`--error` modifiers
+- [ ] Multi-step flows use `.step-pipeline` for progress indication
+- [ ] Sidebar layouts use `.layout-sidebar` + `.sidebar-panel`
+- [ ] Action bars use `.sticky-action-bar` instead of inline sticky styles
 
 ---
 

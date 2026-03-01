@@ -9,8 +9,10 @@ import {
   getTriageResults,
   confirmTriage,
   isCloudMode,
+  isVideoFile,
+  thumbnailUrl,
 } from "../api/client";
-import { ActionBar } from "./shared/ActionBar";
+import { MediaReviewModal } from "./MediaReviewModal";
 import { MediaCard, itemId } from "./TriageMediaCard";
 import type { TriageResults } from "../types/api";
 
@@ -23,6 +25,9 @@ const confirmResult = signal<{
   reclaimedBytes: number;
 } | null>(null);
 const error = signal<string | null>(null);
+const reasonFilter = signal("all");
+const keepExpanded = signal(false);
+const reviewModalIndex = signal<number | null>(null);
 
 function pollResults(id: string) {
   const sessionId = isCloudMode ? uploadSessionId.value ?? undefined : undefined;
@@ -145,7 +150,7 @@ export function TriageView() {
     return (
       <div class="card" style={{ textAlign: "center" }}>
         <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>
-          {confirmResult.value.errors.length === 0 ? "Done" : "Completed with errors"}
+          {(confirmResult.value.errors ?? []).length === 0 ? "Done" : "Completed with errors"}
         </div>
         <p>
           Deleted {confirmResult.value.deleted} file(s)
@@ -153,7 +158,7 @@ export function TriageView() {
             `, reclaimed ${formatBytes(confirmResult.value.reclaimedBytes)}`
           }.
         </p>
-        {confirmResult.value.errors.length > 0 && (
+        {(confirmResult.value.errors ?? []).length > 0 && (
           <div
             style={{
               color: "var(--color-danger)",
@@ -161,7 +166,7 @@ export function TriageView() {
               fontSize: "0.875rem",
             }}
           >
-            {confirmResult.value.errors.map((err) => (
+            {(confirmResult.value.errors ?? []).map((err) => (
               <div key={err}>{err}</div>
             ))}
           </div>
@@ -235,6 +240,11 @@ export function TriageView() {
   // Show results (guard against null arrays from Go nil-slice JSON encoding)
   const keep = results.value.keep ?? [];
   const discard = results.value.discard ?? [];
+  const reasons = [...new Set(discard.map((i) => i.reason))];
+  const filteredDiscard =
+    reasonFilter.value === "all"
+      ? discard
+      : discard.filter((i) => i.reason === reasonFilter.value);
 
   return (
     <div>
@@ -252,95 +262,185 @@ export function TriageView() {
 
       {/* Discard section */}
       <div class="card" style={{ marginBottom: "1.5rem" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "1rem",
-          }}
-        >
-          <h2 style={{ color: "var(--color-danger)" }}>
-            Discard ({discard.length})
-          </h2>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button class="outline" onClick={selectAllDiscard}>
-              Select all
+        <h2 style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+          <span>✕ Discard Candidates</span>
+          <span
+            style={{
+              background: "rgba(239, 68, 68, 0.1)",
+              color: "var(--color-danger)",
+              borderRadius: "999px",
+              padding: "0.125rem 0.5rem",
+              fontSize: "0.75rem",
+              fontWeight: "normal",
+            }}
+          >
+            {discard.length}
+          </span>
+        </h2>
+
+        <div class="reason-filters" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <button
+              class={reasonFilter.value === "all" ? "reason-pill reason-pill--active" : "reason-pill"}
+              onClick={() => { reasonFilter.value = "all"; }}
+            >
+              All
             </button>
-            <button class="outline" onClick={deselectAll}>
-              Deselect all
-            </button>
+            {reasons.map((r) => (
+              <button
+                key={r}
+                class={reasonFilter.value === r ? "reason-pill reason-pill--active" : "reason-pill"}
+                onClick={() => { reasonFilter.value = r; }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexShrink: 0 }}>
+            <span
+              onClick={selectAllDiscard}
+              style={{ color: "var(--color-primary)", cursor: "pointer", fontSize: "0.8rem" }}
+            >
+              Select All
+            </span>
+            <span style={{ color: "var(--color-text-secondary)" }}>|</span>
+            <span
+              onClick={deselectAll}
+              style={{ color: "var(--color-primary)", cursor: "pointer", fontSize: "0.8rem" }}
+            >
+              Deselect All
+            </span>
           </div>
         </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
-            gap: "0.75rem",
-          }}
-        >
-          {discard.map((item) => (
-            <MediaCard
-              key={itemId(item)}
-              item={item}
-              selectable={true}
-              isSelected={selectedForDeletion.value.has(itemId(item))}
-              onToggle={() => toggleDeletion(itemId(item))}
-            />
+
+        <div class="masonry-grid">
+          {filteredDiscard.map((item, idx) => (
+            <div key={itemId(item)} style={{ breakInside: "avoid", marginBottom: "1rem" }}>
+              <MediaCard
+                item={item}
+                selectable={true}
+                isSelected={selectedForDeletion.value.has(itemId(item))}
+                onToggle={() => toggleDeletion(itemId(item))}
+                onReview={() => { reviewModalIndex.value = idx; }}
+              />
+            </div>
           ))}
         </div>
       </div>
 
       {/* Keep section */}
       <div class="card" style={{ marginBottom: "1.5rem" }}>
-        <h2 style={{ color: "var(--color-success)", marginBottom: "1rem" }}>
-          Keep ({keep.length})
-        </h2>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-md), 1fr))",
-            gap: "0.75rem",
-          }}
-        >
-          {keep.map((item) => (
-            <MediaCard
-              key={itemId(item)}
-              item={item}
-              selectable={false}
-              isSelected={false}
-            />
-          ))}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span>✓ Keep</span>
+            <span
+              style={{
+                background: "rgba(34, 197, 94, 0.1)",
+                color: "var(--color-success)",
+                borderRadius: "999px",
+                padding: "0.125rem 0.5rem",
+                fontSize: "0.75rem",
+                fontWeight: "normal",
+              }}
+            >
+              {keep.length}
+            </span>
+          </h2>
+          <button
+            class="outline"
+            onClick={() => { keepExpanded.value = !keepExpanded.value; }}
+            style={{ fontSize: "0.8rem" }}
+          >
+            {keepExpanded.value ? "Collapse" : "Expand"}
+          </button>
+        </div>
+        {!keepExpanded.value ? (
+          <p style={{ color: "var(--color-text-secondary)", fontSize: "0.875rem", marginTop: "0.5rem" }}>
+            {keep.length} items will be kept
+          </p>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
+              gap: "0.75rem",
+              marginTop: "1rem",
+            }}
+          >
+            {keep.map((item) => (
+              <MediaCard
+                key={itemId(item)}
+                item={item}
+                selectable={false}
+                isSelected={false}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Sticky action bar */}
+      <div class="sticky-action-bar">
+        <span style={{ color: "var(--color-text-secondary)", fontSize: "0.875rem" }}>
+          Selection Summary: {selectedForDeletion.value.size} items selected for deletion
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: "0.375rem", fontSize: "0.875rem" }}>
+          <span
+            style={{
+              display: "inline-block",
+              width: "0.5rem",
+              height: "0.5rem",
+              borderRadius: "50%",
+              background: "var(--color-success)",
+            }}
+          />
+          {keep.length} items will be kept
+        </span>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button class="outline" onClick={handleBack}>
+            Back
+          </button>
+          <button
+            class="danger"
+            onClick={handleConfirmDeletion}
+            disabled={selectedForDeletion.value.size === 0 || confirmLoading.value}
+          >
+            {confirmLoading.value ? "Deleting..." : `Delete ${selectedForDeletion.value.size} Selected`}
+          </button>
+          <button
+            class="primary"
+            onClick={handleConfirmDeletion}
+            disabled={selectedForDeletion.value.size === 0 || confirmLoading.value}
+          >
+            Confirm & Archive
+          </button>
         </div>
       </div>
 
-      {/* Action bar */}
-      <ActionBar
-        left={
-          <span style={{ fontSize: "0.875rem" }}>
-            {selectedForDeletion.value.size} of {discard.length} marked for
-            deletion
-          </span>
-        }
-        right={
-          <div style={{ display: "flex", gap: "0.75rem" }}>
-            <button class="outline" onClick={handleBack}>
-              Back
-            </button>
-            <button
-              class="danger"
-              onClick={handleConfirmDeletion}
-              disabled={
-                selectedForDeletion.value.size === 0 || confirmLoading.value
-              }
-            >
-              {confirmLoading.value
-                ? "Deleting..."
-                : `Delete ${selectedForDeletion.value.size} file(s)`}
-            </button>
-          </div>
-        }
-      />
+      {/* Media review modal */}
+      {reviewModalIndex.value !== null && (
+        <MediaReviewModal
+          items={filteredDiscard.map((item) => ({
+            id: itemId(item),
+            url: item.thumbnailUrl || thumbnailUrl(isCloudMode && item.key ? item.key : item.path),
+            filename: item.filename,
+            type: (isVideoFile(item.filename) ? "video" : "image") as "image" | "video",
+            reason: item.reason,
+          }))}
+          initialIndex={reviewModalIndex.value}
+          onClose={() => { reviewModalIndex.value = null; }}
+          onKeep={(id: string) => {
+            const next = new Set(selectedForDeletion.value);
+            next.delete(id);
+            selectedForDeletion.value = next;
+          }}
+          onDelete={(id: string) => {
+            const next = new Set(selectedForDeletion.value);
+            next.add(id);
+            selectedForDeletion.value = next;
+          }}
+        />
+      )}
     </div>
   );
 }

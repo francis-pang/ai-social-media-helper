@@ -19,7 +19,9 @@ CloudConvert's file converter UI demonstrates effective UX patterns for these ex
 
 ## Decision
 
-Restyle the upload file lists and processing indicator to adopt CloudConvert's layout and interaction patterns while keeping the existing dark theme, CSS variables, and Preact architecture. Specifically:
+Restyle the upload file lists and processing indicator to adopt CloudConvert's layout and interaction patterns while keeping the existing CSS variables and Preact architecture. Specifically:
+
+> **Note**: The dark theme referenced here was replaced by a light theme in [DDR-073](./DDR-073-light-theme-ui-redesign.md). The CSS class patterns below remain in use.
 
 ### 1. Shared CSS Utility Classes (`style.css`)
 
@@ -66,7 +68,7 @@ Add reusable CSS classes that both uploaders and the processing indicator use:
 
 | Approach | Rejected Because |
 |----------|------------------|
-| Full CloudConvert clone (colors, fonts, layout) | We have an established dark theme and design system; cloning colors/fonts would create inconsistency |
+| Full CloudConvert clone (colors, fonts, layout) | We have an established design system; cloning colors/fonts would create inconsistency |
 | Third-party file upload component library | Adds runtime dependency, bundle size, and styling integration effort for marginal benefit |
 | Keep existing layout, just add progress bars | Does not address the row separation, status readability, or remove button issues |
 | Move to a table-based layout | Tables are rigid; card-based rows are more flexible for responsive layouts and varying content |
@@ -91,3 +93,4 @@ Add reusable CSS classes that both uploaders and the processing indicator use:
 - [DDR-056: Loading UX and URL Routing](./DDR-056-loading-ux-and-url-routing.md)
 - [DDR-057: Desktop 1440p UI Optimization](./DDR-057-desktop-1440p-ui-optimization.md)
 - [DDR-029: File System Access API for Cloud Media Upload](./DDR-029-file-system-access-api-upload.md)
+- [DDR-073: Light Theme UI Redesign](./DDR-073-light-theme-ui-redesign.md) — Updated color system; CSS class patterns from this DDR remain in use

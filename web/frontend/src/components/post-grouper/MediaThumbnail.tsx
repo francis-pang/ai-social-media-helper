@@ -78,7 +78,7 @@ export function MediaThumbnail({
             fontSize: "0.75rem",
             padding: "0.0625rem 0.25rem",
             borderRadius: "3px",
-            background: "rgba(108, 140, 255, 0.85)",
+            background: "rgba(124, 58, 237, 0.85)",
             color: "#fff",
             fontWeight: 600,
           }}
@@ -97,7 +97,7 @@ export function MediaThumbnail({
             width: "1rem",
             height: "1rem",
             borderRadius: "50%",
-            background: "rgba(255, 107, 107, 0.85)",
+            background: "rgba(239, 68, 68, 0.85)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

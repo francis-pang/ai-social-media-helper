@@ -35,14 +35,16 @@ Steps are connected by arrow separators (`→`). Completed steps are clickable t
 
 ### 2. Color Scheme
 
-Uses the app's existing dark-theme CSS variables with a warm accent gradient for step progression:
+> **Updated by [DDR-073](./DDR-073-light-theme-ui-redesign.md)**: Colors below reflect the current light theme with purple accent. The original dark-theme values (`#51cf66`, `#6c8cff`) were replaced.
+
+Uses the app's CSS variables for step progression:
 
 | State | Color | Purpose |
 |-------|-------|---------|
-| Completed | `#51cf66` (existing success green) | Confirmed step, clickable |
-| Current | `#6c8cff` (existing primary blue) | Active step, highlighted |
+| Completed | `var(--color-success)` (#22c55e) | Confirmed step, clickable |
+| Current | `var(--color-primary)` (#7c3aed) | Active step, highlighted |
 | Future | `var(--color-text-secondary)` | Not yet reached, dimmed |
-| Arrow (completed) | `#51cf66` | Flow direction for completed path |
+| Arrow (completed) | `var(--color-success)` | Flow direction for completed path |
 | Arrow (future) | `var(--color-border)` | Upcoming flow direction |
 
 ### 3. Downstream State Invalidation
@@ -112,7 +114,7 @@ Only the 6 user-visible steps are shown in the navigator. "Selecting" and "Enhan
 
 - Users always know where they are in the workflow and what's next.
 - Back navigation is safe — downstream data is cleaned up automatically when re-processing.
-- The design is visually consistent with the app's dark theme and minimalist aesthetic.
+- The design is visually consistent with the app's theme and minimalist aesthetic (updated to light theme in [DDR-073](./DDR-073-light-theme-ui-redesign.md)).
 - Step navigator works on both desktop and mobile widths (wraps on small screens).
 
 **Trade-offs:**
@@ -129,3 +131,4 @@ Only the 6 user-visible steps are shown in the navigator. "Selecting" and "Enhan
 - [DDR-033](./DDR-033-post-grouping-ui.md) — Post grouping
 - [DDR-034](./DDR-034-download-zip-bundling.md) — Download bundling
 - [DDR-036](./DDR-036-ai-post-description.md) — Description generation
+- [DDR-073](./DDR-073-light-theme-ui-redesign.md) — Light theme redesign (updated color scheme)

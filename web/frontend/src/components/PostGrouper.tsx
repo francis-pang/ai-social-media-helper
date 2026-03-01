@@ -249,7 +249,7 @@ export function PostGrouper() {
               borderRadius: "var(--radius)",
               background:
                 dragOverTarget.value === "__ungrouped__"
-                  ? "rgba(108, 140, 255, 0.06)"
+                  ? "var(--color-primary-light)"
                   : "transparent",
               border:
                 dragOverTarget.value === "__ungrouped__"
@@ -273,7 +273,7 @@ export function PostGrouper() {
                   : "0",
               background:
                 dragOverTarget.value === "__ungrouped__"
-                  ? "rgba(108, 140, 255, 0.06)"
+                  ? "var(--color-primary-light)"
                   : "transparent",
               border:
                 dragOverTarget.value === "__ungrouped__"

@@ -25,22 +25,26 @@ export function MediaCard({
   selectable,
   isSelected,
   onToggle,
+  onReview,
 }: {
   item: TriageItem;
   selectable: boolean;
   isSelected: boolean;
   onToggle?: () => void;
+  onReview?: () => void;
 }) {
   return (
     <div
       onClick={selectable ? onToggle : undefined}
       style={{
         background: isSelected
-          ? "rgba(255, 107, 107, 0.1)"
-          : "var(--color-bg)",
+          ? "rgba(239, 68, 68, 0.08)"
+          : "var(--color-surface)",
         border: isSelected
           ? "2px solid var(--color-danger)"
-          : "2px solid transparent",
+          : selectable
+            ? "2px solid transparent"
+            : "1px solid var(--color-border)",
         borderRadius: "var(--radius)",
         overflow: "hidden",
         cursor: selectable ? "pointer" : "default",
@@ -145,11 +149,33 @@ export function MediaCard({
               left: "0.5rem",
               width: "1.25rem",
               height: "1.25rem",
+              accentColor: "var(--color-danger)",
             }}
           />
         )}
+        {selectable && (
+          <span
+            style={{
+              position: "absolute",
+              bottom: "0.5rem",
+              left: "0.5rem",
+              background: "rgba(239, 68, 68, 0.9)",
+              color: "white",
+              borderRadius: "999px",
+              padding: "0.15rem 0.5rem",
+              fontSize: "0.7rem",
+              pointerEvents: "none",
+              maxWidth: "70%",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {item.reason}
+          </span>
+        )}
       </div>
-      <div style={{ padding: "0.5rem" }}>
+      <div style={{ padding: "0.75rem" }}>
         <div
           title={item.filename}
           style={{
@@ -162,15 +188,36 @@ export function MediaCard({
         >
           {item.filename}
         </div>
-        <div
-          style={{
-            fontSize: "0.75rem",
-            color: "var(--color-text-secondary)",
-            marginTop: "0.25rem",
-          }}
-        >
-          {item.reason}
-        </div>
+        {selectable && (
+          <>
+            <div
+              style={{
+                fontSize: "1rem",
+                color: "var(--color-text)",
+                marginTop: "0.5rem",
+                lineHeight: 1.4,
+              }}
+            >
+              {item.reason}
+            </div>
+            {onReview && (
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReview();
+                }}
+                style={{
+                  color: "var(--color-primary)",
+                  cursor: "pointer",
+                  fontSize: "0.75rem",
+                  marginTop: "0.375rem",
+                }}
+              >
+                Review
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

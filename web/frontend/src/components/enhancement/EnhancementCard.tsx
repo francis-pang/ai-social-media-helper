@@ -55,7 +55,7 @@ export function EnhancementCard({
       onClick={onClick}
       style={{
         background: isSelected
-          ? "rgba(108, 140, 255, 0.08)"
+          ? "var(--color-primary-light)"
           : "var(--color-bg)",
         borderRadius: "var(--radius)",
         overflow: "hidden",
@@ -117,8 +117,8 @@ export function EnhancementCard({
               borderRadius: "4px",
               background:
                 item.analysis.professionalScore >= 8.5
-                  ? "rgba(81, 207, 102, 0.9)"
-                  : "rgba(255, 193, 7, 0.9)",
+                  ? "rgba(34, 197, 94, 0.9)"
+                  : "rgba(245, 158, 11, 0.9)",
               color: "#fff",
             }}
           >
@@ -135,7 +135,7 @@ export function EnhancementCard({
               fontSize: "0.75rem",
               padding: "0.125rem 0.375rem",
               borderRadius: "4px",
-              background: "rgba(108, 140, 255, 0.85)",
+              background: "rgba(124, 58, 237, 0.85)",
               color: "#fff",
               fontWeight: 600,
             }}

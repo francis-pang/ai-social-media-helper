@@ -45,7 +45,7 @@ export function GroupIcon({
         maxWidth: "10rem",
         padding: "0.5rem",
         background: isSelected
-          ? "rgba(108, 140, 255, 0.12)"
+          ? "rgba(124, 58, 237, 0.12)"
           : "var(--color-bg)",
         border: isOver
           ? "2px dashed var(--color-primary)"
@@ -195,7 +195,7 @@ export function NewGroupButton({
         maxWidth: "10rem",
         padding: "0.5rem",
         background: isOver
-          ? "rgba(108, 140, 255, 0.08)"
+          ? "var(--color-primary-light)"
           : "var(--color-bg)",
         border: isOver
           ? "2px dashed var(--color-primary)"

@@ -282,7 +282,7 @@ function ExcludedCard({
     <div
       style={{
         background: isOverride
-          ? "rgba(255, 107, 107, 0.08)"
+          ? "rgba(239, 68, 68, 0.08)"
           : "var(--color-bg)",
         borderRadius: "var(--radius)",
         overflow: "hidden",
@@ -333,7 +333,7 @@ function ExcludedCard({
             fontSize: "0.75rem",
             padding: "0.125rem 0.375rem",
             borderRadius: "4px",
-            background: "rgba(255, 107, 107, 0.85)",
+            background: "rgba(239, 68, 68, 0.85)",
             color: "#fff",
             fontWeight: 600,
           }}

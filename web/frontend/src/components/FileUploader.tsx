@@ -6,7 +6,6 @@ import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentSte
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
 import { formatBytes, formatSpeed } from "../utils/format";
-import { badgeClass, badgeLabel } from "../utils/statusBadge";
 import type { FileProcessingStatus } from "../types/api";
 
 /** Media file MIME types accepted by the uploader. */
@@ -230,10 +229,6 @@ function updateFile(filename: string, updates: Partial<UploadedFile>) {
   );
 }
 
-function removeFile(filename: string) {
-  files.value = files.value.filter((f) => f.name !== filename);
-}
-
 async function initTriageSession(sessionId: string, fileCount: number) {
   try {
     const res = await initTriage({ sessionId, expectedFileCount: fileCount });
@@ -453,178 +448,152 @@ async function proceedToTriage() {
 }
 
 // ---------------------------------------------------------------------------
-// Status group section component (DDR-063)
+// Thumbnail card for grid view (Phase 3a)
 // ---------------------------------------------------------------------------
 
-interface StatusGroupProps {
-  label: string;
-  count: number;
-  color: string;
-  defaultCollapsed?: boolean;
-  children: preact.ComponentChildren;
-}
-
-function StatusGroup({ label, count, color, defaultCollapsed, children }: StatusGroupProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed ?? false);
-
-  if (count === 0) return null;
-
-  return (
-    <div style={{ marginBottom: "0.75rem" }}>
-      <button
-        class="outline"
-        onClick={() => setCollapsed(!collapsed)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.5rem",
-          width: "100%",
-          padding: "0.375rem 0.75rem",
-          fontSize: "0.875rem",
-          fontWeight: 600,
-          color,
-          border: "none",
-          background: "transparent",
-          cursor: "pointer",
-          minHeight: "unset",
-        }}
-      >
-        <span style={{ fontSize: "0.75rem", transition: "transform 0.15s", transform: collapsed ? "rotate(-90deg)" : "rotate(0)" }}>
-          ▼
-        </span>
-        {label} ({count})
-      </button>
-      {!collapsed && <div style={{ marginTop: "0.25rem" }}>{children}</div>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// File row for grouped view (DDR-063)
-// ---------------------------------------------------------------------------
-
-function FileRow({ f, onRemove }: { f: FileWithLifecycle; onRemove: () => void }) {
-  return (
-    <div class="file-row" key={f.name}>
-      {/* Thumbnail or file icon */}
-      {f.thumbnailUrl ? (
-        <img
-          src={f.thumbnailUrl}
-          alt=""
-          loading="lazy"
-          style={{
-            width: "2rem",
-            height: "2rem",
-            objectFit: "cover",
-            borderRadius: "4px",
-            flexShrink: 0,
-          }}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-        />
-      ) : (
-        <span
-          style={{
-            fontSize: "1.125rem",
-            flexShrink: 0,
-            width: "2rem",
-            textAlign: "center",
-            opacity: 0.6,
-          }}
-        >
-          {"\u{1F4C4}"}
-        </span>
-      )}
-
-      {/* Filename */}
-      <span
-        style={{
-          flex: 1,
-          fontSize: "0.875rem",
-          fontFamily: "var(--font-mono)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-        title={f.name}
-      >
-        {f.name}
-      </span>
-
-      {/* Size / upload progress */}
-      <span
-        style={{
-          fontSize: "0.75rem",
-          color: "var(--color-text-secondary)",
-          flexShrink: 0,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {f.lifecycleStatus === "uploading"
-          ? `${formatBytes(f.loaded)} / ${formatBytes(f.size)}`
-          : formatBytes(f.size)}
-      </span>
-
-      {/* Status badge */}
-      <span class={lifecycleBadgeClass(f.lifecycleStatus)}
-        style={f.lifecycleStatus === "uploading" ? {
-          background: `linear-gradient(to right, rgba(108, 140, 255, 0.3) ${f.uploadProgress}%, rgba(108, 140, 255, 0.1) ${f.uploadProgress}%)`,
-        } : undefined}
-        title={f.error || undefined}
-      >
-        {lifecycleBadgeLabel(f)}
-      </span>
-
-      {/* Converted indicator */}
-      {f.converted && (
-        <span class="status-badge status-badge--processing" style={{ fontSize: "0.75rem" }}>
-          converted
-        </span>
-      )}
-
-      {/* Remove button */}
-      <button
-        class="btn-remove"
-        onClick={onRemove}
-        disabled={f.lifecycleStatus === "uploading"}
-        title="Remove file"
-      >
-        ✕
-      </button>
-
-      {/* Per-file progress bar */}
-      {f.lifecycleStatus === "uploading" && f.uploadProgress > 0 && (
-        <div
-          class="file-progress-bar"
-          style={{ width: `${f.uploadProgress}%` }}
-        />
-      )}
-    </div>
-  );
-}
-
-function lifecycleBadgeClass(status: FileLifecycleStatus): string {
+function statusDotColor(status: FileLifecycleStatus): string {
   switch (status) {
-    case "uploading": return "status-badge status-badge--uploading";
-    case "processing": return "status-badge status-badge--processing";
-    case "ready": return "status-badge status-badge--done";
-    case "error": return "status-badge status-badge--error";
+    case "uploading": return "var(--color-primary)";
+    case "processing": return "var(--color-warning)";
+    case "ready": return "var(--color-success)";
+    case "error": return "var(--color-danger)";
   }
 }
 
-function lifecycleBadgeLabel(f: FileWithLifecycle): string {
-  switch (f.lifecycleStatus) {
-    case "uploading": return `Uploading ${f.uploadProgress}%`;
-    case "processing": return "Processing";
-    case "ready": return "Ready";
-    case "error": return "Failed";
+function statusCardLabel(status: FileLifecycleStatus): string {
+  switch (status) {
+    case "uploading": return "UPLOADING\u2026";
+    case "processing": return "PROCESSING\u2026";
+    case "ready": return "READY";
+    case "error": return "ERROR";
   }
+}
+
+function FileCard({ f }: { f: FileWithLifecycle }) {
+  const dotColor = statusDotColor(f.lifecycleStatus);
+
+  return (
+    <div style={{
+      background: "var(--color-surface)",
+      border: "1px solid var(--color-border)",
+      borderRadius: "var(--radius)",
+      overflow: "hidden",
+      transition: "box-shadow 0.15s",
+    }}>
+      {/* Aspect-ratio thumbnail area */}
+      <div style={{
+        aspectRatio: "1",
+        background: "var(--color-surface-alt)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        position: "relative",
+        overflow: "hidden",
+      }}>
+        {f.thumbnailUrl ? (
+          <img
+            src={f.thumbnailUrl}
+            alt=""
+            loading="lazy"
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          />
+        ) : (
+          <span style={{ fontSize: "2rem", opacity: 0.35 }}>{"\u{1F4C4}"}</span>
+        )}
+        {/* Status dot */}
+        <span style={{
+          position: "absolute",
+          top: "0.5rem",
+          right: "0.5rem",
+          width: "0.625rem",
+          height: "0.625rem",
+          borderRadius: "50%",
+          background: dotColor,
+          boxShadow: "0 0 0 2px var(--color-surface)",
+          animation: f.lifecycleStatus === "uploading" ? "pulse-dot 1.5s ease-in-out infinite" : "none",
+        }} />
+      </div>
+
+      {/* File info below thumbnail */}
+      <div style={{ padding: "0.5rem 0.625rem" }}>
+        <div
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.75rem",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "var(--color-text)",
+          }}
+          title={f.name}
+        >
+          {f.name}
+        </div>
+        <div style={{
+          fontSize: "0.6875rem",
+          color: "var(--color-text-secondary)",
+          marginTop: "0.125rem",
+        }}>
+          {f.lifecycleStatus === "uploading"
+            ? `${formatBytes(f.loaded)} / ${formatBytes(f.size)}`
+            : formatBytes(f.size)}
+        </div>
+        <div style={{
+          fontSize: "0.625rem",
+          fontWeight: 600,
+          letterSpacing: "0.05em",
+          color: dotColor,
+          marginTop: "0.25rem",
+        }}>
+          {statusCardLabel(f.lifecycleStatus)}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Main component
+// Sidebar status row (Phase 3a)
+// ---------------------------------------------------------------------------
+
+function StatusRow({ label, count, color }: { label: string; count: number; color: string }) {
+  if (count === 0) return null;
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "0.375rem 0",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <span style={{
+          width: "0.5rem",
+          height: "0.5rem",
+          borderRadius: "50%",
+          background: color,
+          flexShrink: 0,
+        }} />
+        <span style={{ fontSize: "0.875rem", color: "var(--color-text)" }}>{label}</span>
+      </div>
+      <span style={{
+        fontSize: "0.875rem",
+        fontWeight: 600,
+        fontVariantNumeric: "tabular-nums",
+      }}>
+        {count}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component (Phase 3a: 2-column layout redesign)
 // ---------------------------------------------------------------------------
 
 export function FileUploader() {
+  const [dragActive, setDragActive] = useState(false);
+
   const allDone = files.value.length > 0 && files.value.every(
     (f) => f.status === "done" || f.status === "error",
   );
@@ -646,366 +615,339 @@ export function FileUploader() {
   const ready = lifecycle.filter((f) => f.lifecycleStatus === "ready");
   const errored = lifecycle.filter((f) => f.lifecycleStatus === "error");
 
-  const hasServerStatuses = serverFileStatuses.value.length > 0;
+  const totalSize = files.value.reduce((sum, f) => sum + f.size, 0);
+  const filesRemaining = totalFiles - ready.length;
+  const hasFiles = files.value.length > 0;
+
+  function onDragEnter(e: DragEvent) {
+    e.preventDefault();
+    setDragActive(true);
+  }
+
+  function onDragLeave(e: DragEvent) {
+    e.preventDefault();
+    const ct = e.currentTarget as HTMLElement;
+    const rt = e.relatedTarget as Node | null;
+    if (!rt || !ct.contains(rt)) {
+      setDragActive(false);
+    }
+  }
+
+  function onDropWrapped(e: DragEvent) {
+    setDragActive(false);
+    handleDrop(e);
+  }
 
   return (
-    <div class="card">
-      <p
-        style={{
-          color: "var(--color-text-secondary)",
-          fontSize: "0.875rem",
-          marginBottom: "1.5rem",
-        }}
-      >
-        Upload media files for AI triage analysis. Drag and drop or use the
-        button below.
-      </p>
-
-      {/* Drop zone (DDR-058: compact secondary when files exist) */}
-      <div
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        style={{
-          border: "2px dashed var(--color-border)",
-          borderRadius: "var(--radius)",
-          padding: files.value.length > 0 ? "1rem" : "2rem",
-          textAlign: "center",
-          marginBottom: "1.5rem",
-          cursor: "pointer",
-          transition: "border-color 0.2s, padding 0.2s",
-        }}
-        onClick={() =>
-          (document.getElementById("file-input") as HTMLInputElement)?.click()
-        }
-      >
-        <input
-          id="file-input"
-          type="file"
-          multiple
-          accept={ACCEPT}
-          onChange={handleFileSelect}
-          style={{ display: "none" }}
-        />
-        <div
-          style={{
-            fontSize: files.value.length > 0 ? "0.875rem" : "1.25rem",
-            marginBottom: files.value.length > 0 ? "0" : "0.5rem",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {files.value.length > 0 ? "Drop more files here" : "Drop files here"}
-        </div>
-        {files.value.length === 0 && (
-          <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
-            or click to browse — JPEG, PNG, GIF, WebP, HEIC, MP4, MOV
-          </div>
-        )}
-      </div>
-
-      {/* Summary counts (DDR-063) */}
-      {files.value.length > 0 && hasServerStatuses && (
-        <div
-          style={{
-            display: "flex",
-            gap: "1rem",
-            flexWrap: "wrap",
-            marginBottom: "1rem",
-            fontSize: "0.875rem",
-          }}
-        >
-          {uploading.length > 0 && (
-            <span style={{ color: "var(--color-primary)" }}>
-              {uploading.length} uploading
-            </span>
-          )}
-          {processing.length > 0 && (
-            <span style={{ color: "var(--color-primary)" }}>
-              {processing.length} processing
-            </span>
-          )}
-          {ready.length > 0 && (
-            <span style={{ color: "var(--color-success)" }}>
-              {ready.length} ready
-            </span>
-          )}
-          {errored.length > 0 && (
-            <span style={{ color: "var(--color-danger)" }}>
-              {errored.length} error
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* DDR-063: Grouped file list when server statuses are available */}
-      {files.value.length > 0 && hasServerStatuses && (
-        <div style={{ marginBottom: "1rem" }}>
-          <StatusGroup label="Uploading" count={uploading.length} color="var(--color-primary)">
-            {uploading.map((f) => (
-              <FileRow key={f.name} f={f} onRemove={() => removeFile(f.name)} />
-            ))}
-          </StatusGroup>
-
-          <StatusGroup label="Processing" count={processing.length} color="var(--color-primary)">
-            {processing.map((f) => (
-              <FileRow key={f.name} f={f} onRemove={() => removeFile(f.name)} />
-            ))}
-          </StatusGroup>
-
-          <StatusGroup label="Ready" count={ready.length} color="var(--color-success)" defaultCollapsed={ready.length > 10}>
-            {ready.map((f) => (
-              <FileRow key={f.name} f={f} onRemove={() => removeFile(f.name)} />
-            ))}
-          </StatusGroup>
-
-          <StatusGroup label="Error" count={errored.length} color="var(--color-danger)">
-            {errored.map((f) => (
-              <FileRow key={f.name} f={f} onRemove={() => removeFile(f.name)} />
-            ))}
-          </StatusGroup>
-        </div>
-      )}
-
-      {/* Flat file list (DDR-058: before server statuses are available) */}
-      {files.value.length > 0 && !hasServerStatuses && (
-        <div class="file-list">
-          {files.value.map((f) => (
-            <div class="file-row" key={f.name}>
-              <span
-                style={{
-                  fontSize: "1.125rem",
-                  flexShrink: 0,
-                  width: "1.5rem",
-                  textAlign: "center",
-                  opacity: 0.6,
-                }}
-              >
-                {"\u{1F4C4}"}
-              </span>
-
-              <span
-                style={{
-                  flex: 1,
-                  fontSize: "0.875rem",
-                  fontFamily: "var(--font-mono)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-                title={f.name}
-              >
-                {f.name}
-              </span>
-
-              <span
-                style={{
-                  fontSize: "0.75rem",
-                  color: "var(--color-text-secondary)",
-                  flexShrink: 0,
-                  fontVariantNumeric: "tabular-nums",
-                }}
-              >
-                {f.status === "uploading"
-                  ? `${formatBytes(f.loaded)} / ${formatBytes(f.size)}`
-                  : formatBytes(f.size)}
-              </span>
-
-              <span
-                class={badgeClass(f.status)}
-                style={f.status === "uploading" ? {
-                  background: `linear-gradient(to right, rgba(108, 140, 255, 0.3) ${f.progress}%, rgba(108, 140, 255, 0.1) ${f.progress}%)`,
-                } : undefined}
-                title={f.status === "error" ? (f.error || "Upload failed") : undefined}
-              >
-                {badgeLabel(f.status, f.progress)}
-              </span>
-
-              <button
-                class="btn-remove"
-                onClick={() => removeFile(f.name)}
-                disabled={f.status === "uploading"}
-                title="Remove file"
-              >
-                ✕
-              </button>
-
-              {f.status === "uploading" && (
-                <div
-                  class="file-progress-bar"
-                  style={{ width: `${f.progress}%` }}
-                />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Overall upload progress bar */}
-      {anyUploading && (
-        <div style={{ marginBottom: "1rem" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              marginBottom: "0.375rem",
-            }}
-          >
-            <span>
-              Uploading {doneCount} of {totalFiles} files...
-            </span>
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
-              {uploadSpeed.value > 0 && (
-                <span style={{ marginRight: "0.5rem" }}>
-                  {formatSpeed(uploadSpeed.value)}
-                </span>
-              )}
-              {overallProgress}%
-            </span>
-          </div>
-          <div
-            style={{
-              height: "4px",
-              background: "var(--color-border)",
-              borderRadius: "2px",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                height: "100%",
-                width: `${overallProgress}%`,
-                background: "var(--color-primary)",
-                transition: "width 0.3s ease",
-                borderRadius: "2px",
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Server-side processing progress (DDR-063) */}
-      {!anyUploading && allDone && serverExpectedFileCount.value > 0 &&
-        serverProcessedCount.value < serverExpectedFileCount.value && (
-        <div style={{ marginBottom: "1rem" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: "0.75rem",
-              color: "var(--color-text-secondary)",
-              marginBottom: "0.375rem",
-            }}
-          >
-            <span>
-              Processing {serverProcessedCount.value} of {serverExpectedFileCount.value} files...
-            </span>
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
-              {serverExpectedFileCount.value > 0
-                ? Math.round((serverProcessedCount.value / serverExpectedFileCount.value) * 100)
-                : 0}%
-            </span>
-          </div>
-          <div
-            style={{
-              height: "4px",
-              background: "var(--color-border)",
-              borderRadius: "2px",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                height: "100%",
-                width: `${serverExpectedFileCount.value > 0
-                  ? (serverProcessedCount.value / serverExpectedFileCount.value) * 100
-                  : 0}%`,
-                background: "var(--color-success)",
-                transition: "width 0.3s ease",
-                borderRadius: "2px",
-              }}
-            />
-          </div>
-        </div>
-      )}
+    <>
+      <input
+        id="file-input"
+        type="file"
+        multiple
+        accept={ACCEPT}
+        onChange={handleFileSelect}
+        style={{ display: "none" }}
+      />
+      <style>{`@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
 
       {error.value && (
-        <div
-          style={{
-            color: "var(--color-danger)",
-            marginBottom: "1rem",
-            fontSize: "0.875rem",
-          }}
-        >
+        <div style={{
+          color: "var(--color-danger)",
+          marginBottom: "1rem",
+          fontSize: "0.875rem",
+          padding: "0.75rem 1rem",
+          background: "var(--color-primary-light)",
+          borderRadius: "var(--radius)",
+          borderLeft: "3px solid var(--color-danger)",
+        }}>
           {error.value}
         </div>
       )}
 
-      {/* Empty state */}
-      {files.value.length === 0 && (
-        <p
-          style={{
-            color: "var(--color-text-secondary)",
-            padding: "2rem 1rem",
-            textAlign: "center",
-            fontSize: "0.875rem",
-          }}
-        >
-          No files selected yet. Drag and drop media files or click the drop zone above.
-        </p>
-      )}
-
-      {/* Actions (DDR-058: add-more at left, primary actions at right) */}
-      {files.value.length > 0 && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: "0.75rem",
-          }}
-        >
-          <button
-            class="btn-add-more"
-            onClick={() =>
-              (document.getElementById("file-input") as HTMLInputElement)?.click()
-            }
+      {!hasFiles ? (
+        /* ── Empty state: drop zone + tips sidebar ── */
+        <div class="layout-sidebar">
+          <div
+            class={`drop-zone${dragActive ? " drop-zone--active" : ""}`}
+            onDrop={onDropWrapped}
+            onDragOver={handleDragOver}
+            onDragEnter={onDragEnter}
+            onDragLeave={onDragLeave}
           >
-            + Add more Files
-          </button>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <span
-              style={{
+            <span class="drop-zone__icon">{"\u2601\uFE0F"}</span>
+            <span class="drop-zone__title">Drop your media files here</span>
+            <span class="drop-zone__subtitle">
+              Supports JPEG, PNG, MP4, MOV &bull; Max 500MB per file
+            </span>
+            <button
+              class="primary"
+              onClick={(e) => {
+                e.stopPropagation();
+                (document.getElementById("file-input") as HTMLInputElement)?.click();
+              }}
+              style={{ marginTop: "1rem" }}
+            >
+              Click to Browse
+            </button>
+            <p style={{
+              fontSize: "0.75rem",
+              color: "var(--color-text-secondary)",
+              marginTop: "1rem",
+              marginBottom: 0,
+            }}>
+              Files are processed securely and not stored permanently
+            </p>
+          </div>
+
+          <div class="sidebar-panel">
+            <h3>Tips &amp; Guidance</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+                <span style={{ fontSize: "1.25rem", flexShrink: 0 }}>{"\uD83D\uDCF8"}</span>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.125rem" }}>Blurry Photos</div>
+                  <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
+                    AI detects motion blur, focus issues, and camera shake
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+                <span style={{ fontSize: "1.25rem", flexShrink: 0 }}>{"\uD83C\uDF11"}</span>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.125rem" }}>Dark / Underexposed</div>
+                  <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
+                    Identifies photos too dark to recover even with editing
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+                <span style={{ fontSize: "1.25rem", flexShrink: 0 }}>{"\uD83D\uDCF1"}</span>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.125rem" }}>Burst &amp; Duplicates</div>
+                  <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
+                    Finds near-identical shots from burst mode or rapid shooting
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+                <span style={{ fontSize: "1.25rem", flexShrink: 0 }}>{"\uD83D\uDCA1"}</span>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.125rem" }}>Pro Tip</div>
+                  <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
+                    Upload entire folders — the AI works best with full context to identify the best shots
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* ── In-flight state: file grid + pipeline sidebar ── */
+        <div class="layout-sidebar">
+          <div
+            onDrop={onDropWrapped}
+            onDragOver={handleDragOver}
+            onDragEnter={onDragEnter}
+            onDragLeave={onDragLeave}
+          >
+            {/* Header row */}
+            <div style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "1rem",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                <h3 style={{ margin: 0, fontSize: "1.125rem" }}>In-Flight Assets</h3>
+                <span
+                  class="status-badge"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  {totalFiles}
+                </span>
+              </div>
+              <button
+                class="outline"
+                onClick={() =>
+                  (document.getElementById("file-input") as HTMLInputElement)?.click()
+                }
+                style={{ fontSize: "0.875rem" }}
+              >
+                + Add More
+              </button>
+            </div>
+
+            {/* Thumbnail card grid */}
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
+              gap: "0.75rem",
+              marginBottom: "1rem",
+            }}>
+              {lifecycle.map((f) => (
+                <FileCard key={f.name} f={f} />
+              ))}
+            </div>
+
+            {/* Overall upload progress bar */}
+            {anyUploading && (
+              <div style={{ marginBottom: "1rem" }}>
+                <div style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                  marginBottom: "0.375rem",
+                }}>
+                  <span>
+                    Uploading {doneCount} of {totalFiles} files…
+                  </span>
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {uploadSpeed.value > 0 && (
+                      <span style={{ marginRight: "0.5rem" }}>
+                        {formatSpeed(uploadSpeed.value)}
+                      </span>
+                    )}
+                    {overallProgress}%
+                  </span>
+                </div>
+                <div style={{
+                  height: "4px",
+                  background: "var(--color-border)",
+                  borderRadius: "2px",
+                  overflow: "hidden",
+                }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${overallProgress}%`,
+                    background: "var(--color-primary)",
+                    transition: "width 0.3s ease",
+                    borderRadius: "2px",
+                  }} />
+                </div>
+              </div>
+            )}
+
+            {/* Server-side processing progress (DDR-063) */}
+            {!anyUploading && allDone && serverExpectedFileCount.value > 0 &&
+              serverProcessedCount.value < serverExpectedFileCount.value && (
+              <div style={{ marginBottom: "1rem" }}>
+                <div style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                  marginBottom: "0.375rem",
+                }}>
+                  <span>
+                    Processing {serverProcessedCount.value} of {serverExpectedFileCount.value} files…
+                  </span>
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {serverExpectedFileCount.value > 0
+                      ? Math.round((serverProcessedCount.value / serverExpectedFileCount.value) * 100)
+                      : 0}%
+                  </span>
+                </div>
+                <div style={{
+                  height: "4px",
+                  background: "var(--color-border)",
+                  borderRadius: "2px",
+                  overflow: "hidden",
+                }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${serverExpectedFileCount.value > 0
+                      ? (serverProcessedCount.value / serverExpectedFileCount.value) * 100
+                      : 0}%`,
+                    background: "var(--color-success)",
+                    transition: "width 0.3s ease",
+                    borderRadius: "2px",
+                  }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Right sidebar ── */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            {/* Pipeline Summary */}
+            <div class="sidebar-panel">
+              <h3>Pipeline Summary</h3>
+              <StatusRow label="Uploading" count={uploading.length} color="var(--color-primary)" />
+              <StatusRow label="Processing" count={processing.length} color="var(--color-warning)" />
+              <StatusRow label="Ready" count={ready.length} color="var(--color-success)" />
+              <StatusRow label="Error" count={errored.length} color="var(--color-danger)" />
+              {uploading.length === 0 && processing.length === 0 && ready.length === 0 && errored.length === 0 && (
+                <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)", padding: "0.25rem 0" }}>
+                  Waiting for status…
+                </div>
+              )}
+            </div>
+
+            {/* Batch Statistics */}
+            <div class="sidebar-panel">
+              <h3>Batch Statistics</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem", fontSize: "0.875rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--color-text-secondary)" }}>Total files</span>
+                  <span style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{totalFiles}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--color-text-secondary)" }}>Total size</span>
+                  <span style={{ fontWeight: 600 }}>{formatBytes(totalSize)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--color-text-secondary)" }}>Files remaining</span>
+                  <span style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{filesRemaining}</span>
+                </div>
+                {anyUploading && uploadSpeed.value > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--color-text-secondary)" }}>Upload speed</span>
+                    <span style={{ fontWeight: 600 }}>{formatSpeed(uploadSpeed.value)}</span>
+                  </div>
+                )}
+                {anyUploading && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--color-text-secondary)" }}>ETA</span>
+                    <span style={{ fontWeight: 600, color: "var(--color-text-secondary)" }}>—</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Triage status */}
+            {triageInitialized.value && (
+              <div style={{
+                textAlign: "center",
                 fontSize: "0.875rem",
                 color: "var(--color-text-secondary)",
-              }}
-            >
-              {doneCount}/{totalFiles} uploaded
-            </span>
+                padding: "0.375rem 0",
+              }}>
+                Triage will start automatically
+              </div>
+            )}
+            {!triageInitialized.value && allDone && doneCount > 0 && (
+              <button class="primary" onClick={proceedToTriage} style={{ width: "100%" }}>
+                Continue to Triage
+              </button>
+            )}
+
+            {/* Cancel / Clear */}
             <button
               class="outline"
               onClick={clearAll}
               disabled={anyUploading}
+              style={{
+                width: "100%",
+                color: "var(--color-danger)",
+                borderColor: "var(--color-danger)",
+              }}
             >
-              Clear all
+              Cancel All Uploads
             </button>
-            {triageInitialized.value ? (
-              <span style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)" }}>
-                Triage will start automatically
-              </span>
-            ) : (
-              <button
-                class="primary"
-                onClick={proceedToTriage}
-                disabled={!allDone || doneCount === 0}
-              >
-                Continue to Triage
-              </button>
-            )}
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -265,7 +265,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
                   fontSize: "0.75rem",
                   padding: "0.125rem 0.375rem",
                   borderRadius: "3px",
-                  background: "rgba(108, 200, 108, 0.15)",
+                  background: "rgba(34, 197, 94, 0.15)",
                   color: "var(--color-success)",
                   fontWeight: 600,
                 }}
@@ -417,7 +417,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
               style={{
                 fontSize: "0.75rem",
                 padding: "0.125rem 0.375rem",
-                background: "rgba(108, 140, 255, 0.1)",
+                background: "var(--color-primary-light)",
                 color: "var(--color-primary)",
                 borderRadius: "3px",
               }}
@@ -444,7 +444,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
         <div
           style={{
             padding: "0.75rem",
-            background: "rgba(108, 140, 255, 0.06)",
+            background: "var(--color-primary-light)",
             borderRadius: "var(--radius)",
             marginBottom: "0.5rem",
           }}
@@ -514,7 +514,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
         <div
           style={{
             padding: "0.75rem",
-            background: "rgba(108, 200, 108, 0.06)",
+            background: "rgba(34, 197, 94, 0.06)",
             borderRadius: "var(--radius)",
             display: "flex",
             alignItems: "center",
@@ -553,7 +553,7 @@ function GroupPublishCard({ group }: { group: PostGroup }) {
         <div
           style={{
             padding: "0.75rem",
-            background: "rgba(255, 107, 107, 0.06)",
+            background: "rgba(239, 68, 68, 0.06)",
             borderRadius: "var(--radius)",
             marginBottom: "0.5rem",
           }}

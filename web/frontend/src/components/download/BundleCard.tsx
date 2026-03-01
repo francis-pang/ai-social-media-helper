@@ -38,8 +38,8 @@ export function BundleCard({ bundle }: { bundle: DownloadBundle }) {
               borderRadius: "3px",
               background:
                 bundle.type === "images"
-                  ? "rgba(108, 200, 108, 0.15)"
-                  : "rgba(108, 140, 255, 0.15)",
+                  ? "rgba(34, 197, 94, 0.15)"
+                  : "rgba(124, 58, 237, 0.15)",
               color:
                 bundle.type === "images"
                   ? "var(--color-success)"

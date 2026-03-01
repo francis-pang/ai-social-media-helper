@@ -273,9 +273,41 @@ export function App() {
   if (isAuthRequired() && !isAuthenticated.value) {
     return (
       <div>
-        <header style={{ marginBottom: "2rem" }}>
-          <h1>{appTitle.value}</h1>
-        </header>
+        <nav
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            background: "var(--color-surface)",
+            borderBottom: "1px solid var(--color-border)",
+            padding: "0.75rem 1.5rem",
+            marginBottom: "2rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "28px",
+                height: "28px",
+                borderRadius: "50%",
+                background: "var(--color-primary)",
+                color: "#fff",
+                fontSize: "14px",
+                lineHeight: 1,
+              }}
+            >
+              ⬡
+            </span>
+            <span style={{ fontWeight: 700, color: "var(--color-text)", fontSize: "1rem" }}>
+              {appTitle.value}
+            </span>
+          </div>
+          <div />
+          <div />
+        </nav>
         <LoginForm />
       </div>
     );
@@ -283,34 +315,61 @@ export function App() {
 
   return (
     <div>
-      <header
+      <nav
         style={{
-          marginBottom: isSelectionStep.value ? "1rem" : "2rem",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          background: "var(--color-surface)",
+          borderBottom: "1px solid var(--color-border)",
+          padding: "0.75rem 1.5rem",
+          marginBottom: isSelectionStep.value ? "1rem" : "1.5rem",
         }}
       >
-        <div>
-          <h1
-            onClick={isCloudMode && !isOnLanding.value ? navigateToLanding : undefined}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "28px",
+              height: "28px",
+              borderRadius: "50%",
+              background: "var(--color-primary)",
+              color: "#fff",
+              fontSize: "14px",
+              lineHeight: 1,
+            }}
+          >
+            ⬡
+          </span>
+          <span
+            style={{
+              fontWeight: 700,
+              color: "var(--color-text)",
+              fontSize: "1rem",
               cursor: isCloudMode && !isOnLanding.value ? "pointer" : "default",
             }}
-            title={isCloudMode && !isOnLanding.value ? "Back to Home" : undefined}
+            onClick={isCloudMode && !isOnLanding.value ? navigateToLanding : undefined}
           >
             {appTitle.value}
-          </h1>
-          <p style={{ color: "var(--color-text-secondary)" }}>
-            {stepTitle.value}
-          </p>
+          </span>
+          {activeWorkflow.value === "triage" && (
+            <span style={{ color: "var(--color-text-secondary)", fontSize: "0.875rem" }}>
+              › {stepTitle.value}
+            </span>
+          )}
         </div>
+        <div class="navbar-progress" />
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          {/* Back to Home button — cloud mode, not on landing (DDR-042) */}
           {isCloudMode && !isOnLanding.value && (
             <button
               class="outline text-sm"
               onClick={navigateToLanding}
+              style={{
+                color: "var(--color-primary)",
+                borderColor: "var(--color-primary)",
+              }}
             >
               Home
             </button>
@@ -319,12 +378,16 @@ export function App() {
             <button
               class="outline text-sm"
               onClick={() => signOut()}
+              style={{
+                color: "var(--color-primary)",
+                borderColor: "var(--color-primary)",
+              }}
             >
               Sign Out
             </button>
           )}
         </div>
-      </header>
+      </nav>
 
       {/* Landing page — cloud mode workflow chooser (DDR-042) */}
       {currentStep.value === "landing" && isCloudMode && <LandingPage />}
@@ -333,15 +396,23 @@ export function App() {
       {isCloudMode && isSelectionStep.value && <StepNavigator />}
 
       {/* Triage flow — local mode */}
-      {currentStep.value === "browse" && !isCloudMode && <FileBrowser />}
-      {currentStep.value === "confirm-files" && <SelectedFiles />}
+      {currentStep.value === "browse" && !isCloudMode && (
+        <div class="layout-sidebar"><FileBrowser /></div>
+      )}
+      {currentStep.value === "confirm-files" && (
+        <div class="layout-sidebar"><SelectedFiles /></div>
+      )}
 
       {/* Triage flow — cloud triage upload (DDR-042) */}
-      {currentStep.value === "triage-upload" && isCloudMode && <FileUploader />}
+      {currentStep.value === "triage-upload" && isCloudMode && (
+        <div class="layout-sidebar"><FileUploader /></div>
+      )}
 
       {/* Triage results — both local and cloud triage */}
       {(currentStep.value === "processing" ||
-        currentStep.value === "results") && <TriageView />}
+        currentStep.value === "results") && (
+        <div class="layout-sidebar"><TriageView /></div>
+      )}
 
       {/* Selection flow — cloud mode (DDR-029, DDR-030, DDR-031) */}
       {currentStep.value === "upload" && isCloudMode && <MediaUploader />}
@@ -370,6 +441,23 @@ export function App() {
 
       {/* Global overlay media player (DDR-038) */}
       <MediaPlayer />
+
+      <footer
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          padding: "1rem 0",
+          borderTop: "1px solid var(--color-border)",
+          color: "var(--color-text-secondary)",
+          fontSize: "0.75rem",
+          marginTop: "2rem",
+        }}
+      >
+        <span>v0.1.0</span>
+        <span>
+          <span style={{ color: "var(--color-success)" }}>●</span> System Operational
+        </span>
+      </footer>
     </div>
   );
 }

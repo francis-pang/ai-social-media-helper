@@ -350,7 +350,7 @@ function HashtagList({
             gap: "0.25rem",
             padding: "0.25rem 0.5rem",
             fontSize: "0.75rem",
-            background: "rgba(108, 140, 255, 0.1)",
+            background: "var(--color-primary-light)",
             color: "var(--color-primary)",
             borderRadius: "var(--radius)",
             cursor: "pointer",

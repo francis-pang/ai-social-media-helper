@@ -153,7 +153,7 @@ export function MediaPlayer() {
           style={{
             fontSize: "0.875rem",
             fontFamily: "var(--font-mono)",
-            color: "#e4e6f0",
+            color: "#ffffff",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -178,7 +178,7 @@ export function MediaPlayer() {
             style={{
               fontSize: "0.875rem",
               padding: "0.5rem 1rem",
-              color: "#e4e6f0",
+              color: "#ffffff",
               borderColor: "rgba(255, 255, 255, 0.2)",
             }}
           >
@@ -193,7 +193,7 @@ export function MediaPlayer() {
             style={{
               fontSize: "0.875rem",
               padding: "0.5rem 0.875rem",
-              color: "#e4e6f0",
+              color: "#ffffff",
               borderColor: "rgba(255, 255, 255, 0.2)",
               fontWeight: 700,
               lineHeight: 1,
@@ -216,7 +216,7 @@ export function MediaPlayer() {
       >
         {/* Loading state */}
         {loading.value && (
-          <div style={{ color: "#e4e6f0", fontSize: "1rem" }}>Loading...</div>
+          <div style={{ color: "#ffffff", fontSize: "1rem" }}>Loading...</div>
         )}
 
         {/* Error state */}
@@ -241,7 +241,7 @@ export function MediaPlayer() {
               }}
               style={{
                 fontSize: "0.75rem",
-                color: "#e4e6f0",
+                color: "#ffffff",
                 borderColor: "rgba(255, 255, 255, 0.2)",
               }}
             >

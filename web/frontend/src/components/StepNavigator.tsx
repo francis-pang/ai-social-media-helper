@@ -80,17 +80,17 @@ function stepPillStyle(
     case "completed":
       return {
         ...base,
-        background: "rgba(81, 207, 102, 0.12)",
-        color: "#51cf66",
-        border: "2px solid rgba(81, 207, 102, 0.25)",
+        background: "rgba(34, 197, 94, 0.08)",
+        color: "var(--color-text-secondary)",
+        border: "2px solid rgba(34, 197, 94, 0.25)",
         cursor: "pointer",
       };
     case "current":
       return {
         ...base,
-        background: "rgba(108, 140, 255, 0.15)",
-        color: "#6c8cff",
-        border: "2px solid rgba(108, 140, 255, 0.4)",
+        background: "var(--color-primary-light)",
+        color: "var(--color-text)",
+        border: "2px solid rgba(124, 58, 237, 0.3)",
         cursor: "default",
       };
     case "future":
@@ -98,7 +98,8 @@ function stepPillStyle(
         ...base,
         background: "transparent",
         color: "var(--color-text-secondary)",
-        opacity: "0.5",
+        border: "2px solid var(--color-border)",
+        opacity: "0.6",
         cursor: "default",
       };
   }
@@ -124,19 +125,20 @@ function numberBadgeStyle(
     case "completed":
       return {
         ...base,
-        background: "#51cf66",
-        color: "#0f1117",
+        background: "var(--color-success)",
+        color: "#ffffff",
       };
     case "current":
       return {
         ...base,
-        background: "#6c8cff",
+        background: "var(--color-primary)",
         color: "#ffffff",
       };
     case "future":
       return {
         ...base,
-        background: "var(--color-border)",
+        background: "transparent",
+        border: "2px solid var(--color-border)",
         color: "var(--color-text-secondary)",
       };
   }
@@ -147,7 +149,7 @@ function arrowStyle(completed: boolean): JSX.CSSProperties {
     display: "flex",
     alignItems: "center",
     padding: "0 0.25rem",
-    color: completed ? "rgba(81, 207, 102, 0.5)" : "var(--color-border)",
+    color: completed ? "var(--color-success)" : "var(--color-border)",
     fontSize: "1.125rem",
     flexShrink: "0",
     userSelect: "none",
