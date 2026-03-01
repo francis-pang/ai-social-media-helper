@@ -35,11 +35,13 @@ When `FunctionName` is present in the recorder's dimensions, `Flush()` emits **t
 
 ### 2. Split Single Dashboard Into Three Purpose-Built Dashboards
 
-| Dashboard | Name | Purpose |
-|-----------|------|---------|
-| Triage | `AiSocialMedia-Triage` | Active triage workflow — all metrics expected to have data |
-| Selection | `AiSocialMedia-Selection` | Selection/enhancement/publish — empty until those workflows run |
+
+| Dashboard      | Name                           | Purpose                                                                |
+| -------------- | ------------------------------ | ---------------------------------------------------------------------- |
+| Triage         | `AiSocialMedia-Triage`         | Active triage workflow — all metrics expected to have data             |
+| Selection      | `AiSocialMedia-Selection`      | Selection/enhancement/publish — empty until those workflows run        |
 | Infrastructure | `AiSocialMedia-Infrastructure` | Common infra — API GW, CloudFront, Lambda, DynamoDB sessions, S3, logs |
+
 
 **Rationale for split**: A single dashboard mixes active metrics (triage runs frequently) with inactive ones (selection is rarely used). Operators cannot distinguish "no traffic" from "broken metric" at a glance. Three dashboards make the health of each workflow self-evident.
 
@@ -97,12 +99,14 @@ This metric is emitted exclusively in `internal/chat/selection_media.go` (select
 
 ### Bug 9: Selection Dashboard Cache Metric Names Are Wrong
 
+
 | Dashboard widget used    | Code actually emits  | Source                   |
-|--------------------------|----------------------|--------------------------|
+| ------------------------ | -------------------- | ------------------------ |
 | `GeminiCacheHits`        | `GeminiCacheHit`     | `selection_media.go:224` |
 | `GeminiCacheMisses`      | `GeminiCacheMiss`    | `selection_media.go:226` |
 | `GeminiCacheTokensSaved` | `GeminiCachedTokens` | `selection_media.go:233` |
 | `PublishAttempts`        | *(never emitted)*    | —                        |
+
 
 **Fix**: All four corrected to actual emitted names. `PublishAttempts` widget removed.
 
@@ -112,26 +116,85 @@ Several Lambda duration and latency metrics routinely exceed 1,000 ms, producing
 
 **Fix**: `msToSeconds()` applied to all metrics that exceed 1 second in practice:
 
-| Metric | Observed range |
-|--------|---------------|
-| MediaProcess `metricDuration` | avg ~68s, max ~445s |
-| TriageProcessor `metricDuration` | avg ~17s, max ~414s |
-| `VideoCompressionMs` | 10s–450s |
-| `FileProcessingMs` | 1s–450s |
-| `GeminiApiLatencyMs` (triage + selection) | ~5s–60s |
-| Selection/Enhancement/Publish/Thumbnail `metricDuration` | 5s–minutes |
-| All-Lambda cross-comparison `metricDuration p99` | mixed, dominated by long runners |
 
-Metrics confirmed sub-second (kept in ms): `apiHandlerFn.metricDuration` (avg 136–655ms), API GW Latency, CloudFront OriginLatency, `RequestLatencyMs`, `ImageResizeMs` (~300ms), DynamoDB latencies.
+| Metric                                                   | Observed range                   |
+| -------------------------------------------------------- | -------------------------------- |
+| MediaProcess `metricDuration`                            | avg ~68s, max ~445s              |
+| TriageProcessor `metricDuration`                         | avg ~17s, max ~414s              |
+| `VideoCompressionMs`                                     | 10s–450s                         |
+| `FileProcessingMs`                                       | 1s–450s                          |
+| `GeminiApiLatencyMs` (triage + selection)                | ~5s–60s                          |
+| Selection/Enhancement/Publish/Thumbnail `metricDuration` | 5s–minutes                       |
+| All-Lambda cross-comparison `metricDuration p99`         | mixed, dominated by long runners |
+
+
+Metrics confirmed sub-second (kept in ms): API GW Latency, CloudFront OriginLatency, `RequestLatencyMs`, DynamoDB latencies.
+
+### Bug 11: Y-axis Shows "s * Milliseconds" Instead of "s"
+
+`fn.metricDuration()` and `emfMetric()` both return `Metric` objects whose `unit` is set to `Milliseconds` by CloudWatch. When wrapped in a `MathExpression` (the `msToSeconds()` helper), the CloudWatch dashboard renderer concatenates the `leftYAxis.label` string ("s") with the source metric's unit annotation, producing `s * Milliseconds`.
+
+`MathExpression` has no `unit` property in CDK, so the fix is applied to the hidden source metric before it enters the expression: call `m.with({ unit: cloudwatch.Unit.NONE })` on any `Metric` instance, which strips the unit annotation. Non-`Metric` instances (already a `MathExpression`) are passed through unchanged.
+
+**Fix**: Modified `msToSeconds()` to strip the unit from source metrics:
+
+```typescript
+const msToSeconds = (m: cloudwatch.IMetric, label: string): cloudwatch.IMetric => {
+  const id = nextId();
+  const stripped = (m instanceof cloudwatch.Metric) ? m.with({ unit: cloudwatch.Unit.NONE }) : m;
+  return new cloudwatch.MathExpression({
+    expression: `${id} / 1000`,
+    usingMetrics: { [id]: stripped },
+    label,
+    period,
+  });
+};
+```
+
+### Bug 12: Additional Unit Scaling After Screenshot Review
+
+Post-deployment screenshot inspection revealed further readability issues:
+
+| Widget | Observed value | Problem | Fix |
+|--------|---------------|---------|-----|
+| Image Resize: Latency + Ratio | 1,886–1,894 ms | Straddles ms/s boundary; inconsistent with adjacent Video Compression widget (already in `s`) | Convert to `s` via `msToSeconds()` |
+| API Handler: Duration | 3,750 ms max | `3.75k` rendered by CloudWatch — unreadable | Convert to `s` via `msToSeconds()` |
+| MediaProcess: File Sizes | 240K–344K Bytes | Raw byte values with no prefix — hard to read | Convert to KB (`m / 1024`), label `KB` |
+| Compression: Output Size | 275K–344K Bytes | Same | Convert to KB |
+| S3 Media Flow (EMF) | 868K Bytes | Same | Convert to KB |
+
+A `bytesToKB()` helper is added alongside `msToSeconds()` and `fillZero()`:
+
+```typescript
+const bytesToKB = (m: cloudwatch.IMetric, label: string): cloudwatch.IMetric => {
+  const id = nextId();
+  const stripped = (m instanceof cloudwatch.Metric) ? m.with({ unit: cloudwatch.Unit.NONE }) : m;
+  return new cloudwatch.MathExpression({
+    expression: `${id} / 1024`,
+    usingMetrics: { [id]: stripped },
+    label,
+    period,
+  });
+};
+```
+
+### Bug 13: S3 Bucket Size and Object Count Show "No Data"
+
+`AWS/S3 BucketSizeBytes` and `NumberOfObjects` are published once per day by AWS (around midnight UTC). The widgets used `period: cdk.Duration.days(1)` but the dashboard default window is 6 hours (`defaultInterval: cdk.Duration.hours(6)`), which consistently misses the single daily data point.
+
+Data confirmed present via `aws cloudwatch get-metric-statistics`: 638 MB, 101 objects in `ai-social-media-uploads-681565534940`.
+
+**Fix**: Replace `GraphWidget` with `SingleValueWidget` for both S3 storage metrics in Triage Row 9 and Infra Row 7. `SingleValueWidget` always fetches the most recent data point regardless of the dashboard time window, making it appropriate for slowly-changing gauge values.
 
 ### New Feature: Compression Ratio Metrics
 
 `VideoCompressionRatio` was already emitted by `internal/filehandler/video_compress.go` but had no dashboard widget. `ImageCompressionRatio` did not exist at all.
 
 **Added**:
+
 - Triage Row 4 "Video Compression: Latency + Ratio" — dual-axis widget: left=`VideoCompressionMs` in seconds, right=`VideoCompressionRatio`
-- Triage Row 4 "Image Resize: Latency + Ratio" — dual-axis widget: left=`ImageResizeMs` in ms, right=`ImageCompressionRatio`
-- Triage Row 4 "Compression: Output Size" — `ImageSizeBytes` (image) + `MediaFileSizeBytes` (video)
+- Triage Row 4 "Image Resize: Latency + Ratio" — dual-axis widget: left=`ImageResizeMs` in seconds, right=`ImageCompressionRatio`
+- Triage Row 4 "Compression: Output Size" — `ImageSizeBytes` (image) + `MediaFileSizeBytes` (video), both in KB
 
 ## Risks
 
@@ -139,22 +202,26 @@ Metrics confirmed sub-second (kept in ms): `apiHandlerFn.metricDuration` (avg 13
 
 ## Alternatives Considered
 
-| Approach | Rejected Because |
-|----------|------------------|
-| Remove FunctionName dimension entirely | Loses per-Lambda metric filtering for multi-Lambda namespaces (useful when debugging a specific function) |
-| Add FunctionName to dashboard queries | Requires hardcoding function names in CDK; breaks if functions are renamed; still one DimensionSet |
-| Keep single dashboard, fix metric queries only | 45 widgets is too dense for operational use; mixes workflows with very different traffic patterns |
-| DynamoDB: use metric math to aggregate across operations | Loses per-operation latency breakdown; GetItem and PutItem have very different latency profiles |
+
+| Approach                                                 | Rejected Because                                                                                          |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Remove FunctionName dimension entirely                   | Loses per-Lambda metric filtering for multi-Lambda namespaces (useful when debugging a specific function) |
+| Add FunctionName to dashboard queries                    | Requires hardcoding function names in CDK; breaks if functions are renamed; still one DimensionSet        |
+| Keep single dashboard, fix metric queries only           | 45 widgets is too dense for operational use; mixes workflows with very different traffic patterns         |
+| DynamoDB: use metric math to aggregate across operations | Loses per-operation latency breakdown; GetItem and PutItem have very different latency profiles           |
+
 
 ## Consequences
 
 **Positive:**
+
 - All triage-related widgets in `AiSocialMedia-Triage` show data immediately after deploying the EMF fix
 - DynamoDB latency widgets now return actual data
 - Cleaner operational view — each dashboard tells a coherent story about one workflow
 - 8 previously-invisible EMF metrics are now surfaced
 
 **Trade-offs:**
+
 - Three dashboards to bookmark instead of one
 - Dual DimensionSets increase CloudWatch custom metric count (~2x for Lambda-emitted metrics)
 - DynamoDB latency now shows per-operation widgets rather than a single average
@@ -163,12 +230,14 @@ Metrics confirmed sub-second (kept in ms): `apiHandlerFn.metricDuration` (avg 13
 
 ### Files Modified
 
-| File | Change |
-|------|--------|
-| `internal/metrics/emf.go` | `Flush()` emits dual DimensionSets when `FunctionName` present |
-| `internal/metrics/emf_test.go` | Tests verify single-set (CLI) and dual-set (Lambda) behaviour |
-| `cmd/media-process-lambda/processor.go` | Emit `ImageResizeMs`, `ImageSizeBytes`, `ImageCompressionRatio` after `ResizeImageForGemini` |
+
+| File                                                                  | Change                                                                                                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/metrics/emf.go`                                             | `Flush()` emits dual DimensionSets when `FunctionName` present                                                                              |
+| `internal/metrics/emf_test.go`                                        | Tests verify single-set (CLI) and dual-set (Lambda) behaviour                                                                               |
+| `cmd/media-process-lambda/processor.go`                               | Emit `ImageResizeMs`, `ImageSizeBytes`, `ImageCompressionRatio` after `ResizeImageForGemini`                                                |
 | `ai-social-media-helper-deploy/cdk/lib/operations-dashboard-stack.ts` | Replace single `AiSocialMediaDashboard` with three dashboards; fix dimension queries, metric names, ms→s conversions, and add ratio widgets |
+
 
 ## Related Documents
 
@@ -176,3 +245,4 @@ Metrics confirmed sub-second (kept in ms): `apiHandlerFn.metricDuration` (avg 13
 - DDR-051 (Comprehensive Logging Overhaul — log metric filters)
 - DDR-061 (S3 Event-Driven Per-File Processing — MediaProcess Lambda and file processing table)
 - DDR-054 (S3 Multipart Upload Acceleration — OperationsDashboardStack split rationale)
+
