@@ -489,7 +489,7 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
 
 	ctx := context.Background()
 	var deleted int
-	var errMsgs []string
+	errMsgs := make([]string, 0)
 
 	for _, key := range req.DeleteKeys {
 		if !validKeys[key] {
