@@ -114,6 +114,9 @@ const triageBatchSize = 20
 // as a conservative threshold to leave headroom.
 const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB
 
+// BatchProgressFunc is called after each triage batch completes. Pass nil to disable.
+type BatchProgressFunc func(batch, totalBatches int)
+
 // TriageOutput holds either triage results or a batch job ID (economy mode).
 type TriageOutput struct {
 	Results   []TriageResult
@@ -136,7 +139,8 @@ type TriageOutput struct {
 // cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
 // Returns a slice of TriageResult with one verdict per media item (or BatchJobID when economyMode).
 // See DDR-021: Media Triage Command with Batch AI Evaluation.
-func AskMediaTriage(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string, economyMode bool) (*TriageOutput, error) {
+// progressFn is called after each batch completes when batching; pass nil to disable.
+func AskMediaTriage(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string, economyMode bool, progressFn BatchProgressFunc) (*TriageOutput, error) {
 	if economyMode {
 		return askMediaTriageEconomy(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, ragContext)
 	}
@@ -176,6 +180,10 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*media.Me
 		if err != nil {
 			log.Error().Err(err).Int("batch", batchNum).Msg("Batch triage failed")
 			return nil, fmt.Errorf("batch %d/%d triage failed: %w", batchNum, totalBatches, err)
+		}
+
+		if progressFn != nil {
+			progressFn(batchNum, totalBatches)
 		}
 
 		// Adjust Media indices from batch-local (1-based) to global (1-based).

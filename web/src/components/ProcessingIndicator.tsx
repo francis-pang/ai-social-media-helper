@@ -9,6 +9,8 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import { useElapsedTimer, formatElapsed } from "../hooks/useElapsedTimer";
 import type { ComponentChildren } from "preact";
+import { getTriageLogs } from "../api/client";
+import type { TriageLogEntry } from "../types/api";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -32,6 +34,10 @@ interface ProcessingIndicatorProps {
   totalCount?: number;
   /** Per-file processing status (DDR-058). */
   items?: ProcessingItem[];
+  /** Triage job ID for raw CloudWatch log fetching (DDR-076). */
+  triageJobId?: string;
+  /** Triage session ID for raw CloudWatch log fetching (DDR-076). */
+  triageSessionId?: string;
   children?: ComponentChildren;
   onCancel?: () => void;
 }
@@ -111,6 +117,10 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
   const prevStatusRef = useRef(props.status);
   const prevDescRef = useRef(props.description);
 
+  const [showRawLogs, setShowRawLogs] = useState(false);
+  const [rawLogs, setRawLogs] = useState<TriageLogEntry[]>([]);
+  const rawLogSinceRef = useRef(0);
+
   const currentStage = deriveStage(props.status);
 
   const hasProgress =
@@ -160,6 +170,31 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
       logConsoleRef.current.scrollTop = logConsoleRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Raw CloudWatch log polling (DDR-076)
+  useEffect(() => {
+    if (!showRawLogs || !props.triageJobId || !props.triageSessionId) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const res = await getTriageLogs(props.triageJobId!, props.triageSessionId!, rawLogSinceRef.current || undefined);
+        if (!cancelled && res.entries.length > 0) {
+          setRawLogs((prev) => [...prev, ...res.entries]);
+          rawLogSinceRef.current = res.nextSince;
+        }
+      } catch {
+        // Ignore polling errors
+      }
+      if (!cancelled) {
+        setTimeout(poll, 4000);
+      }
+    };
+    poll();
+
+    return () => { cancelled = true; };
+  }, [showRawLogs, props.triageJobId, props.triageSessionId]);
 
   // ── Render ────────────────────────────────────────────────────────────
 
@@ -391,22 +426,64 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
           </a>
         </div>
 
-        {/* Streaming Logs (collapsible, default expanded) */}
+        {/* Streaming Logs with Raw/Synthetic toggle (DDR-076) */}
         <div>
-          <div
-            onClick={() => setLogsExpanded(!logsExpanded)}
-            style={{
-              cursor: "pointer",
-              fontSize: "0.875rem",
-              fontWeight: 600,
-              color: "var(--color-text)",
-              marginBottom: "0.5rem",
-              userSelect: "none",
-            }}
-          >
-            {logsExpanded ? "▼" : "▶"} Streaming Logs
+          <div style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "0.5rem",
+          }}>
+            <div
+              onClick={() => setLogsExpanded(!logsExpanded)}
+              style={{
+                cursor: "pointer",
+                fontSize: "0.875rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                userSelect: "none",
+              }}
+            >
+              {logsExpanded ? "\u25BC" : "\u25B6"} Streaming Logs
+            </div>
+            {logsExpanded && props.triageJobId && (
+              <div style={{
+                display: "flex",
+                gap: "0.25rem",
+                fontSize: "0.75rem",
+              }}>
+                <button
+                  onClick={() => setShowRawLogs(false)}
+                  style={{
+                    padding: "0.125rem 0.5rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--color-border)",
+                    background: !showRawLogs ? "var(--color-primary)" : "transparent",
+                    color: !showRawLogs ? "white" : "var(--color-text-secondary)",
+                    cursor: "pointer",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  Synthetic
+                </button>
+                <button
+                  onClick={() => setShowRawLogs(true)}
+                  style={{
+                    padding: "0.125rem 0.5rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--color-border)",
+                    background: showRawLogs ? "var(--color-primary)" : "transparent",
+                    color: showRawLogs ? "white" : "var(--color-text-secondary)",
+                    cursor: "pointer",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  Raw Logs
+                </button>
+              </div>
+            )}
           </div>
-          {logsExpanded && (
+          {logsExpanded && !showRawLogs && (
             <div class="log-console" ref={logConsoleRef}>
               {logs.map((entry, i) => (
                 <div class={`log-entry log-entry--${entry.level}`} key={i}>
@@ -421,6 +498,37 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
                   [{entry.level.toUpperCase()}] {entry.message}
                 </div>
               ))}
+            </div>
+          )}
+          {logsExpanded && showRawLogs && (
+            <div class="log-console" ref={logConsoleRef}>
+              {rawLogs.length === 0 ? (
+                <div class="log-entry log-entry--info">
+                  <span style={{ color: "var(--color-text-secondary)" }}>
+                    Loading CloudWatch logs...
+                  </span>
+                </div>
+              ) : (
+                rawLogs.map((entry, i) => {
+                  const ts = new Date(entry.timestamp).toLocaleTimeString("en-US", {
+                    hour12: false,
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  });
+                  const level = entry.message.includes('"level":"error"') ? "error" :
+                    entry.message.includes('"level":"warn"') ? "warn" :
+                    entry.message.includes('"level":"info"') ? "info" : "debug";
+                  return (
+                    <div class={`log-entry log-entry--${level}`} key={i}>
+                      <span style={{ color: "var(--color-text-secondary)", marginRight: "0.75rem" }}>
+                        {ts}
+                      </span>
+                      {entry.message.length > 200 ? entry.message.slice(0, 200) + "..." : entry.message}
+                    </div>
+                  );
+                })
+              )}
             </div>
           )}
         </div>

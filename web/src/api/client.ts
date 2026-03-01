@@ -12,6 +12,7 @@ import type {
   TriageResults,
   TriageConfirmRequest,
   TriageConfirmResponse,
+  TriageLogsResponse,
   UploadUrlResponse,
   FullImageResponse,
   SelectionStartRequest,
@@ -396,6 +397,13 @@ export function getTriageResults(id: string, sessionId?: string): Promise<Triage
   // In cloud mode, pass sessionId for ownership verification (DDR-028)
   const params = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
   return fetchJSON<TriageResults>(`/api/triage/${id}/results${params}`);
+}
+
+/** Get streaming CloudWatch logs for a triage job (DDR-076). */
+export function getTriageLogs(id: string, sessionId: string, since?: number): Promise<TriageLogsResponse> {
+  const params = new URLSearchParams({ sessionId });
+  if (since != null) params.set('since', String(since));
+  return fetchJSON<TriageLogsResponse>(`/api/triage/${id}/logs?${params}`);
 }
 
 /** Confirm deletion of selected files. */

@@ -2,11 +2,13 @@ import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { createPoller } from "../hooks/usePolling";
 import { formatBytes } from "../utils/format";
-import { triageJobId, selectedPaths, uploadSessionId, fileHandles, navigateToLanding, navigateBack, setStep } from "../app";
+import { triageJobId, selectedPaths, uploadSessionId, fileHandles, navigateToLanding, navigateBack, setStep, economyMode } from "../app";
 import { resetFileBrowserState } from "./FileBrowser";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   getTriageResults,
+  getTriageLogs,
+  finalizeTriageUploads,
   confirmTriage,
   isCloudMode,
   isVideoFile,
@@ -14,7 +16,7 @@ import {
 } from "../api/client";
 import { MediaReviewModal } from "./MediaReviewModal";
 import { MediaCard, itemId } from "./TriageMediaCard";
-import type { TriageResults } from "../types/api";
+import type { TriageResults, TriageLogEntry } from "../types/api";
 
 const results = signal<TriageResults | null>(null);
 const selectedForDeletion = signal<Set<string>>(new Set());
@@ -33,6 +35,9 @@ const error = signal<string | null>(null);
 const reasonFilter = signal("all");
 const keepExpanded = signal(false);
 const reviewModalIndex = signal<number | null>(null);
+const retryLoading = signal(false);
+const rawLogEntries = signal<TriageLogEntry[]>([]);
+const rawLogSince = signal<number>(0);
 
 function pollResults(id: string) {
   const sessionId = isCloudMode ? uploadSessionId.value ?? undefined : undefined;
@@ -73,6 +78,26 @@ function pollResults(id: string) {
       }
     });
   return abort;
+}
+
+async function retryTriage() {
+  const jobId = triageJobId.value;
+  const sessionId = uploadSessionId.value;
+  if (!jobId || !sessionId) return;
+
+  retryLoading.value = true;
+  error.value = null;
+  try {
+    await finalizeTriageUploads({ sessionId, jobId, economy_mode: economyMode.value });
+    results.value = null;
+    rawLogEntries.value = [];
+    rawLogSince.value = 0;
+    pollResults(jobId);
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "Failed to retry triage";
+  } finally {
+    retryLoading.value = false;
+  }
 }
 
 function toggleDeletion(id: string) {
@@ -224,12 +249,10 @@ export function TriageView() {
     );
   }
 
-  // Show processing state — Gemini-only phases (DDR-056, DDR-063)
+  // Show processing state — Gemini-only phases (DDR-056, DDR-063, DDR-076)
   if (!results.value || results.value.status === "pending" || results.value.status === "processing") {
     const phase = results.value?.phase;
 
-    // DDR-063: Only show Gemini-specific phases here.
-    // File-level processing is now shown on the upload screen (FileUploader).
     let title = "AI Analysis";
     let description = "Preparing media for Gemini AI evaluation";
     let statusLabel: string = results.value?.status ?? "pending";
@@ -244,14 +267,27 @@ export function TriageView() {
       statusLabel = "processing videos";
     } else if (phase === "analyzing") {
       title = "Analyzing Media with AI";
-      description = "Sending query to Gemini and waiting for the AI to evaluate your media";
-      statusLabel = "analyzing";
+      const batch = results.value?.triageBatch;
+      const batchTotal = results.value?.triageBatchTotal;
+      if (batch && batchTotal) {
+        description = `Evaluating batch ${batch} of ${batchTotal} — waiting for Gemini AI response`;
+        statusLabel = `analyzing (batch ${batch}/${batchTotal})`;
+      } else {
+        description = "Sending query to Gemini and waiting for the AI to evaluate your media";
+        statusLabel = "analyzing";
+      }
     }
 
     const showUploadProgress =
       phase === "uploading" &&
       results.value?.totalFiles != null &&
       results.value.totalFiles > 0;
+
+    const showBatchProgress =
+      phase === "analyzing" &&
+      results.value?.triageBatch != null &&
+      results.value?.triageBatchTotal != null &&
+      results.value.triageBatchTotal > 0;
 
     return (
       <ProcessingIndicator
@@ -262,23 +298,66 @@ export function TriageView() {
         sessionId={uploadSessionId.value ?? undefined}
         pollIntervalMs={2000}
         fileCount={selectedPaths.value.length}
-        completedCount={showUploadProgress ? (results.value?.uploadedFiles ?? 0) : undefined}
-        totalCount={showUploadProgress ? results.value?.totalFiles : undefined}
+        completedCount={
+          showUploadProgress ? (results.value?.uploadedFiles ?? 0) :
+          showBatchProgress ? results.value?.triageBatch :
+          undefined
+        }
+        totalCount={
+          showUploadProgress ? results.value?.totalFiles :
+          showBatchProgress ? results.value?.triageBatchTotal :
+          undefined
+        }
         onCancel={startOver}
+        triageJobId={triageJobId.value ?? undefined}
+        triageSessionId={uploadSessionId.value ?? undefined}
       />
     );
   }
 
-  // Show error
+  // Show error with retry option (DDR-076)
   if (results.value.status === "error") {
     return (
-      <div class="card">
-        <p style={{ color: "var(--color-danger)" }}>
-          Triage failed: {results.value.error}
+      <div class="card" style={{ padding: "2rem" }}>
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+          marginBottom: "1rem",
+        }}>
+          <span style={{ fontSize: "1.5rem" }}>&#x26A0;</span>
+          <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 600, color: "var(--color-danger)" }}>
+            Triage Failed
+          </h2>
+        </div>
+        <p style={{
+          color: "var(--color-text-secondary)",
+          fontSize: "0.95rem",
+          margin: "0 0 1rem",
+          lineHeight: 1.5,
+        }}>
+          {results.value.error}
         </p>
-        <button class="outline" onClick={startOver} style={{ marginTop: "1rem" }}>
-          Start Over
-        </button>
+        <p style={{
+          color: "var(--color-text-secondary)",
+          fontSize: "0.85rem",
+          margin: "0 0 1.5rem",
+        }}>
+          Your uploaded files are still available. You can retry the AI analysis without re-uploading.
+        </p>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button
+            class="primary"
+            onClick={retryTriage}
+            disabled={retryLoading.value}
+            style={{ minWidth: "8rem" }}
+          >
+            {retryLoading.value ? "Retrying..." : "Retry Triage"}
+          </button>
+          <button class="outline" onClick={startOver}>
+            Start Over
+          </button>
+        </div>
       </div>
     );
   }

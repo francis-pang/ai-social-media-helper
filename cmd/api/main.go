@@ -49,6 +49,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -194,6 +195,9 @@ func init() {
 
 	// EventBridge client for RAG override feedback events.
 	ebClient = eventbridge.NewFromConfig(cfg)
+
+	// CloudWatch Logs client for triage logs endpoint.
+	cwlClient = cloudwatchlogs.NewFromConfig(cfg)
 
 	// Emit consolidated cold-start log for troubleshooting (DDR-062: version identity).
 	logging.NewStartupLogger("media-lambda").

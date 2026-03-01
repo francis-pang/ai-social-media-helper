@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/fpang/ai-social-media-helper/internal/ai"
@@ -140,6 +143,24 @@ func handleTriageFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute unique SFN execution name: for retries (status=error), append -r<N>
+	var executionName string
+	if job.Status == "error" {
+		retryN := job.RetryCount + 1
+		executionName = req.JobID + "-r" + strconv.Itoa(retryN)
+		// Reset job for retry: status=processing, clear error, increment retry count
+		job.RetryCount = retryN
+		job.Status = "processing"
+		job.Error = ""
+		if err := sessionStore.PutTriageJob(context.Background(), req.SessionID, job); err != nil {
+			log.Error().Err(err).Str("jobId", req.JobID).Msg("Failed to update job for retry")
+			httpError(w, http.StatusInternalServerError, "failed to prepare retry")
+			return
+		}
+	} else {
+		executionName = req.JobID
+	}
+
 	model := job.Model
 	if model == "" {
 		model = ai.DefaultModelName
@@ -162,7 +183,7 @@ func handleTriageFinalize(w http.ResponseWriter, r *http.Request) {
 	_, err = sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
 		StateMachineArn: aws.String(triageSfnArn),
 		Input:           aws.String(string(sfnInput)),
-		Name:            aws.String(req.JobID),
+		Name:            aws.String(executionName),
 	})
 	if err != nil {
 		log.Error().Err(err).Str("jobId", req.JobID).Msg("Failed to start triage pipeline")
@@ -345,6 +366,8 @@ func handleTriageRoutes(w http.ResponseWriter, r *http.Request) {
 		handleTriageResults(w, r, jobID)
 	case "confirm":
 		handleTriageConfirm(w, r, jobID)
+	case "logs":
+		handleTriageLogs(w, r, jobID)
 	default:
 		httpError(w, http.StatusNotFound, "not found")
 	}
@@ -408,6 +431,12 @@ func handleTriageResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	}
 	if job.UploadedFiles > 0 {
 		resp["uploadedFiles"] = job.UploadedFiles
+	}
+	if job.TriageBatch > 0 {
+		resp["triageBatch"] = job.TriageBatch
+	}
+	if job.TriageBatchTotal > 0 {
+		resp["triageBatchTotal"] = job.TriageBatchTotal
 	}
 	if job.Error != "" {
 		resp["error"] = job.Error
@@ -519,5 +548,92 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
 		"deleted":        deleted,
 		"errors":         errMsgs,
 		"reclaimedBytes": 0,
+	})
+}
+
+// GET /api/triage/{id}/logs?sessionId=...&since=...
+func handleTriageLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		httpError(w, http.StatusBadRequest, "sessionId is required")
+		return
+	}
+
+	if !ensureSessionOwner(w, r, sessionID) {
+		return
+	}
+
+	sinceStr := r.URL.Query().Get("since")
+	sinceMs := int64(0)
+	if sinceStr != "" {
+		parsed, err := strconv.ParseInt(sinceStr, 10, 64)
+		if err == nil {
+			sinceMs = parsed
+		}
+	}
+
+	logGroupName := os.Getenv("TRIAGE_LOG_GROUP_NAME")
+	if logGroupName == "" {
+		respondJSON(w, http.StatusOK, map[string]interface{}{"entries": []interface{}{}, "nextSince": sinceMs})
+		return
+	}
+
+	if cwlClient == nil {
+		respondJSON(w, http.StatusOK, map[string]interface{}{"entries": []interface{}{}, "nextSince": sinceMs})
+		return
+	}
+
+	filterPattern := fmt.Sprintf("\"%s\"", sessionID)
+	input := &cloudwatchlogs.FilterLogEventsInput{
+		LogGroupName:  &logGroupName,
+		FilterPattern: &filterPattern,
+		Limit:         aws.Int32(50),
+	}
+	if sinceMs > 0 {
+		input.StartTime = &sinceMs
+	}
+
+	result, err := cwlClient.FilterLogEvents(context.Background(), input)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to query CloudWatch Logs for triage")
+		respondJSON(w, http.StatusOK, map[string]interface{}{"entries": []interface{}{}, "nextSince": sinceMs})
+		return
+	}
+
+	type logEntry struct {
+		Timestamp int64  `json:"timestamp"`
+		Message   string `json:"message"`
+	}
+
+	entries := make([]logEntry, 0, len(result.Events))
+	var maxTimestamp int64
+	for _, evt := range result.Events {
+		ts := int64(0)
+		if evt.Timestamp != nil {
+			ts = *evt.Timestamp
+		}
+		msg := ""
+		if evt.Message != nil {
+			msg = *evt.Message
+		}
+		entries = append(entries, logEntry{Timestamp: ts, Message: msg})
+		if ts > maxTimestamp {
+			maxTimestamp = ts
+		}
+	}
+
+	nextSince := sinceMs
+	if maxTimestamp > 0 {
+		nextSince = maxTimestamp + 1
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"entries":   entries,
+		"nextSince": nextSince,
 	})
 }

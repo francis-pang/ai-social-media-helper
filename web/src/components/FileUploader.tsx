@@ -310,7 +310,9 @@ async function pollTriageResults(jobId: string, sessionId: string) {
       // Detect backend error status (e.g. Step Function failure that wrote error to DDB)
       if (results.status === "error") {
         triagePolling.value = false;
-        error.value = results.error || "Processing failed — please try again";
+        const doneFiles = files.value.filter(f => f.status === "done");
+        selectedPaths.value = doneFiles.map(f => f.key);
+        navigateToStep("processing");
         return;
       }
 
@@ -356,14 +358,14 @@ async function pollTriageResults(jobId: string, sessionId: string) {
         return;
       }
 
-      // DDR-063: Stay on upload screen until all per-file processing completes,
-      // then transition to Gemini analysis screen.
+      // DDR-076: Navigate to TriageView as soon as all per-file processing
+      // completes, without waiting for the Gemini triage-run step to finish.
       const allProcessed = results.expectedFileCount != null &&
         results.expectedFileCount > 0 &&
         results.processedCount != null &&
         results.processedCount >= results.expectedFileCount;
 
-      if (allUploaded && allProcessed && results.status !== "pending" && triageFinalized.value) {
+      if (allUploaded && allProcessed && triageFinalized.value) {
         const doneFiles = files.value.filter(f => f.status === "done");
         const errorFiles = files.value.filter(f => f.status === "error");
         if (errorFiles.length > 0 && doneFiles.length > 0) {

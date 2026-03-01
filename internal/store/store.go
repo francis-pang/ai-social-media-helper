@@ -180,6 +180,9 @@ type TriageJob struct {
 	Keep              []TriageItem `json:"keep,omitempty" dynamodbav:"keep,omitempty"`
 	Discard           []TriageItem `json:"discard,omitempty" dynamodbav:"discard,omitempty"`
 	Error             string       `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	RetryCount        int          `json:"retryCount,omitempty" dynamodbav:"retryCount,omitempty"`
+	TriageBatch       int          `json:"triageBatch,omitempty" dynamodbav:"triageBatch,omitempty"`
+	TriageBatchTotal  int          `json:"triageBatchTotal,omitempty" dynamodbav:"triageBatchTotal,omitempty"`
 }
 
 // TriageItem represents a single media item in triage results.

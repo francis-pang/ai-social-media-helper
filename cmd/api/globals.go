@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -45,4 +46,7 @@ var (
 
 	// EventBridge client for RAG feedback events (override capture).
 	ebClient *eventbridge.Client
+
+	// CloudWatch Logs client for triage logs endpoint.
+	cwlClient *cloudwatchlogs.Client
 )

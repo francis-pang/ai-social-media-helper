@@ -167,7 +167,14 @@ func handleTriageRun(ctx context.Context, event TriageEvent) (interface{}, error
 	cacheMgr := ai.NewCacheManager(client)
 	defer cacheMgr.DeleteAll(ctx, event.SessionID)
 
-	output, err := ai.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext, economyMode)
+	output, err := ai.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext, economyMode, func(batch, totalBatches int) {
+		sessionStore.PutTriageJob(ctx, event.SessionID, &store.TriageJob{
+			ID: event.JobID, Status: "processing", Phase: "analyzing",
+			TotalFiles:     len(allMediaFiles),
+			TriageBatch:    batch,
+			TriageBatchTotal: totalBatches,
+		})
+	})
 	if err != nil {
 		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Triage failed: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})

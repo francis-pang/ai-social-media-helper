@@ -47,6 +47,10 @@ export interface TriageResults {
   expectedFileCount?: number;
   /** Files processed so far by MediaProcess Lambda (DDR-061). */
   processedCount?: number;
+  /** Current triage batch number (1-based, during analyzing phase). */
+  triageBatch?: number;
+  /** Total triage batches (during analyzing phase). */
+  triageBatchTotal?: number;
   keep: TriageItem[];
   discard: TriageItem[];
   error?: string;
@@ -139,6 +143,18 @@ export interface TriageConfirmResponse {
   skipped: number;
   errors: string[];
   reclaimedBytes: number;
+}
+
+/** A single CloudWatch log entry from the triage Lambda. */
+export interface TriageLogEntry {
+  timestamp: number;
+  message: string;
+}
+
+/** Response from GET /api/triage/{id}/logs. */
+export interface TriageLogsResponse {
+  entries: TriageLogEntry[];
+  nextSince: number;
 }
 
 /** Response from GET /api/upload-url (Phase 2 only). */
