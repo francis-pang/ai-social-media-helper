@@ -409,7 +409,7 @@ export function App() {
 
       {/* Triage flow — cloud triage upload (DDR-042) */}
       {currentStep.value === "triage-upload" && isCloudMode && (
-        <div class="layout-sidebar"><FileUploader /></div>
+        <FileUploader />
       )}
 
       {/* Triage results — both local and cloud triage */}
