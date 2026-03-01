@@ -246,6 +246,9 @@ async function initTriageSession(sessionId: string, fileCount: number) {
 }
 
 async function pollTriageResults(jobId: string, sessionId: string) {
+  let finalizedAt: number | null = null;
+  const FINALIZE_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes after finalize
+
   while (triagePolling.value) {
     try {
       const results = await getTriageResults(jobId, sessionId);
@@ -261,18 +264,40 @@ async function pollTriageResults(jobId: string, sessionId: string) {
         serverExpectedFileCount.value = results.expectedFileCount;
       }
 
+      // Detect backend error status (e.g. Step Function failure that wrote error to DDB)
+      if (results.status === "error") {
+        triagePolling.value = false;
+        error.value = results.error || "Processing failed — please try again";
+        return;
+      }
+
       // DDR-067: Finalize triage (start SF) when all uploads are done
       const allUploaded = files.value.length > 0 && files.value.every(
         f => f.status === "done" || f.status === "error"
       );
       if (allUploaded && !triageFinalized.value) {
         triageFinalized.value = true;
+        finalizedAt = Date.now();
         const doneCount = files.value.filter(f => f.status === "done").length;
         if (doneCount > 0) {
           finalizeTriageUploads({ sessionId, jobId }).catch(
             (e) => console.error("Failed to finalize triage uploads:", e)
           );
         }
+      }
+
+      // Detect stuck-pending after finalization: if the job stays "pending"
+      // well after finalization, the Step Function likely crashed before it
+      // could update the job status.
+      if (
+        triageFinalized.value &&
+        finalizedAt != null &&
+        results.status === "pending" &&
+        Date.now() - finalizedAt > FINALIZE_TIMEOUT_MS
+      ) {
+        triagePolling.value = false;
+        error.value = "Processing pipeline failed to start — please try again";
+        return;
       }
 
       // DDR-063: Stay on upload screen until all per-file processing completes,
