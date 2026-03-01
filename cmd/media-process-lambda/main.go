@@ -36,8 +36,8 @@ var coldStart = true
 // Size thresholds for image processing decisions.
 const (
 	maxSmallPhotoBytes = 2 * 1024 * 1024 // 2 MB
-	maxSmallPhotoPx    = 2000            // 2000px
-	targetResizePx     = 1600            // Resize large photos to 1600px
+	maxSmallPhotoPx    = 2000            // Skip resize if both dimensions ≤ this
+	targetResizePx     = 1920            // Instagram Stories/Reels & TikTok full-screen portrait height
 	thumbnailPx        = 400             // Thumbnail dimension
 )
 

@@ -18,7 +18,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [image-processing.md](./image-processing.md) | Image processing — formats, EXIF metadata, thumbnails, enhancement pipeline |
+| [image-processing.md](./image-processing.md) | Image processing — formats, EXIF metadata, thumbnails, Gemini downscaling, enhancement pipeline |
 | [video-processing.md](./video-processing.md) | Video processing — formats, compression, frame-based enhancement pipeline |
 
 ## Authentication
@@ -50,7 +50,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [design-decisions/](./design-decisions/) | 69 DDRs documenting every architectural choice |
+| [design-decisions/](./design-decisions/) | 71 DDRs documenting every architectural choice |
 | [design-decisions/index.md](./design-decisions/index.md) | Chronological index of all decisions |
 
 ## External References

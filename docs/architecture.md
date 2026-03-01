@@ -128,7 +128,7 @@ graph TD
         SelectionLambda["Selection Lambda\n(4GB, 15min)"]
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
         VideoLambda["Video Lambda\n(4GB, 15min)"]
-        MediaProcessLambda["MediaProcess Lambda\n(4GB, 15min, DDR-061, DDR-067)"]
+        MediaProcessLambda["MediaProcess Lambda\n(4GB, 15min, DDR-061, DDR-067, DDR-071)"]
         StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish)"]
         DynamoDB["DynamoDB\n(session state, TTL 24h)"]
         FileProcessingDB["DynamoDB\n(file processing, TTL 4h,\nDDR-061)"]
@@ -414,7 +414,7 @@ sequenceDiagram
   - Videos and images are interleaved before batching to prevent all-video batches that would overwhelm the Gemini API.
 - **DDR-059 cleanup**: After `AskMediaTriage` succeeds, thumbnails are generated from `/tmp` files and uploaded to S3. Original files are then deleted immediately. The 1-day S3 lifecycle policy acts as a safety net for abandoned sessions.
 - **Confirm cleanup**: When the user confirms triage results, the API Lambda deletes the user-selected discard keys, then cleans up all remaining S3 artifacts (thumbnails, compressed videos) in a background goroutine.
-- **Pipeline timeout**: 30 minutes (starts after uploads complete via `/api/triage/finalize` — DDR-067). Triage Lambda timeout: 10 minutes (2 GB memory, Light container). MediaProcess Lambda: 15 minutes (4 GB memory — DDR-067).
+- **Pipeline timeout**: 30 minutes (starts after uploads complete via `/api/triage/finalize` — DDR-067). Triage Lambda timeout: 10 minutes (2 GB memory, Light container). MediaProcess Lambda: 15 minutes (4 GB memory — DDR-067). Photos are downscaled to WebP and videos compressed to AV1/WebM during per-file processing (DDR-071, DDR-018).
 
 ## Gemini Context Caching (DDR-065)
 

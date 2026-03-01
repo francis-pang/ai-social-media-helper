@@ -68,6 +68,7 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*fileh
 		SystemInstruction: &genai.Content{
 			Parts: []*genai.Part{{Text: MediaSelectionSystemInstruction}},
 		},
+		MediaResolution: genai.MediaResolutionHigh,
 	}
 
 	// Add the text prompt at the end
@@ -189,10 +190,13 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*f
 		resp, err = cacheMgr.GenerateWithCache(ctx, CacheConfig{
 			SessionID: sessionID,
 			Operation: "selection",
-		}, modelName, systemInstruction, cacheContents, userParts, nil)
+		}, modelName, systemInstruction, cacheContents, userParts, &genai.GenerateContentConfig{
+			MediaResolution: genai.MediaResolutionHigh,
+		})
 	} else {
 		config := &genai.GenerateContentConfig{
 			SystemInstruction: systemInstruction,
+			MediaResolution:   genai.MediaResolutionHigh,
 		}
 		parts = append(parts, &genai.Part{Text: prompt})
 		contents := []*genai.Content{{Role: "user", Parts: parts}}

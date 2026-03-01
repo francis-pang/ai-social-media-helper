@@ -232,7 +232,8 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 		SystemInstruction: &genai.Content{
 			Parts: []*genai.Part{{Text: assets.TriageSystemPrompt}},
 		},
-		MaxOutputTokens: 65536,
+		MaxOutputTokens:  65536,
+		MediaResolution: genai.MediaResolutionLow,
 	}
 
 	// Build parts: media files then prompt (no reference photo for triage)
@@ -448,6 +449,7 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*fi
 			Operation: "triage",
 		}, modelName, systemInstruction, cacheContents, userParts, &genai.GenerateContentConfig{
 			MaxOutputTokens: config.MaxOutputTokens,
+			MediaResolution: genai.MediaResolutionLow,
 		})
 	} else {
 		parts = append(parts, &genai.Part{Text: prompt})
@@ -559,7 +561,8 @@ func AskMediaTriageMCP(
 		SystemInstruction: &genai.Content{
 			Parts: []*genai.Part{{Text: assets.TriageSystemPromptMCP}},
 		},
-		MaxOutputTokens: 65536,
+		MaxOutputTokens:  65536,
+		MediaResolution: genai.MediaResolutionLow,
 	}
 
 	contents := []*genai.Content{{

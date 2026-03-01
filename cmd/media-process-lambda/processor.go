@@ -165,10 +165,35 @@ func processFile(ctx context.Context, key string) error {
 			}
 		}
 
-		// Small photo: skip conversion, use original
-		processedKey = key
-		// Note: Image conversion (resize large photos) can be added later
-		// For now, all images use the original and just get a thumbnail
+		// DDR-071: Downscale large photos for Gemini (WebP when ffmpeg available, JPEG fallback)
+		resizedData, resizedMime, resizeErr := filehandler.ResizeImageForGemini(mf, targetResizePx, 85)
+		if resizeErr != nil {
+			log.Warn().Err(resizeErr).Str("key", key).Msg("Image resize failed — using original")
+			processedKey = key
+		} else if resizedData == nil {
+			processedKey = key
+		} else {
+			baseName := strings.TrimSuffix(filename, ext)
+			outExt := ".jpg"
+			if resizedMime == "image/webp" {
+				outExt = ".webp"
+			}
+			processedKey = fmt.Sprintf("%s/processed/%s%s", sessionID, baseName, outExt)
+			_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      &mediaBucket,
+				Key:         &processedKey,
+				Body:        bytes.NewReader(resizedData),
+				ContentType: &resizedMime,
+				Tagging:     s3util.ProjectTagging(),
+			})
+			if err != nil {
+				log.Warn().Err(err).Str("processedKey", processedKey).Msg("Failed to upload resized image")
+				processedKey = key
+			} else {
+				converted = true
+				log.Info().Str("processedKey", processedKey).Int("size", len(resizedData)).Msg("Resized image uploaded (DDR-071)")
+			}
+		}
 
 	} else if isVideo {
 		// Generate video thumbnail

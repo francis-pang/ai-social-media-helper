@@ -32,6 +32,7 @@ func AskPhotoSelection(ctx context.Context, client *genai.Client, files []*fileh
 		SystemInstruction: &genai.Content{
 			Parts: []*genai.Part{{Text: SelectionSystemInstruction}},
 		},
+		MediaResolution: genai.MediaResolutionHigh,
 	}
 
 	// Build parts: reference photo first, then thumbnails, then prompt

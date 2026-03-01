@@ -83,6 +83,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-068](./DDR-068-rag-weekly-batch-staging.md) | 2026-02-28 | RAG Daily Batch Architecture — DynamoDB Staging | Implemented |
 | [DDR-069](./DDR-069-batch-execute-statement-ingest.md) | 2026-02-28 | BatchExecuteStatement for RAG ingest throughput | Accepted |
 | [DDR-070](./DDR-070-mcp-server-rag-tools.md) | 2026-02-28 | MCP Server for RAG Tools | Accepted |
+| [DDR-071](./DDR-071-photo-downscaling-for-gemini.md) | 2026-02-28 | Photo Downscaling and Media Resolution Strategy | Accepted |
 
 ---
 

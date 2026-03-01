@@ -53,6 +53,26 @@ Thumbnails are generated for two purposes:
 
 In cloud mode, 400px thumbnails are pre-generated during the selection step and stored in S3 at `{sessionId}/thumbnails/{filename}.jpg`. All downstream steps (review, enhancement, grouping) serve these cached thumbnails directly. See [DDR-014](./design-decisions/DDR-014-thumbnail-selection-strategy.md).
 
+## Gemini Photo Downscaling (DDR-071)
+
+Large photos (>2000px longest edge) are downscaled to 1920px and converted to **WebP** during the MediaProcess Lambda step. 1920px matches the highest resolution Instagram Stories/Reels and TikTok full-screen portrait actually display. This reduces file size by ~94% (7 MB iPhone JPEG → ~400 KB WebP) without affecting Gemini token cost, which is fixed by the `media_resolution` parameter.
+
+| Environment | Output Format | Method |
+|-------------|---------------|--------|
+| Lambda (ffmpeg) | WebP quality 85 | ffmpeg + libwebp |
+| CLI (no ffmpeg) | JPEG quality 85 | Pure Go fallback |
+
+Processed photos are stored at `{sessionId}/processed/{baseName}.webp`. The `converted` flag is set on the FileResult, showing a green "CONVERTED" badge in the upload UI.
+
+Photos already ≤2000px are used as-is. HEIC/HEIF photos are always converted (to WebP or JPEG) regardless of size. GIF and WebP inputs are skipped.
+
+The `media_resolution` parameter controls how much detail Gemini uses per image:
+
+| Pipeline | `media_resolution` | Tokens/Image | Rationale |
+|----------|--------------------|--------------|-----------|
+| Triage | LOW | 280 | Keep/reject — single tile, no splitting |
+| Selection | HIGH | 1120 | Instagram/TikTok quality assessment |
+
 ## Enhancement Pipeline
 
 The photo enhancement pipeline applies AI models in three automated phases to bring photos to professional quality. See [DDR-031](./design-decisions/DDR-031-multi-step-photo-enhancement.md) for the full design decision.
@@ -102,7 +122,8 @@ sequenceDiagram
 - [DDR-013](./design-decisions/DDR-013-unified-metadata-architecture.md) — Unified metadata architecture
 - [DDR-014](./design-decisions/DDR-014-thumbnail-selection-strategy.md) — Thumbnail selection strategy
 - [DDR-031](./design-decisions/DDR-031-multi-step-photo-enhancement.md) — Multi-step photo enhancement pipeline
+- [DDR-071](./design-decisions/DDR-071-photo-downscaling-for-gemini.md) — Photo downscaling and media resolution strategy
 
 ---
 
-**Last Updated**: 2026-02-09
+**Last Updated**: 2026-02-28

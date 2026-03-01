@@ -14,7 +14,7 @@ Available as a CLI tool (`media-triage`), a local web UI (`media-web`), and a cl
 flowchart TD
     Init["Init triage session\n(DDR-067: DDB job only, no SF)"]
     Upload["Upload / select media\n(content dedup via fingerprinting, DDR-067)"]
-    Preprocess["Preprocess media\n(thumbnails, adaptive video compression)\nShown inline on upload screen (DDR-063)"]
+    Preprocess["Preprocess media\n(thumbnails, photo downscaling to WebP,\nadaptive video compression)\nShown inline on upload screen (DDR-063)"]
     Finalize["Finalize uploads\n(DDR-067: starts SF execution,\n30-min timeout begins here)"]
     Gemini["Gemini AI batch evaluation\n(single API call, all media)\nDedicated AI Analysis screen (DDR-063)"]
     Categorize["Categorize results\nKEEP vs DISCARD with reasons"]
@@ -30,7 +30,7 @@ flowchart TD
 
 The cloud triage flow splits into two distinct UI screens:
 
-1. **Upload & Process Media** (`triage-upload`): Users drag-and-drop files. Each file progresses through: Uploading to S3 → Server Processing (thumbnail/compress) → Ready. Files are grouped by status with thumbnails shown inline as they become available. The screen remains active until all per-file processing completes.
+1. **Upload & Process Media** (`triage-upload`): Users drag-and-drop files. Each file progresses through: Uploading to S3 → Server Processing (thumbnail, photo downscale to WebP, video compress) → Ready. Files that were resized or compressed show a green "CONVERTED" badge. The screen remains active until all per-file processing completes.
 2. **AI Analysis** (`processing`): Once all files are processed, the user transitions to a dedicated Gemini analysis screen showing only the three AI sub-phases: uploading to Gemini, video processing, and analyzing.
 
 ## How It Works
@@ -47,7 +47,7 @@ sequenceDiagram
     Frontend->>API: POST /api/triage/init (DDR-067: DDB job only)
     API-->>Frontend: jobId
     Frontend->>S3: Upload via presigned PUT URLs (cloud mode)
-    Note over Frontend,S3: MediaProcess Lambda processes files on S3 arrival (DDR-061)
+    Note over Frontend,S3: MediaProcess Lambda processes files on S3 arrival:\nthumbnails, photo downscaling to WebP, video compression (DDR-061, DDR-071)
     Frontend->>API: POST /api/triage/finalize (DDR-067: starts SF)
     API->>Gemini: Single batch call with all media + triage prompt
     Gemini-->>API: JSON array of verdicts (keep/discard + reason)
@@ -86,7 +86,7 @@ The AI is instructed to be **generous** — if a normal person can understand th
 
 After triage-run completes, original files are no longer needed — the review UI only uses thumbnails. To minimize S3 storage costs:
 
-1. **During triage-run:** Image thumbnails are generated from temp files on disk and uploaded to `{sessionId}/thumbnails/{baseName}.webp`. Original files are then deleted from S3 (excluding `thumbnails/` and `compressed/` prefixes).
+1. **During triage-run:** Image thumbnails are generated from temp files on disk and uploaded to `{sessionId}/thumbnails/{baseName}.webp`. Original files are then deleted from S3 (excluding `thumbnails/`, `processed/`, and `compressed/` prefixes).
 2. **After triage confirm:** All remaining session artifacts (thumbnails, compressed videos) are cleaned up via a best-effort goroutine.
 3. **Safety net:** The 1-day S3 lifecycle policy handles abandoned sessions where the user never confirms.
 
@@ -114,7 +114,8 @@ This is controlled by the `RAG_MODE` environment variable on the triage Lambda (
 - [DDR-063](./design-decisions/DDR-063-split-processing-ui-screens.md) — Split File Processing and Gemini Request into Separate UI Screens
 - [DDR-069](./design-decisions/DDR-069-batch-execute-statement-ingest.md) — BatchExecuteStatement for RAG ingest throughput
 - [DDR-070](./design-decisions/DDR-070-mcp-server-rag-tools.md) — MCP Server for RAG Tools
+- [DDR-071](./design-decisions/DDR-071-photo-downscaling-for-gemini.md) — Photo Downscaling and Media Resolution Strategy
 
 ---
 
-**Last Updated**: 2026-02-18
+**Last Updated**: 2026-02-28
