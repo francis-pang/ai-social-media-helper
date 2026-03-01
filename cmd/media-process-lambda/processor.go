@@ -166,6 +166,7 @@ func processFile(ctx context.Context, key string) error {
 		}
 
 		// DDR-071: Downscale large photos for Gemini (WebP when ffmpeg available, JPEG fallback)
+		resizeStart := time.Now()
 		resizedData, resizedMime, resizeErr := filehandler.ResizeImageForGemini(mf, targetResizePx, 85)
 		if resizeErr != nil {
 			log.Warn().Err(resizeErr).Str("key", key).Msg("Image resize failed — using original")
@@ -193,6 +194,18 @@ func processFile(ctx context.Context, key string) error {
 				converted = true
 				log.Info().Str("processedKey", processedKey).Int("size", len(resizedData)).Msg("Resized image uploaded (DDR-071)")
 			}
+
+			imageCompressionRatio := float64(0)
+			if len(resizedData) > 0 {
+				imageCompressionRatio = float64(fileSize) / float64(len(resizedData))
+			}
+			metrics.New("AiSocialMedia").
+				Dimension("Operation", "mediaProcess").
+				Dimension("FileType", "image").
+				Metric("ImageResizeMs", float64(time.Since(resizeStart).Milliseconds()), metrics.UnitMilliseconds).
+				Metric("ImageSizeBytes", float64(len(resizedData)), metrics.UnitBytes).
+				Metric("ImageCompressionRatio", imageCompressionRatio, metrics.UnitNone).
+				Flush()
 		}
 
 	} else if isVideo {
