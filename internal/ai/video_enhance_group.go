@@ -166,7 +166,7 @@ func enhanceFrameGroup(ctx context.Context, geminiClient *GeminiImageClient, ima
 
 // applyVideoImprovements applies a set of improvements to an enhanced frame.
 // It first tries Gemini for global edits, then Imagen for localized mask-based edits.
-func applyVideoImprovements(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, improvements []videoAnalysisImprovement, config VideoEnhancementConfig) ([]byte, string, error) {
+func applyVideoImprovements(ctx context.Context, geminiClient *GeminiImageClient, imagenClient *ImagenClient, imageData []byte, imageMIME string, improvements []videoAnalysisImprovement, _ VideoEnhancementConfig) ([]byte, string, error) {
 	log.Debug().
 		Int("improvements_count", len(improvements)).
 		Msg("applyVideoImprovements: Starting improvement application")

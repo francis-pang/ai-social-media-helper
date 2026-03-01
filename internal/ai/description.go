@@ -401,9 +401,10 @@ func BuildDescriptionPrompt(groupLabel string, tripContext string, mediaItems []
 	// Count media types
 	var photoCount, videoCount int
 	for _, item := range mediaItems {
-		if item.Type == "Photo" {
+		switch item.Type {
+		case "Photo":
 			photoCount++
-		} else if item.Type == "Video" {
+		case "Video":
 			videoCount++
 		}
 	}

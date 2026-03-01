@@ -111,7 +111,7 @@ func handleEnhancementFeedback(ctx context.Context, event EnhanceEvent) error {
 		log.Warn().Err(err).Msg("Feedback processing failed")
 	}
 
-	if resultData != nil && len(resultData) > 0 {
+	if len(resultData) > 0 {
 		feedbackKey := fmt.Sprintf("%s/enhanced/%s", event.SessionID, filepath.Base(item.Key))
 		contentType := resultMIME
 		_, uploadErr := s3Client.PutObject(ctx, &s3.PutObjectInput{

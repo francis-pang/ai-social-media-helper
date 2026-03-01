@@ -384,25 +384,3 @@ func BuildSocialMediaImagePrompt(metadataContext string) string {
 func BuildSocialMediaVideoPrompt(metadataContext string) string {
 	return assets.RenderSocialMediaVideoPrompt(metadataContext)
 }
-
-// extractTextFromResponse extracts all text from a GenerateContentResponse.
-// This is a helper for cases where resp.Text() is not sufficient (e.g., when
-// we need to handle partial responses or multiple candidates).
-func extractTextFromResponse(resp *genai.GenerateContentResponse) string {
-	if resp == nil || len(resp.Candidates) == 0 {
-		return ""
-	}
-
-	var result strings.Builder
-	for _, candidate := range resp.Candidates {
-		if candidate.Content != nil {
-			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
-					result.WriteString(part.Text)
-				}
-			}
-		}
-	}
-
-	return result.String()
-}

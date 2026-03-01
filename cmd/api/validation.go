@@ -48,17 +48,6 @@ func validateS3Key(key string) error {
 	return nil
 }
 
-// validateS3KeyBelongsToSession ensures an S3 key starts with the given sessionId prefix.
-// Risk 30C: Defense-in-depth — prevents a compromised handler from accessing
-// objects belonging to other sessions, even though IAM cannot restrict by
-// dynamic prefix (Risk 30B limitation: sessionId is unknown at policy time).
-func validateS3KeyBelongsToSession(key, sessionID string) error {
-	if !strings.HasPrefix(key, sessionID+"/") {
-		return fmt.Errorf("key %q does not belong to session %s", key, sessionID)
-	}
-	return nil
-}
-
 // --- Session Ownership Validation (Risk 15: IDOR prevention) ---
 
 // ensureSessionOwner creates or verifies session ownership for the given sessionId.

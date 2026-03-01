@@ -552,7 +552,7 @@ func handleTriageConfirm(w http.ResponseWriter, r *http.Request, jobID string) {
 }
 
 // GET /api/triage/{id}/logs?sessionId=...&since=...
-func handleTriageLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+func handleTriageLogs(w http.ResponseWriter, r *http.Request, _ string) {
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

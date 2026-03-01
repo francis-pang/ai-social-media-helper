@@ -234,7 +234,7 @@ func askMediaTriageEconomy(ctx context.Context, client *genai.Client, files []*m
 
 // buildTriageBatchRequest builds the InlinedRequest for a single triage batch.
 // Reuses the same logic as askMediaTriageSingle for building parts and config.
-func buildTriageBatchRequest(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, ragContext string) (*genai.InlinedRequest, error) {
+func buildTriageBatchRequest(ctx context.Context, client *genai.Client, files []*media.MediaFile, _ string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, ragContext string) (*genai.InlinedRequest, error) {
 	var uploadedFiles []*genai.File
 	var cleanupFuncs []func()
 	defer func() {

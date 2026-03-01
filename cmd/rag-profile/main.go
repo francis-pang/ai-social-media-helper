@@ -501,7 +501,7 @@ func parseStringSlice(m map[string]string, key string) []string {
 // Phase 4: Build preference profile (from DDR-066 profile Lambda logic)
 // ---------------------------------------------------------------------------
 
-func buildAndWriteProfile(ctx context.Context, dataAPI *rag.DataAPIClient) error {
+func buildAndWriteProfile(ctx context.Context, _ *rag.DataAPIClient) error {
 	triageRows, err := executeQuery(ctx, `SELECT * FROM triage_decisions ORDER BY created_at DESC`)
 	if err != nil {
 		return fmt.Errorf("query triage_decisions: %w", err)

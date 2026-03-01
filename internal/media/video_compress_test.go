@@ -210,15 +210,6 @@ func assertContains(t *testing.T, args []string, key, value string) {
 	t.Errorf("Expected args to contain %s %s, got: %v", key, value, args)
 }
 
-func assertNotContains(t *testing.T, args []string, key string) {
-	t.Helper()
-	for _, arg := range args {
-		if arg == key {
-			t.Errorf("Expected args NOT to contain %s, but it was found", key)
-			return
-		}
-	}
-}
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

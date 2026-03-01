@@ -109,7 +109,7 @@ func resizeWithFFmpegWebP(filePath, ext string, maxDimension, quality int) ([]by
 }
 
 // imageExceedsDimension checks if a JPEG/PNG image has any dimension > maxDimension.
-func imageExceedsDimension(filePath, ext string, maxDimension int) (bool, error) {
+func imageExceedsDimension(filePath, _ string, maxDimension int) (bool, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return false, err

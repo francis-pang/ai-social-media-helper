@@ -55,9 +55,10 @@ func handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		// Determine content type from file extension
 		thumbExt := strings.ToLower(filepath.Ext(key))
 		contentType := "image/jpeg" // Default to JPEG (DDR-027: no CGO for WebP)
-		if thumbExt == ".webp" {
+		switch thumbExt {
+		case ".webp":
 			contentType = "image/webp"
-		} else if thumbExt == ".png" {
+		case ".png":
 			contentType = "image/png"
 		}
 
@@ -234,30 +235,4 @@ func handleFullImage(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{
 		"url": result.URL,
 	})
-}
-
-// generateThumbnailFromBytes creates a thumbnail from raw image bytes.
-func generateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension int) ([]byte, string, error) {
-	// Write to temp file, generate thumbnail, clean up
-	tmpFile, err := os.CreateTemp("", "enhance-thumb-*")
-	if err != nil {
-		return nil, "", err
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.Write(imageData); err != nil {
-		tmpFile.Close()
-		return nil, "", err
-	}
-	tmpFile.Close()
-
-	info, _ := os.Stat(tmpPath)
-	mf := &media.MediaFile{
-		Path:     tmpPath,
-		MIMEType: mimeType,
-		Size:     info.Size(),
-	}
-
-	return media.GenerateThumbnail(mf, maxDimension)
 }

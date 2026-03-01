@@ -36,13 +36,6 @@ import (
 
 var coldStart = true
 
-// maxPresignedURLVideoBytes is the largest video file that can be referenced
-// via an S3 presigned URL in the Gemini FileData.FileURI field. The Gemini API
-// returns INVALID_ARGUMENT for HTTPS-URL-referenced files above ~15 MiB.
-// We use 10 MiB as a conservative threshold to leave headroom.
-// Videos exceeding this limit are uploaded to the Gemini Files API instead.
-const maxPresignedURLVideoBytes int64 = 10 * 1024 * 1024 // 10 MiB
-
 // AWS clients initialized at cold start.
 var (
 	s3Client         *s3.Client
