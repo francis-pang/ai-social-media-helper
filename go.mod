@@ -1,4 +1,4 @@
-module github.com/fpang/gemini-media-cli
+module github.com/fpang/ai-social-media-helper
 
 go 1.26.0
 

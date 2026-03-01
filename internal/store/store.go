@@ -268,7 +268,7 @@ type EnhancementItem struct {
 }
 
 // AnalysisResult is the Phase 2 quality analysis output.
-// Mirrors chat.AnalysisResult for DynamoDB persistence.
+// Mirrors ai.AnalysisResult for DynamoDB persistence.
 type AnalysisResult struct {
 	OverallAssessment     string            `json:"overallAssessment" dynamodbav:"overallAssessment"`
 	RemainingImprovements []ImprovementItem `json:"remainingImprovements,omitempty" dynamodbav:"remainingImprovements,omitempty"`

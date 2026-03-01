@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fpang/gemini-media-cli/internal/chat"
-	"github.com/fpang/gemini-media-cli/internal/cli"
-	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/cli"
+	"github.com/fpang/ai-social-media-helper/internal/media"
+	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"google.golang.org/genai"
@@ -51,7 +51,7 @@ func init() {
 	rootCmd.Flags().IntVar(&maxDepthFlag, "max-depth", 0, "Maximum recursion depth (0 = unlimited)")
 	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum media items to process (0 = unlimited)")
 	rootCmd.Flags().StringVarP(&contextFlag, "context", "c", "", "Trip/event description for media selection (e.g., 'Birthday party at restaurant then karaoke')")
-	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3.1-pro-preview)")
+	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", ai.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3.1-pro-preview)")
 }
 
 func main() {
@@ -116,13 +116,13 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 		Msg("Starting quality-agnostic media selection")
 
 	// Configure scan options
-	opts := filehandler.ScanOptions{
+	opts := media.ScanOptions{
 		MaxDepth: maxDepthFlag,
 		Limit:    limitFlag,
 	}
 
 	// Scan directory for images AND videos (mixed media)
-	files, err := filehandler.ScanDirectoryMediaWithOptions(dirPath, opts)
+	files, err := media.ScanDirectoryMediaWithOptions(dirPath, opts)
 	if err != nil {
 		log.Fatal().Err(err).Str("path", dirPath).Msg("failed to scan directory")
 	}
@@ -135,9 +135,9 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 	var imageCount, videoCount int
 	for _, file := range files {
 		ext := strings.ToLower(filepath.Ext(file.Path))
-		if filehandler.IsImage(ext) {
+		if media.IsImage(ext) {
 			imageCount++
-		} else if filehandler.IsVideo(ext) {
+		} else if media.IsVideo(ext) {
 			videoCount++
 		}
 	}
@@ -154,7 +154,7 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 	if limitFlag > 0 && len(files) == limitFlag {
 		fmt.Printf("(limited to %d)\n", limitFlag)
 	}
-	fmt.Printf("Max selection: %d\n", chat.DefaultMaxMedia)
+	fmt.Printf("Max selection: %d\n", ai.DefaultMaxMedia)
 	fmt.Printf("Model: %s\n", modelFlag)
 	if tripContext != "" {
 		fmt.Printf("Context: %s\n", tripContext)
@@ -176,10 +176,10 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 		// Determine media type indicator
 		typeIndicator := "📷"
 		durationStr := ""
-		if filehandler.IsVideo(ext) {
+		if media.IsVideo(ext) {
 			typeIndicator = "🎬"
 			if file.Metadata != nil {
-				if vm, ok := file.Metadata.(*filehandler.VideoMetadata); ok && vm.Duration > 0 {
+				if vm, ok := file.Metadata.(*media.VideoMetadata); ok && vm.Duration > 0 {
 					durationStr = fmt.Sprintf(" %s", cli.FormatDurationShort(vm.Duration))
 				}
 			}
@@ -209,7 +209,7 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 
 	// Ask Gemini to select media using quality-agnostic criteria
 	// Local mode: no sessionID, no S3 storage, no caching
-	response, err := chat.AskMediaSelection(ctx, client, files, chat.DefaultMaxMedia, tripContext, modelFlag, "", nil, nil)
+	response, err := ai.AskMediaSelection(ctx, client, files, ai.DefaultMaxMedia, tripContext, modelFlag, "", nil, nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to get media selection from Gemini")
 	}
@@ -223,8 +223,8 @@ func runDirectorySelection(ctx context.Context, client *genai.Client, dirPath st
 // runMediaAnalysis loads a media file (image or video) and generates a social media post description.
 func runMediaAnalysis(ctx context.Context, client *genai.Client, mediaPath string) {
 	ext := strings.ToLower(filepath.Ext(mediaPath))
-	isVideo := filehandler.IsVideo(ext)
-	isImage := filehandler.IsImage(ext)
+	isVideo := media.IsVideo(ext)
+	isImage := media.IsImage(ext)
 
 	mediaType := "media"
 	emoji := "📁"
@@ -239,7 +239,7 @@ func runMediaAnalysis(ctx context.Context, client *genai.Client, mediaPath strin
 	log.Info().Str("path", mediaPath).Str("type", mediaType).Msg("Starting media analysis")
 
 	// Load the media file (extracts metadata, determines if Files API needed)
-	mediaFile, err := filehandler.LoadMediaFile(mediaPath)
+	mediaFile, err := media.LoadMediaFile(mediaPath)
 	if err != nil {
 		log.Fatal().Err(err).Str("path", mediaPath).Msg("failed to load media file")
 	}
@@ -268,10 +268,10 @@ func runMediaAnalysis(ctx context.Context, client *genai.Client, mediaPath strin
 	fmt.Println()
 
 	// Build the appropriate prompt based on media type
-	prompt := chat.BuildSocialMediaPrompt(mediaFile.Metadata)
+	prompt := ai.BuildSocialMediaPrompt(mediaFile.Metadata)
 	log.Debug().Str("prompt_length", fmt.Sprintf("%d chars", len(prompt))).Msg("Using social media prompt")
 
-	response, err := chat.AskMediaQuestion(ctx, client, mediaFile, prompt)
+	response, err := ai.AskMediaQuestion(ctx, client, mediaFile, prompt)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to analyze media")
 	}
@@ -283,11 +283,11 @@ func runMediaAnalysis(ctx context.Context, client *genai.Client, mediaPath strin
 }
 
 // displayMetadata prints the extracted metadata to the console.
-func displayMetadata(metadata filehandler.MediaMetadata) {
+func displayMetadata(metadata media.MediaMetadata) {
 	switch m := metadata.(type) {
-	case *filehandler.ImageMetadata:
+	case *media.ImageMetadata:
 		displayImageMetadata(m)
-	case *filehandler.VideoMetadata:
+	case *media.VideoMetadata:
 		displayVideoMetadata(m)
 	default:
 		fmt.Println("📋 Metadata extracted (unknown type)")
@@ -295,7 +295,7 @@ func displayMetadata(metadata filehandler.MediaMetadata) {
 }
 
 // displayImageMetadata prints image-specific metadata.
-func displayImageMetadata(m *filehandler.ImageMetadata) {
+func displayImageMetadata(m *media.ImageMetadata) {
 	fmt.Println("📍 EXIF Metadata Extracted:")
 	if m.HasGPS {
 		fmt.Printf("   GPS: %.6f, %.6f\n", m.Latitude, m.Longitude)
@@ -310,7 +310,7 @@ func displayImageMetadata(m *filehandler.ImageMetadata) {
 }
 
 // displayVideoMetadata prints video-specific metadata.
-func displayVideoMetadata(m *filehandler.VideoMetadata) {
+func displayVideoMetadata(m *media.VideoMetadata) {
 	fmt.Println("🎥 Video Metadata Extracted:")
 	if m.HasGPS {
 		fmt.Printf("   GPS: %.6f, %.6f\n", m.Latitude, m.Longitude)

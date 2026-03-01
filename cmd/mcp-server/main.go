@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	mcpserver "github.com/fpang/gemini-media-cli/internal/mcp"
+	mcpserver "github.com/fpang/ai-social-media-helper/internal/mcpserver"
 )
 
 func main() {

@@ -1,0 +1,330 @@
+// Package main provides a Lambda entry point for the Instagram OAuth
+// callback handler (DDR-048).
+//
+// This is a lightweight Lambda (128 MB, 10s timeout) that handles:
+//   - GET /oauth/callback?code=AUTH_CODE — exchange code for tokens, store in SSM
+//   - GET /oauth/callback?error=... — user denied access
+//
+// Credentials are loaded from SSM Parameter Store at cold start:
+//   - /ai-social-media/prod/instagram-app-id
+//   - /ai-social-media/prod/instagram-app-secret
+//   - /ai-social-media/prod/instagram-oauth-redirect-uri
+//
+// On successful token exchange, the Lambda writes the long-lived token
+// and user ID to SSM, making them available to the API Lambda for
+// Instagram publishing (DDR-040).
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
+
+	"github.com/fpang/ai-social-media-helper/internal/instagram"
+	"github.com/fpang/ai-social-media-helper/internal/logging"
+	"github.com/rs/zerolog/log"
+)
+
+var (
+	ssmClient   *ssm.Client
+	appID       string
+	appSecret   string
+	redirectURI string
+
+	// SSM parameter paths for writing tokens (read from environment).
+	tokenParam  string
+	userIDParam string
+)
+
+var coldStart = true
+
+func init() {
+	initStart := time.Now()
+	logging.Init()
+
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to load AWS config")
+	}
+	log.Debug().Str("region", cfg.Region).Msg("AWS config loaded")
+
+	ssmClient = ssm.NewFromConfig(cfg)
+
+	var ssmStart time.Time
+	// Load Instagram App ID from SSM.
+	appID = os.Getenv("INSTAGRAM_APP_ID")
+	if appID == "" {
+		paramName := os.Getenv("SSM_APP_ID_PARAM")
+		if paramName == "" {
+			paramName = "/ai-social-media/prod/instagram-app-id"
+		}
+		ssmStart = time.Now()
+		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
+			Name:           &paramName,
+			WithDecryption: aws.Bool(false),
+		})
+		if err != nil {
+			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read Instagram app ID from SSM")
+		}
+		appID = *result.Parameter.Value
+		log.Debug().Dur("elapsed", time.Since(ssmStart)).Msg("Instagram app ID loaded from SSM")
+	}
+
+	// Load Instagram App Secret from SSM.
+	appSecret = os.Getenv("INSTAGRAM_APP_SECRET")
+	if appSecret == "" {
+		paramName := os.Getenv("SSM_APP_SECRET_PARAM")
+		if paramName == "" {
+			paramName = "/ai-social-media/prod/instagram-app-secret"
+		}
+		ssmStart = time.Now()
+		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
+			Name:           &paramName,
+			WithDecryption: aws.Bool(true),
+		})
+		if err != nil {
+			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read app secret from SSM")
+		}
+		appSecret = *result.Parameter.Value
+		log.Debug().Dur("elapsed", time.Since(ssmStart)).Msg("Instagram app secret loaded from SSM")
+	}
+
+	// Load OAuth redirect URI from SSM.
+	redirectURI = os.Getenv("OAUTH_REDIRECT_URI")
+	if redirectURI == "" {
+		paramName := os.Getenv("SSM_REDIRECT_URI_PARAM")
+		if paramName == "" {
+			paramName = "/ai-social-media/prod/instagram-oauth-redirect-uri"
+		}
+		ssmStart = time.Now()
+		result, err := ssmClient.GetParameter(context.Background(), &ssm.GetParameterInput{
+			Name:           &paramName,
+			WithDecryption: aws.Bool(false),
+		})
+		if err != nil {
+			log.Fatal().Err(err).Str("param", paramName).Msg("Failed to read OAuth redirect URI from SSM")
+		}
+		redirectURI = *result.Parameter.Value
+		log.Debug().Str("redirectUri", redirectURI).Dur("elapsed", time.Since(ssmStart)).Msg("OAuth redirect URI loaded from SSM")
+	}
+
+	// SSM parameter paths for writing tokens.
+	tokenParam = os.Getenv("SSM_TOKEN_PARAM")
+	if tokenParam == "" {
+		tokenParam = "/ai-social-media/prod/instagram-access-token"
+	}
+	userIDParam = os.Getenv("SSM_USER_ID_PARAM")
+	if userIDParam == "" {
+		userIDParam = "/ai-social-media/prod/instagram-user-id"
+	}
+
+	// Emit consolidated cold-start log for troubleshooting.
+	logging.NewStartupLogger("oauth-lambda").
+		InitDuration(time.Since(initStart)).
+		SSMParam("appId", logging.EnvOrDefault("SSM_APP_ID_PARAM", "/ai-social-media/prod/instagram-app-id")).
+		SSMParam("appSecret", logging.EnvOrDefault("SSM_APP_SECRET_PARAM", "/ai-social-media/prod/instagram-app-secret")).
+		SSMParam("redirectUri", logging.EnvOrDefault("SSM_REDIRECT_URI_PARAM", "/ai-social-media/prod/instagram-oauth-redirect-uri")).
+		SSMParam("tokenStore", tokenParam).
+		SSMParam("userIdStore", userIDParam).
+		Config("redirectURI", redirectURI).
+		Log()
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/callback", handleOAuthCallback)
+	mux.HandleFunc("/oauth/authorize", handleOAuthAuthorize) // Risk 19D: Generate auth URL with CSRF state
+
+	adapter := httpadapter.NewV2(mux)
+	lambda.Start(adapter.ProxyWithContext)
+}
+
+// handleOAuthAuthorize generates the Instagram authorization URL with a CSRF state parameter.
+// Risk 19D: The state token is stored in SSM and verified on callback to prevent CSRF attacks.
+func handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondHTML(w, http.StatusMethodNotAllowed, "Error", "Method not allowed.")
+		return
+	}
+
+	// Generate a cryptographically random state token (CSRF protection).
+	stateBytes := make([]byte, 16)
+	if _, err := rand.Read(stateBytes); err != nil {
+		log.Error().Err(err).Msg("Failed to generate CSRF state token")
+		respondHTML(w, http.StatusInternalServerError, "Error", "Failed to generate security token.")
+		return
+	}
+	state := hex.EncodeToString(stateBytes)
+
+	// Store state in SSM for validation on callback (expires naturally — single use).
+	stateParam := "/ai-social-media/prod/oauth-csrf-state"
+	_, err := ssmClient.PutParameter(r.Context(), &ssm.PutParameterInput{
+		Name:      &stateParam,
+		Value:     &state,
+		Type:      ssmtypes.ParameterTypeString,
+		Overwrite: aws.Bool(true),
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to store CSRF state in SSM")
+		respondHTML(w, http.StatusInternalServerError, "Error", "Failed to store security token.")
+		return
+	}
+
+	authURL := fmt.Sprintf(
+		"https://www.instagram.com/oauth/authorize?client_id=%s&redirect_uri=%s&scope=instagram_basic,instagram_content_publish,instagram_manage_insights&response_type=code&state=%s",
+		appID, redirectURI, state,
+	)
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// handleOAuthCallback processes the Instagram OAuth redirect.
+// Meta redirects the user's browser here with ?code=AUTH_CODE (success)
+// or ?error=ERROR&error_reason=REASON&error_description=DESC (denied).
+func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if coldStart {
+		coldStart = false
+		log.Info().Str("function", "oauth-lambda").Msg("Cold start — first invocation")
+	}
+
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Msg("OAuth callback received")
+
+	if r.Method != http.MethodGet {
+		log.Warn().Str("method", r.Method).Msg("Method not allowed")
+		respondHTML(w, http.StatusMethodNotAllowed, "Error", "Method not allowed.")
+		return
+	}
+
+	// Risk 19D: Verify CSRF state parameter if present.
+	// If state is provided in the callback, it must match the stored value.
+	// This prevents CSRF attacks on the OAuth callback URL.
+	if state := r.URL.Query().Get("state"); state != "" {
+		stateParam := "/ai-social-media/prod/oauth-csrf-state"
+		result, err := ssmClient.GetParameter(r.Context(), &ssm.GetParameterInput{
+			Name: &stateParam,
+		})
+		if err != nil || result.Parameter == nil || *result.Parameter.Value != state {
+			log.Warn().Str("state", state).Msg("OAuth CSRF state mismatch — possible CSRF attack")
+			respondHTML(w, http.StatusForbidden, "Security Error",
+				"Invalid security token. Please start the authorization flow again from /oauth/authorize.")
+			return
+		}
+		log.Debug().Msg("OAuth CSRF state verified successfully")
+		// Clear the used state token (single-use).
+		ssmClient.DeleteParameter(r.Context(), &ssm.DeleteParameterInput{Name: &stateParam})
+	}
+
+	// Check for error response (user denied access).
+	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		reason := r.URL.Query().Get("error_reason")
+		desc := r.URL.Query().Get("error_description")
+		log.Warn().Str("error", errParam).Str("reason", reason).Str("description", desc).
+			Msg("OAuth authorization denied by user")
+		respondHTML(w, http.StatusOK, "Authorization Denied",
+			fmt.Sprintf("Instagram authorization was denied: %s.", reason))
+		return
+	}
+
+	// Extract authorization code.
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		log.Error().Msg("OAuth callback received without code or error parameter")
+		respondHTML(w, http.StatusBadRequest, "Error", "Missing authorization code.")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Step 1: Exchange authorization code for short-lived token.
+	shortResult, err := instagram.ExchangeCode(ctx, code, appID, appSecret, redirectURI)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to exchange authorization code")
+		respondHTML(w, http.StatusBadGateway, "Token Exchange Failed",
+			"Failed to exchange the authorization code for an access token. Please try again.")
+		return
+	}
+
+	// Step 2: Exchange short-lived token for long-lived token.
+	longResult, err := instagram.ExchangeLongLivedToken(ctx, shortResult.AccessToken, appSecret)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to exchange for long-lived token")
+		respondHTML(w, http.StatusBadGateway, "Token Exchange Failed",
+			"Failed to exchange for a long-lived token. Please try again.")
+		return
+	}
+
+	// Step 3: Store long-lived token in SSM (SecureString, overwrite).
+	log.Debug().Str("param", tokenParam).Msg("Storing access token in SSM")
+	_, err = ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
+		Name:      &tokenParam,
+		Value:     &longResult.AccessToken,
+		Type:      ssmtypes.ParameterTypeSecureString,
+		Overwrite: aws.Bool(true),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("param", tokenParam).Msg("Failed to store access token in SSM")
+		respondHTML(w, http.StatusInternalServerError, "Storage Failed",
+			"Token was obtained but could not be stored. Please check Lambda logs.")
+		return
+	}
+	log.Info().Str("param", tokenParam).Msg("Long-lived access token stored in SSM")
+
+	// Step 4: Store user ID in SSM (String, overwrite).
+	log.Debug().Str("param", userIDParam).Msg("Storing user ID in SSM")
+	_, err = ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
+		Name:      &userIDParam,
+		Value:     &shortResult.UserID,
+		Type:      ssmtypes.ParameterTypeString,
+		Overwrite: aws.Bool(true),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("param", userIDParam).Msg("Failed to store user ID in SSM")
+		respondHTML(w, http.StatusInternalServerError, "Storage Failed",
+			"Token was stored but user ID could not be saved. Please check Lambda logs.")
+		return
+	}
+	log.Info().Str("param", userIDParam).Str("userId", shortResult.UserID).Msg("Instagram user ID stored in SSM")
+
+	// Success — render confirmation page.
+	days := longResult.ExpiresIn / 86400
+	log.Debug().Int("days", int(days)).Int64("expiresIn", longResult.ExpiresIn).Msg("Token expiry calculated")
+	respondHTML(w, http.StatusOK, "Instagram Connected",
+		fmt.Sprintf("Your Instagram account (user ID: %s) has been connected successfully.<br><br>"+
+			"Long-lived token stored — expires in %d days.<br><br>"+
+			"The API Lambda will use the new token on its next cold start.<br>"+
+			"You can close this window.", shortResult.UserID, days))
+}
+
+// respondHTML writes a minimal HTML page with the given title and message.
+func respondHTML(w http.ResponseWriter, status int, title, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%s</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 80px auto; padding: 0 20px; text-align: center; color: #1a1a1a; }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+    p { font-size: 1rem; line-height: 1.6; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>%s</h1>
+  <p>%s</p>
+</body>
+</html>`, title, title, message)
+}

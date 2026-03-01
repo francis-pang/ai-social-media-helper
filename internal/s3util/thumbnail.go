@@ -3,11 +3,11 @@ package s3util
 import (
 	"os"
 
-	"github.com/fpang/gemini-media-cli/internal/filehandler"
+	"github.com/fpang/ai-social-media-helper/internal/media"
 )
 
 // GenerateThumbnailFromBytes writes raw image data to a temp file and delegates
-// to filehandler.GenerateThumbnail. Replaces identical functions in
+// to media.GenerateThumbnail. Replaces identical functions in
 // enhance-lambda and description-lambda.
 func GenerateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension int) ([]byte, string, error) {
 	tmpFile, err := os.CreateTemp("", "thumb-*")
@@ -24,11 +24,11 @@ func GenerateThumbnailFromBytes(imageData []byte, mimeType string, maxDimension 
 	tmpFile.Close()
 
 	info, _ := os.Stat(tmpPath)
-	mf := &filehandler.MediaFile{
+	mf := &media.MediaFile{
 		Path:     tmpPath,
 		MIMEType: mimeType,
 		Size:     info.Size(),
 	}
 
-	return filehandler.GenerateThumbnail(mf, maxDimension)
+	return media.GenerateThumbnail(mf, maxDimension)
 }

@@ -28,8 +28,8 @@ For Lambda functions that only need the Go binary (API handler, Enhancement proc
 Usage:
 
 ```bash
-docker build --build-arg CMD_TARGET=media-lambda -f cmd/media-lambda/Dockerfile.light .
-docker build --build-arg CMD_TARGET=enhance-lambda -f cmd/media-lambda/Dockerfile.light .
+docker build --build-arg CMD_TARGET=media-lambda -f build/Dockerfile.light .
+docker build --build-arg CMD_TARGET=enhance-lambda -f build/Dockerfile.light .
 ```
 
 ### `Dockerfile.heavy` — With ffmpeg
@@ -51,9 +51,9 @@ For Lambda functions that need ffmpeg/ffprobe for media processing (Thumbnail, S
 Usage:
 
 ```bash
-docker build --build-arg CMD_TARGET=thumbnail-lambda -f cmd/media-lambda/Dockerfile.heavy .
-docker build --build-arg CMD_TARGET=selection-lambda -f cmd/media-lambda/Dockerfile.heavy .
-docker build --build-arg CMD_TARGET=video-lambda -f cmd/media-lambda/Dockerfile.heavy .
+docker build --build-arg CMD_TARGET=thumbnail-lambda -f build/Dockerfile.heavy .
+docker build --build-arg CMD_TARGET=selection-lambda -f build/Dockerfile.heavy .
+docker build --build-arg CMD_TARGET=video-lambda -f build/Dockerfile.heavy .
 ```
 
 ## Layer Structure and Sharing
@@ -211,11 +211,11 @@ Source (GitHub main)
   │
   ▼
 Build (CodeBuild, privileged mode)
-  ├── docker build --build-arg CMD_TARGET=media-lambda     -f Dockerfile.light  →  light:api-{commit}
-  ├── docker build --build-arg CMD_TARGET=enhance-lambda   -f Dockerfile.light  →  light:enhance-{commit}
-  ├── docker build --build-arg CMD_TARGET=thumbnail-lambda -f Dockerfile.heavy  →  heavy:thumb-{commit}
-  ├── docker build --build-arg CMD_TARGET=selection-lambda -f Dockerfile.heavy  →  heavy:select-{commit}
-  └── docker build --build-arg CMD_TARGET=video-lambda     -f Dockerfile.heavy  →  heavy:video-{commit}
+  ├── docker build --build-arg CMD_TARGET=media-lambda     -f build/Dockerfile.light  →  light:api-{commit}
+  ├── docker build --build-arg CMD_TARGET=enhance-lambda   -f build/Dockerfile.light  →  light:enhance-{commit}
+  ├── docker build --build-arg CMD_TARGET=thumbnail-lambda -f build/Dockerfile.heavy  →  heavy:thumb-{commit}
+  ├── docker build --build-arg CMD_TARGET=selection-lambda -f build/Dockerfile.heavy  →  heavy:select-{commit}
+  └── docker build --build-arg CMD_TARGET=video-lambda     -f build/Dockerfile.heavy  →  heavy:video-{commit}
   │
   ▼
 Deploy (CodeBuild)
@@ -249,21 +249,20 @@ To add a new Lambda function:
 1. Create `cmd/new-lambda/main.go` with the Lambda handler
 2. Decide if it needs ffmpeg (most don't)
 3. In the CDK backend stack, add a new Lambda function pointing to the appropriate ECR repo
-4. In the backend pipeline build spec, add one line: `docker build --build-arg CMD_TARGET=new-lambda -f Dockerfile.{light|heavy} .`
+4. In the backend pipeline build spec, add one line: `docker build --build-arg CMD_TARGET=new-lambda -f build/Dockerfile.{light|heavy} .`
 5. In the backend pipeline deploy spec, add: `aws lambda update-function-code --function ... --image ...`
 
 **No Dockerfile changes required.**
 
 ## Backward Compatibility
 
-The original `Dockerfile` (used by the current single-Lambda pipeline) is preserved alongside the new parameterized Dockerfiles until the pipeline switch is complete:
+All three Dockerfiles live in `build/` at the repo root, since they serve all Lambda binaries (not just `media-lambda`):
 
 ```
-cmd/media-lambda/
-├── Dockerfile        # Original (DDR-027), used by current pipeline
-├── Dockerfile.light  # New (DDR-035), parameterized, no ffmpeg
-├── Dockerfile.heavy  # New (DDR-035), parameterized, with ffmpeg
-└── main.go           # API Lambda entry point
+build/
+├── Dockerfile        # Original (DDR-027)
+├── Dockerfile.light  # Parameterized (DDR-035), no ffmpeg
+└── Dockerfile.heavy  # Parameterized (DDR-035), with ffmpeg
 ```
 
 ## Related Documents

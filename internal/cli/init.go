@@ -3,8 +3,8 @@ package cli
 import (
 	"context"
 
-	"github.com/fpang/gemini-media-cli/internal/auth"
-	"github.com/fpang/gemini-media-cli/internal/chat"
+	"github.com/fpang/ai-social-media-helper/internal/auth"
+	"github.com/fpang/ai-social-media-helper/internal/ai"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 )
@@ -18,7 +18,7 @@ func InitGeminiClient() (context.Context, *genai.Client) {
 	}
 
 	ctx := context.Background()
-	client, err := chat.NewGeminiClient(ctx, apiKey)
+	client, err := ai.NewGeminiClient(ctx, apiKey)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create Gemini client")
 	}

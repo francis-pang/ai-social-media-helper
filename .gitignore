@@ -7,25 +7,7 @@
 *.dll
 *.so
 *.dylib
-/gemini-cli
-/media-select
-/media-triage
-/media-web
-/media-triage-eval
-/media-lambda
-/triage-lambda
-/description-lambda
-/download-lambda
-/publish-lambda
-/enhance-lambda
-/thumbnail-lambda
-/selection-lambda
-/video-lambda
-/worker-lambda
-/webhook-lambda
-/oauth-lambda
-/main
-/bootstrap
+/bin/
 /function.zip
 
 # Test binary, built with `go test -c`
@@ -68,9 +50,9 @@ sessions/
 sessions/*.json
 
 # Frontend (Node.js / Vite)
-web/frontend/node_modules/
-web/frontend/dist/
-web/frontend/test-results/
+web/node_modules/
+web/dist/
+web/test-results/
 
 # Build artifacts
 dist/

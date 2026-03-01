@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fpang/gemini-media-cli/internal/metrics"
+	"github.com/fpang/ai-social-media-helper/internal/metrics"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 )

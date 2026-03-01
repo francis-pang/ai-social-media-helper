@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fpang/gemini-media-cli/internal/chat"
-	"github.com/fpang/gemini-media-cli/internal/cli"
-	"github.com/fpang/gemini-media-cli/internal/filehandler"
-	"github.com/fpang/gemini-media-cli/internal/logging"
+	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/cli"
+	"github.com/fpang/ai-social-media-helper/internal/media"
+	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"google.golang.org/genai"
@@ -52,7 +52,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&directoryFlag, "directory", "d", "", "Directory containing media to triage")
 	rootCmd.Flags().IntVar(&maxDepthFlag, "max-depth", 0, "Maximum recursion depth (0 = unlimited)")
 	rootCmd.Flags().IntVar(&limitFlag, "limit", 0, "Maximum media items to process (0 = unlimited)")
-	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", chat.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3.1-pro-preview)")
+	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", ai.DefaultModelName, "Gemini model to use (e.g., gemini-3-flash-preview, gemini-3.1-pro-preview)")
 	rootCmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Show triage report without prompting for deletion")
 }
 
@@ -90,13 +90,13 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 		Msg("Starting media triage")
 
 	// Configure scan options
-	opts := filehandler.ScanOptions{
+	opts := media.ScanOptions{
 		MaxDepth: maxDepthFlag,
 		Limit:    limitFlag,
 	}
 
 	// Scan directory for images AND videos
-	files, err := filehandler.ScanDirectoryMediaWithOptions(dirPath, opts)
+	files, err := media.ScanDirectoryMediaWithOptions(dirPath, opts)
 	if err != nil {
 		log.Fatal().Err(err).Str("path", dirPath).Msg("failed to scan directory")
 	}
@@ -109,9 +109,9 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 	var imageCount, videoCount int
 	for _, file := range files {
 		ext := strings.ToLower(filepath.Ext(file.Path))
-		if filehandler.IsImage(ext) {
+		if media.IsImage(ext) {
 			imageCount++
-		} else if filehandler.IsVideo(ext) {
+		} else if media.IsVideo(ext) {
 			videoCount++
 		}
 	}
@@ -135,15 +135,15 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 	fmt.Println("--------------------------------------------")
 
 	// Pre-filter: flag videos under 2 seconds
-	var filesToAnalyze []*filehandler.MediaFile
-	var preFilteredResults []chat.TriageResult
+	var filesToAnalyze []*media.MediaFile
+	var preFilteredResults []ai.TriageResult
 	preFilteredPaths := make(map[string]bool) // track paths for pre-filtered items
 
 	for _, file := range files {
 		ext := strings.ToLower(filepath.Ext(file.Path))
-		if filehandler.IsVideo(ext) && file.Metadata != nil {
-			if vm, ok := file.Metadata.(*filehandler.VideoMetadata); ok && vm.Duration > 0 && vm.Duration < 2*time.Second {
-				preFilteredResults = append(preFilteredResults, chat.TriageResult{
+		if media.IsVideo(ext) && file.Metadata != nil {
+			if vm, ok := file.Metadata.(*media.VideoMetadata); ok && vm.Duration > 0 && vm.Duration < 2*time.Second {
+				preFilteredResults = append(preFilteredResults, ai.TriageResult{
 					Filename: filepath.Base(file.Path),
 					Saveable: false,
 					Reason:   fmt.Sprintf("Video too short (%.1fs) - likely accidental recording", vm.Duration.Seconds()),
@@ -161,7 +161,7 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 	}
 
 	// Batch send remaining media to Gemini for triage
-	var aiResults []chat.TriageResult
+	var aiResults []ai.TriageResult
 	if len(filesToAnalyze) > 0 {
 		fmt.Println("--------------------------------------------")
 
@@ -169,9 +169,9 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 		var aiImageCount, aiVideoCount int
 		for _, file := range filesToAnalyze {
 			ext := strings.ToLower(filepath.Ext(file.Path))
-			if filehandler.IsImage(ext) {
+			if media.IsImage(ext) {
 				aiImageCount++
-			} else if filehandler.IsVideo(ext) {
+			} else if media.IsVideo(ext) {
 				aiVideoCount++
 			}
 		}
@@ -184,7 +184,7 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 		fmt.Println()
 
 		// Local mode: no sessionID, no S3 storage
-		aiResults, err = chat.AskMediaTriage(ctx, client, filesToAnalyze, modelFlag, "", nil, nil, nil, "")
+		aiResults, err = ai.AskMediaTriage(ctx, client, filesToAnalyze, modelFlag, "", nil, nil, nil, "")
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to get triage results from Gemini")
 		}
@@ -194,7 +194,7 @@ func runTriage(ctx context.Context, client *genai.Client, dirPath string) {
 	// Match AI results back to files by index
 	type triageItem struct {
 		path   string
-		result chat.TriageResult
+		result ai.TriageResult
 	}
 
 	var allItems []triageItem

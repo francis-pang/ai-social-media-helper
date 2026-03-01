@@ -72,7 +72,7 @@ fi
 echo ""
 
 # --- 4. Frontend build ---
-FRONTEND_DIR="web/frontend"
+FRONTEND_DIR="web"
 if [ -d "$FRONTEND_DIR" ]; then
   info "Running frontend build..."
   pushd "$FRONTEND_DIR" > /dev/null

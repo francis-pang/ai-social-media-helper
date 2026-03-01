@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fpang/gemini-media-cli/internal/auth"
+	"github.com/fpang/ai-social-media-helper/internal/auth"
 	"github.com/rs/zerolog/log"
 )
 
