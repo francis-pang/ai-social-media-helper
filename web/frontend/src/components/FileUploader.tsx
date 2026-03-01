@@ -313,6 +313,19 @@ async function pollTriageResults(jobId: string, sessionId: string) {
         return;
       }
 
+      // Triage complete — navigate immediately. The API omits expectedFileCount/
+      // processedCount for completed jobs, so the allProcessed check below would
+      // never fire. Navigating here avoids an infinite poll when the job goes
+      // directly from "pending" → "complete" without an intermediate "processing"
+      // state with per-file counts.
+      if (results.status === "complete") {
+        triagePolling.value = false;
+        const doneFiles = files.value.filter(f => f.status === "done");
+        selectedPaths.value = doneFiles.map(f => f.key);
+        navigateToStep("processing");
+        return;
+      }
+
       // DDR-067: Finalize triage (start SF) when all uploads are done
       const allUploaded = files.value.length > 0 && files.value.every(
         f => f.status === "done" || f.status === "error"
