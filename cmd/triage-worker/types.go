@@ -6,8 +6,14 @@ type TriageEvent struct {
 	SessionID         string   `json:"sessionId"`
 	JobID             string   `json:"jobId"`
 	Model             string   `json:"model,omitempty"`
+	EconomyMode       bool     `json:"economy_mode,omitempty"`
 	ExpectedFileCount int      `json:"expectedFileCount,omitempty"`
 	VideoFileNames    []string `json:"videoFileNames,omitempty"`
+}
+
+// TriageRunResult is returned by triage-run when economy_mode is true.
+type TriageRunResult struct {
+	BatchJobID string `json:"batch_job_id,omitempty"`
 }
 
 // TriageInitResult is returned by the triage-init-session handler.

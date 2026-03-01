@@ -21,23 +21,25 @@ import (
 	"github.com/fpang/ai-social-media-helper/internal/store"
 )
 
+// resolveEconomyMode returns economy mode from event, defaulting to env ECONOMY_MODE.
+func resolveEconomyMode(eventEconomy bool) bool {
+	if v := os.Getenv("ECONOMY_MODE"); v == "true" {
+		return true
+	}
+	return eventEconomy
+}
+
 // handleTriageRun reads the pre-processed file manifest from the file-processing
 // table, generates presigned URLs, calls Gemini for AI triage, and writes results.
 // Simplified from the original that downloaded/processed files (DDR-061).
-func handleTriageRun(ctx context.Context, event TriageEvent) error {
+// When economy_mode is true, submits to Gemini Batch API and returns TriageRunResult
+// with batch_job_id for the parent SFN to poll.
+func handleTriageRun(ctx context.Context, event TriageEvent) (interface{}, error) {
 	jobStart := time.Now()
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "GEMINI_API_KEY not configured", func(ctx context.Context, sessionID, jobID, errMsg string) error {
-			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
-			return nil
-		})
-	}
-
-	client, err := ai.NewGeminiClient(ctx, apiKey)
+	client, err := ai.NewAIClient(ctx)
 	if err != nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Failed to create Gemini client: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Failed to create Gemini client: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -45,7 +47,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 
 	// Read processed file manifest from file-processing table (DDR-061)
 	if fileProcessStore == nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "File processing store not configured", func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, "File processing store not configured", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -53,7 +55,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 
 	fileResults, err := fileProcessStore.GetFileResults(ctx, event.SessionID, event.JobID)
 	if err != nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Failed to read file results: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Failed to read file results: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -68,7 +70,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	}
 
 	if len(validFiles) == 0 {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "No valid media files found after processing", func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, "No valid media files found after processing", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -123,7 +125,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 	}
 
 	if len(allMediaFiles) == 0 {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "No media files with valid presigned URLs", func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, "No media files with valid presigned URLs", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -159,18 +161,27 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		}
 	}
 
-	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Msg("Calling AskMediaTriage (DDR-061: presigned URLs from manifest)")
-	// DDR-065: Create CacheManager for context caching within triage batches.
+	economyMode := resolveEconomyMode(event.EconomyMode)
+	log.Debug().Int("fileCount", len(allMediaFiles)).Str("model", model).Bool("economyMode", economyMode).Msg("Calling AskMediaTriage (DDR-061: presigned URLs from manifest)")
+	// DDR-065: Create CacheManager for context caching within triage batches (not used in economy mode).
 	cacheMgr := ai.NewCacheManager(client)
 	defer cacheMgr.DeleteAll(ctx, event.SessionID)
 
-	triageResults, err := ai.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
+	output, err := ai.AskMediaTriage(ctx, client, allMediaFiles, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext, economyMode)
 	if err != nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Triage failed: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, fmt.Sprintf("Triage failed: %v", err), func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutTriageJob(ctx, sessionID, &store.TriageJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
 	}
+
+	// Economy mode: return batch_job_id for parent SFN to poll.
+	if output.BatchJobID != "" {
+		log.Info().Str("batchJobId", output.BatchJobID).Msg("Triage submitted to Gemini Batch API (economy mode)")
+		return &TriageRunResult{BatchJobID: output.BatchJobID}, nil
+	}
+
+	triageResults := output.Results
 
 	// Build thumbnail URL and processed key maps from file results
 	thumbnailURLs := make(map[int]string)
@@ -296,7 +307,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		Property("sessionId", event.SessionID).
 		Flush()
 
-	return nil
+	return nil, nil
 }
 
 func invokeRAGQuery(ctx context.Context, queryType, userID, sessionContext string) (string, error) {

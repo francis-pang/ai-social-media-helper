@@ -218,6 +218,156 @@ func CompressVideoForGemini(ctx context.Context, inputPath string, metadata *Vid
 	return outputPath, outputSize, cleanup, nil
 }
 
+// CompressVideoForCaptions compresses a video for caption/description workloads.
+// Uses aggressive settings: 768px max, 1 FPS, CRF 40, no audio.
+// Same no-upscale logic as CompressVideoForGemini (never upscales smaller sources).
+//
+// The cleanup function MUST be called to remove the temporary compressed file.
+func CompressVideoForCaptions(ctx context.Context, inputPath string, meta *VideoMetadata) (
+	outputPath string,
+	outputSize int64,
+	cleanup func(),
+	err error,
+) {
+	// Get input file size for logging
+	var inputSize int64
+	if inputInfo, err := os.Stat(inputPath); err == nil {
+		inputSize = inputInfo.Size()
+	}
+
+	var targetResolution int = 768
+	if meta != nil && meta.Width > 0 && meta.Height > 0 {
+		targetResolution = minInt(768, maxInt(meta.Width, meta.Height))
+	}
+
+	log.Info().
+		Str("input_path", inputPath).
+		Int64("input_size_bytes", inputSize).
+		Int("target_resolution", targetResolution).
+		Int("target_crf", 40).
+		Msg("Starting video compression for captions optimization")
+
+	// Check if ffmpeg is available
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("ffmpeg not found in PATH: %w", err)
+	}
+
+	// Create temporary output file
+	tempFile, err := os.CreateTemp("", "caption-compressed-*.webm")
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	outputPath = tempFile.Name()
+	tempFile.Close()
+
+	// Create cleanup function
+	cleanup = func() {
+		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("path", outputPath).Msg("Failed to remove compressed temp file")
+		} else {
+			log.Debug().Str("path", outputPath).Msg("Compressed temp file removed")
+		}
+	}
+
+	// Select preset based on video duration (same as CompressVideoForGemini)
+	preset := DefaultVideoPreset
+	if meta != nil && meta.Duration > 0 {
+		preset = SelectPreset(meta.Duration)
+	}
+
+	args := buildFFmpegArgsForCaptions(inputPath, outputPath, preset)
+
+	log.Debug().
+		Strs("args", args).
+		Msg("Running FFmpeg compression for captions")
+
+	// Run FFmpeg with context for cancellation support
+	ffmpegStart := time.Now()
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	output, err := cmd.CombinedOutput()
+	ffmpegElapsed := time.Since(ffmpegStart)
+	if err != nil {
+		cleanup() // Clean up temp file on error
+		log.Warn().
+			Err(err).
+			Str("input_path", inputPath).
+			Str("ffmpeg_output", string(output)).
+			Dur("duration", ffmpegElapsed).
+			Msg("FFmpeg compression for captions failed")
+		metrics.New("AiSocialMedia").
+			Metric("VideoCompressionMs", float64(ffmpegElapsed.Milliseconds()), metrics.UnitMilliseconds).
+			Count("VideoCompressionErrors").
+			Flush()
+		return "", 0, nil, fmt.Errorf("ffmpeg compression failed: %w\nOutput: %s", err, string(output))
+	}
+
+	// Get compressed file size
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		cleanup()
+		return "", 0, nil, fmt.Errorf("failed to stat compressed file: %w", err)
+	}
+	outputSize = info.Size()
+
+	compressionRatio := float64(0)
+	if outputSize > 0 {
+		compressionRatio = float64(inputSize) / float64(outputSize)
+	}
+
+	// Get video duration for logging
+	var duration time.Duration
+	if meta != nil && meta.Duration > 0 {
+		duration = meta.Duration
+	}
+
+	// Emit video compression metrics
+	metrics.New("AiSocialMedia").
+		Metric("VideoCompressionMs", float64(ffmpegElapsed.Milliseconds()), metrics.UnitMilliseconds).
+		Metric("MediaFileSizeBytes", float64(inputSize), metrics.UnitBytes).
+		Metric("VideoCompressionRatio", compressionRatio, metrics.UnitNone).
+		Count("VideoCompressions").
+		Flush()
+
+	log.Info().
+		Str("input_path", inputPath).
+		Str("output_path", outputPath).
+		Int64("input_size_bytes", inputSize).
+		Int64("output_size_bytes", outputSize).
+		Dur("duration", duration).
+		Dur("compression_time", ffmpegElapsed).
+		Float64("compression_ratio", compressionRatio).
+		Msg("Video compression for captions complete")
+
+	return outputPath, outputSize, cleanup, nil
+}
+
+// buildFFmpegArgsForCaptions constructs FFmpeg arguments for caption-grade compression.
+// 768px max, 1 FPS, CRF 40, AV1, no audio. Never upscales.
+func buildFFmpegArgsForCaptions(inputPath, outputPath string, preset int) []string {
+	args := []string{"-i", inputPath}
+
+	// Video codec: AV1 via libsvtav1
+	args = append(args, "-c:v", "libsvtav1")
+	args = append(args, "-preset", strconv.Itoa(preset))
+	args = append(args, "-crf", "40")
+
+	// Frame rate: 1 FPS for caption workloads
+	args = append(args, "-r", "1")
+
+	// Resolution: scale down only if larger than 768, preserve aspect ratio, no upscaling
+	vf := "scale='min(768,iw)':-2,format=yuv420p"
+	args = append(args, "-vf", vf)
+
+	// No audio
+	args = append(args, "-an")
+
+	// Overwrite output file
+	args = append(args, "-y", outputPath)
+
+	return args
+}
+
 // buildFFmpegArgs constructs FFmpeg arguments with smart no-upscaling logic.
 // Never upscales any attribute - if source is lower quality than target, keeps original.
 // The preset parameter controls encoding speed vs efficiency (DDR-067: adaptive selection).

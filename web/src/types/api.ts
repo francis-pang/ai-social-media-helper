@@ -70,6 +70,8 @@ export interface TriageStartRequest {
   /** S3 session ID (Phase 2 — Lambda lists objects with this prefix). */
   sessionId?: string;
   model?: string;
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/triage/start. */
@@ -88,12 +90,16 @@ export interface TriageInitRequest {
   sessionId: string;
   expectedFileCount: number;
   model?: string;
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Request body for POST /api/triage/finalize (DDR-067). */
 export interface TriageFinalizeRequest {
   sessionId: string;
   jobId: string;
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/triage/finalize (DDR-067). */
@@ -203,6 +209,8 @@ export interface SelectionStartRequest {
   sessionId: string;
   tripContext: string;
   model?: string;
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/selection/start. */
@@ -269,6 +277,8 @@ export interface SelectionResults {
 export interface EnhancementStartRequest {
   sessionId: string;
   keys: string[];
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/enhance/start. */
@@ -348,6 +358,8 @@ export interface DownloadStartRequest {
   sessionId: string;
   keys: string[];
   groupLabel: string;
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/download/start. */
@@ -393,6 +405,8 @@ export interface DescriptionGenerateRequest {
   keys: string[];
   groupLabel: string;
   tripContext: string;
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/description/generate. */
@@ -422,6 +436,53 @@ export interface DescriptionFeedbackResponse {
   status: string;
 }
 
+// --- FB Prep types ---
+
+/** Request body for POST /api/fb-prep/start. */
+export interface FBPrepStartRequest {
+  sessionId: string;
+  mediaItems: Array<{ key: string }>;
+  economyMode?: boolean;
+}
+
+/** Response from POST /api/fb-prep/start. */
+export interface FBPrepStartResponse {
+  id: string;
+  session_id: string;
+  status: string;
+}
+
+/** Response from GET /api/fb-prep/{id}/results. */
+export interface FBPrepJob {
+  id: string;
+  session_id?: string;
+  status: string;
+  items?: FBPrepItem[];
+  error?: string;
+}
+
+/** A single media item's Facebook prep output. */
+export interface FBPrepItem {
+  item_index: number;
+  s3_key: string;
+  caption: string;
+  location_tag: string;
+  date_timestamp: string;
+  location_confidence: string;
+}
+
+/** Request body for POST /api/fb-prep/{id}/feedback. */
+export interface FBPrepFeedbackRequest {
+  sessionId: string;
+  itemIndex: number;
+  feedback: string;
+}
+
+/** Response from POST /api/fb-prep/{id}/feedback. */
+export interface FBPrepFeedbackResponse {
+  status: string;
+}
+
 // --- Publish types (DDR-040) ---
 
 /** Request body for POST /api/publish/start. */
@@ -431,6 +492,8 @@ export interface PublishStartRequest {
   keys: string[];
   caption: string;
   hashtags: string[];
+  /** Economy mode: 50% cost savings, ~10 min processing. */
+  economy_mode?: boolean;
 }
 
 /** Response from POST /api/publish/start. */

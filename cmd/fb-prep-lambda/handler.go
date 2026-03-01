@@ -1,0 +1,354 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
+	"google.golang.org/genai"
+
+	"github.com/fpang/ai-social-media-helper/internal/assets"
+	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/media"
+	"github.com/fpang/ai-social-media-helper/internal/s3util"
+	"github.com/fpang/ai-social-media-helper/internal/store"
+)
+
+// fbPrepResponseItem matches the JSON output format from the AI.
+type fbPrepResponseItem struct {
+	ItemIndex          int    `json:"item_index"`
+	Caption            string `json:"caption"`
+	LocationTag        string `json:"location_tag"`
+	DateTimestamp      string `json:"date_timestamp"`
+	LocationConfidence string `json:"location_confidence"`
+}
+
+func handler(ctx context.Context, event interface{}) (*FBPrepOutput, error) {
+	input, err := normalizeFBPrepInput(event)
+	if err != nil {
+		return nil, err
+	}
+	if input.SessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+	if len(input.MediaItems) == 0 {
+		return nil, fmt.Errorf("media_items cannot be empty")
+	}
+
+	// Default economy mode to true
+	economyMode := true
+	if !input.EconomyMode {
+		economyMode = false
+	}
+
+	genaiClient, err := ai.NewAIClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize AI client: %w", err)
+	}
+
+	// Build media parts and metadata context
+	parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.MediaItems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare media: %w", err)
+	}
+
+	// Append metadata context as text
+	prompt := buildFBPrepPrompt(metadataCtx)
+	parts = append(parts, &genai.Part{Text: prompt})
+
+	// Config with system instruction and Google Maps grounding
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: assets.FBPrepSystemPrompt}},
+		},
+		Tools: []*genai.Tool{{GoogleMaps: &genai.GoogleMaps{}}},
+	}
+
+	modelName := ai.GetModelName()
+	now := time.Now().UTC().Format(time.RFC3339)
+	jobID := input.JobID
+	if jobID == "" {
+		jobID = "fbprep-" + uuid.New().String()[:8]
+	}
+
+	if economyMode {
+		// Submit batch job
+		req := &genai.InlinedRequest{
+			Model: modelName,
+			Contents: []*genai.Content{
+				{Role: "user", Parts: parts},
+			},
+			Config: config,
+		}
+		batchJobID, err := ai.SubmitGeminiBatch(ctx, genaiClient, modelName, []*genai.InlinedRequest{req})
+		if err != nil {
+			return nil, fmt.Errorf("failed to submit batch job: %w", err)
+		}
+
+		// Store pending job
+		if sessionStore != nil {
+			_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
+				ID:         jobID,
+				Status:     "pending",
+				BatchJobID: batchJobID,
+				MediaKeys:  s3Keys,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			})
+		}
+
+		log.Info().
+			Str("sessionId", input.SessionID).
+			Str("batchJobId", batchJobID).
+			Int("mediaCount", len(input.MediaItems)).
+			Msg("FB prep batch job submitted")
+
+		return &FBPrepOutput{
+			SessionID:  input.SessionID,
+			Status:     "pending",
+			BatchJobID: batchJobID,
+		}, nil
+	}
+
+	// Real-time generation
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := genaiClient.Models.GenerateContent(ctx, modelName, contents, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate content: %w", err)
+	}
+
+	responseText := resp.Text()
+	if responseText == "" {
+		return nil, fmt.Errorf("received empty response from Gemini")
+	}
+
+	items, err := parseFBPrepResponse(responseText, s3Keys)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Store complete job
+	if sessionStore != nil {
+		_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
+			ID:        jobID,
+			Status:    "complete",
+			Items:     items,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	log.Info().
+		Str("sessionId", input.SessionID).
+		Int("itemCount", len(items)).
+		Msg("FB prep complete")
+
+	return &FBPrepOutput{
+		SessionID: input.SessionID,
+		Status:    "complete",
+	}, nil
+}
+
+func buildFBPrepMediaParts(ctx context.Context, mediaItems []FBPrepMediaItem) ([]*genai.Part, string, []string, error) {
+	var parts []*genai.Part
+	var metaLines []string
+	var s3Keys []string
+
+	for i, item := range mediaItems {
+		s3Keys = append(s3Keys, item.S3Key)
+		ext := strings.ToLower(filepath.Ext(item.S3Key))
+
+		if item.MediaType == "image" || media.IsImage(ext) {
+			// Download thumbnail
+			keyParts := strings.SplitN(item.S3Key, "/", 2)
+			thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filepath.Base(item.S3Key), filepath.Ext(item.S3Key)))
+
+			tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
+			if err != nil {
+				// Fallback: download original and generate thumbnail
+				origPath, origCleanup, origErr := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, item.S3Key)
+				if origErr != nil {
+					log.Warn().Str("key", item.S3Key).Err(origErr).Msg("Skipping: failed to download")
+					continue
+				}
+				defer origCleanup()
+				origData, readErr := os.ReadFile(origPath)
+				if readErr != nil {
+					log.Warn().Str("key", item.S3Key).Err(readErr).Msg("Skipping: failed to read original")
+					continue
+				}
+				mime := "image/jpeg"
+				if m, ok := media.SupportedImageExtensions[ext]; ok {
+					mime = m
+				}
+				thumbData, thumbMIME, thumbErr := s3util.GenerateThumbnailFromBytes(origData, mime, media.DefaultThumbnailMaxDimension)
+				if thumbErr != nil {
+					log.Warn().Str("key", item.S3Key).Err(thumbErr).Msg("Skipping: failed to generate thumbnail")
+					continue
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: thumbMIME, Data: thumbData},
+				})
+			} else {
+				defer cleanup()
+				data, err := os.ReadFile(tmpPath)
+				if err != nil {
+					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to read")
+					continue
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: "image/jpeg", Data: data},
+				})
+			}
+		} else if item.MediaType == "video" || media.IsVideo(ext) {
+			// Download and compress video
+			tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, item.S3Key)
+			if err != nil {
+				// Try thumbnail as fallback
+				keyParts := strings.SplitN(item.S3Key, "/", 2)
+				thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filepath.Base(item.S3Key), filepath.Ext(item.S3Key)))
+				tmpPath, cleanup, err = s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
+				if err != nil {
+					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to download video/thumbnail")
+					continue
+				}
+				defer cleanup()
+				data, _ := os.ReadFile(tmpPath)
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: "image/jpeg", Data: data},
+				})
+			} else {
+				defer cleanup()
+				var videoMeta *media.VideoMetadata
+				if item.GPS != nil {
+					videoMeta = &media.VideoMetadata{
+						Latitude: item.GPS.Latitude, Longitude: item.GPS.Longitude, HasGPS: true,
+					}
+				}
+				compressedPath, _, compCleanup, err := media.CompressVideoForCaptions(ctx, tmpPath, videoMeta)
+				if err != nil {
+					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: video compression failed")
+					continue
+				}
+				defer compCleanup()
+
+				data, err := os.ReadFile(compressedPath)
+				if err != nil {
+					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to read compressed video")
+					continue
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: "video/webm", Data: data},
+				})
+			}
+		}
+
+		// Metadata line for this item
+		metaLines = append(metaLines, fmt.Sprintf("Item %d (%s):", i, item.Filename))
+		if item.GPS != nil {
+			metaLines = append(metaLines, fmt.Sprintf("  GPS: %.6f, %.6f", item.GPS.Latitude, item.GPS.Longitude))
+		}
+		if item.DateTaken != "" {
+			metaLines = append(metaLines, fmt.Sprintf("  Date: %s", item.DateTaken))
+		}
+	}
+
+	metadataCtx := strings.Join(metaLines, "\n")
+	return parts, metadataCtx, s3Keys, nil
+}
+
+func buildFBPrepPrompt(metadataCtx string) string {
+	return "## Metadata context\n\n" + metadataCtx + "\n\nGenerate the JSON array for each item in the same order as above."
+}
+
+// normalizeFBPrepInput accepts either FBPrepInput or API event format (sessionId, jobId, mediaKeys, economyMode).
+func normalizeFBPrepInput(event interface{}) (*FBPrepInput, error) {
+	// Try API format first (map with sessionId, jobId, mediaKeys)
+	if m, ok := event.(map[string]interface{}); ok {
+		sessionID, _ := m["sessionId"].(string)
+		jobID, _ := m["jobId"].(string)
+		economyMode, _ := m["economyMode"].(bool)
+		keysRaw, ok := m["mediaKeys"].([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("mediaKeys is required")
+		}
+		mediaItems := make([]FBPrepMediaItem, 0, len(keysRaw))
+		for _, k := range keysRaw {
+			key, _ := k.(string)
+			if key == "" {
+				continue
+			}
+			mediaType := "image"
+			if media.IsVideo(strings.ToLower(filepath.Ext(key))) {
+				mediaType = "video"
+			}
+			mediaItems = append(mediaItems, FBPrepMediaItem{
+				S3Key:     key,
+				MediaType: mediaType,
+				Filename:  filepath.Base(key),
+			})
+		}
+		return &FBPrepInput{
+			SessionID:   sessionID,
+			JobID:       jobID,
+			MediaItems:  mediaItems,
+			EconomyMode: economyMode,
+		}, nil
+	}
+
+	// Try direct FBPrepInput (JSON)
+	data, err := json.Marshal(event)
+	if err != nil {
+		return nil, fmt.Errorf("invalid input: %w", err)
+	}
+	var input FBPrepInput
+	if err := json.Unmarshal(data, &input); err != nil {
+		return nil, fmt.Errorf("invalid input: %w", err)
+	}
+	return &input, nil
+}
+
+func parseFBPrepResponse(responseText string, s3Keys []string) ([]store.FBPrepItem, error) {
+	// Strip markdown code fences if present
+	text := strings.TrimSpace(responseText)
+	if strings.HasPrefix(text, "```") {
+		lines := strings.Split(text, "\n")
+		var filtered []string
+		for _, line := range lines {
+			if line == "```" || line == "```json" {
+				continue
+			}
+			filtered = append(filtered, line)
+		}
+		text = strings.Join(filtered, "\n")
+	}
+
+	var raw []fbPrepResponseItem
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+
+	items := make([]store.FBPrepItem, 0, len(raw))
+	for _, r := range raw {
+		s3Key := ""
+		if r.ItemIndex >= 0 && r.ItemIndex < len(s3Keys) {
+			s3Key = s3Keys[r.ItemIndex]
+		}
+		items = append(items, store.FBPrepItem{
+			ItemIndex:          r.ItemIndex,
+			S3Key:              s3Key,
+			Key:                s3Key,
+			Caption:            r.Caption,
+			LocationTag:        r.LocationTag,
+			DateTimestamp:      r.DateTimestamp,
+			LocationConfidence: r.LocationConfidence,
+		})
+	}
+	return items, nil
+}

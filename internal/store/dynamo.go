@@ -22,6 +22,7 @@ const (
 	skEnhance   = "ENHANCE#"
 	skDownload  = "DOWNLOAD#"
 	skDesc      = "DESC#"
+	skFBPrep    = "FBPREP#"
 	skGroup     = "GROUP#"
 	skPublish   = "PUBLISH#"
 

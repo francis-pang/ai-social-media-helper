@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -22,15 +21,7 @@ func handleDescriptionFeedback(ctx context.Context, event DescriptionEvent) erro
 		})
 	}
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "API key not configured", func(ctx context.Context, sessionID, jobID, errMsg string) error {
-			sessionStore.PutDescriptionJob(ctx, sessionID, &store.DescriptionJob{ID: jobID, Status: "error", Error: errMsg})
-			return nil
-		})
-	}
-
-	genaiClient, err := ai.NewGeminiClient(ctx, apiKey)
+	genaiClient, err := ai.NewAIClient(ctx)
 	if err != nil {
 		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "failed to initialize AI client", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutDescriptionJob(ctx, sessionID, &store.DescriptionJob{ID: jobID, Status: "error", Error: errMsg})

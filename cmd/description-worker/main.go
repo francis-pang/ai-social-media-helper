@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 
+	"github.com/fpang/ai-social-media-helper/internal/ai"
 	"github.com/fpang/ai-social-media-helper/internal/bootstrap"
 	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/fpang/ai-social-media-helper/internal/store"
@@ -51,6 +52,7 @@ func init() {
 	mediaBucket = s3s.Bucket
 	sessionStore = bootstrap.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
 	bootstrap.LoadGeminiKey(awsClients.SSM)
+	_ = ai.LoadGCPServiceAccount()
 
 	ebClient = eventbridge.NewFromConfig(awsClients.Config)
 	lambdaClient = lambdasvc.NewFromConfig(awsClients.Config)
@@ -80,7 +82,7 @@ func main() {
 	lambda.Start(handler)
 }
 
-func handler(ctx context.Context, event DescriptionEvent) error {
+func handler(ctx context.Context, event DescriptionEvent) (interface{}, error) {
 	if coldStart {
 		coldStart = false
 		log.Info().Str("function", "description-lambda").Msg("Cold start — first invocation")
@@ -95,8 +97,8 @@ func handler(ctx context.Context, event DescriptionEvent) error {
 	case "description":
 		return handleDescription(ctx, event)
 	case "description-feedback":
-		return handleDescriptionFeedback(ctx, event)
+		return nil, handleDescriptionFeedback(ctx, event)
 	default:
-		return fmt.Errorf("unknown event type: %s", event.Type)
+		return nil, fmt.Errorf("unknown event type: %s", event.Type)
 	}
 }

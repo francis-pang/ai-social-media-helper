@@ -27,6 +27,9 @@
 //	POST /api/description/generate — generate AI Instagram caption for a post group (DDR-036)
 //	GET  /api/description/{id}/results — poll caption generation results (DDR-036)
 //	POST /api/description/{id}/feedback — regenerate caption with user feedback (DDR-036)
+//	POST /api/fb-prep/start        — start FB post preparation (captions, location tags)
+//	GET  /api/fb-prep/{id}/results  — poll FB prep results
+//	POST /api/fb-prep/{id}/feedback — regenerate caption for a single item with feedback
 //	POST /api/publish/start         — start publishing a post group to Instagram (DDR-040)
 //	GET  /api/publish/{id}/status  — poll publishing progress (DDR-040)
 //	POST /api/session/invalidate   — invalidate downstream state on back-navigation (DDR-037)
@@ -51,6 +54,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
+	"github.com/fpang/ai-social-media-helper/internal/ai"
 	"github.com/fpang/ai-social-media-helper/internal/instagram"
 	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/fpang/ai-social-media-helper/internal/store"
@@ -62,6 +66,10 @@ var coldStart = true
 func init() {
 	initStart := time.Now()
 	logging.Init()
+
+	if err := ai.LoadGCPServiceAccount(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to load GCP service account")
+	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -102,6 +110,7 @@ func init() {
 	descriptionLambdaArn = os.Getenv("DESCRIPTION_LAMBDA_ARN")
 	downloadLambdaArn = os.Getenv("DOWNLOAD_LAMBDA_ARN")
 	enhanceLambdaArn = os.Getenv("ENHANCE_LAMBDA_ARN")
+	fbPrepLambdaArn = os.Getenv("FB_PREP_LAMBDA_ARN")
 	if descriptionLambdaArn == "" || downloadLambdaArn == "" || enhanceLambdaArn == "" {
 		log.Warn().Msg("One or more Lambda ARNs not set — async dispatch may be disabled (DDR-053)")
 	}
@@ -203,6 +212,7 @@ func init() {
 		LambdaFunc("descriptionLambda", descriptionLambdaArn).
 		LambdaFunc("downloadLambda", downloadLambdaArn).
 		LambdaFunc("enhanceLambda", enhanceLambdaArn).
+		LambdaFunc("fbPrepLambda", fbPrepLambdaArn).
 		Feature("instagram", igClient != nil).
 		Feature("originVerify", originVerifySecret != "").
 		Feature("dynamodb", sessionStore != nil).
@@ -230,6 +240,8 @@ func main() {
 	mux.HandleFunc("/api/download/", handleDownloadRoutes)
 	mux.HandleFunc("/api/description/generate", handleDescriptionGenerate)
 	mux.HandleFunc("/api/description/", handleDescriptionRoutes)
+	mux.HandleFunc("/api/fb-prep/start", handleFBPrepStart)
+	mux.HandleFunc("/api/fb-prep/", handleFBPrepRoutes)
 	mux.HandleFunc("/api/publish/start", handlePublishStart)           // DDR-040
 	mux.HandleFunc("/api/publish/", handlePublishRoutes)               // DDR-040
 	mux.HandleFunc("/api/session/invalidate", handleSessionInvalidate) // DDR-037
@@ -253,6 +265,7 @@ func main() {
 		"/api/enhance/start", "/api/enhance/",
 		"/api/download/start", "/api/download/",
 		"/api/description/generate", "/api/description/",
+		"/api/fb-prep/start", "/api/fb-prep/",
 		"/api/publish/start", "/api/publish/",
 		"/api/session/invalidate",
 		"/api/overrides/",

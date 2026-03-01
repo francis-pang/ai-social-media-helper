@@ -88,6 +88,8 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-073](./DDR-073-light-theme-ui-redesign.md) | 2026-02-28 | Light Theme UI Redesign with Purple Accent | Implemented |
 | [DDR-074](./DDR-074-local-file-deletion-fs-access-api.md) | 2026-02-28 | Local File Deletion via File System Access API | Accepted |
 | [DDR-075](./DDR-075-dashboard-restructuring-emf-dimension-fix.md) | 2026-03-01 | Dashboard Restructuring and EMF Dimension Fix | Accepted |
+| [DDR-076](./DDR-076-esnext-frontend-target-modernization.md) | 2026-03-01 | ESNext Frontend Target Modernization | Accepted |
+| [DDR-077](./DDR-077-cost-aware-vertex-ai-migration.md) | 2026-03-01 | Cost-Aware Vertex AI Migration — Dual-Backend + Economy Mode | Accepted |
 
 ---
 
@@ -102,4 +104,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-03-01 (DDR-075)
+**Last Updated**: 2026-03-01 (DDR-077)

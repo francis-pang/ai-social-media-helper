@@ -2,7 +2,7 @@ import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
 import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, finalizeTriageUploads, getTriageResults, startTriage } from "../api/client";
 import { quickFingerprint, fullHash } from "../utils/fileHash";
-import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep, fileHandles } from "../app";
+import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep, fileHandles, economyMode } from "../app";
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
 import { formatBytes, formatSpeed } from "../utils/format";
@@ -279,7 +279,7 @@ function updateFile(filename: string, updates: Partial<UploadedFile>) {
 
 async function initTriageSession(sessionId: string, fileCount: number) {
   try {
-    const res = await initTriage({ sessionId, expectedFileCount: fileCount });
+    const res = await initTriage({ sessionId, expectedFileCount: fileCount, economy_mode: economyMode.value });
     triageJobId.value = res.id;
     triagePolling.value = true;
     pollTriageResults(res.id, sessionId);
@@ -336,7 +336,7 @@ async function pollTriageResults(jobId: string, sessionId: string) {
         finalizedAt = Date.now();
         const doneCount = files.value.filter(f => f.status === "done").length;
         if (doneCount > 0) {
-          finalizeTriageUploads({ sessionId, jobId }).catch(
+          finalizeTriageUploads({ sessionId, jobId, economy_mode: economyMode.value }).catch(
             (e) => console.error("Failed to finalize triage uploads:", e)
           );
         }
@@ -499,7 +499,7 @@ async function proceedToTriage() {
   selectedPaths.value = uploadedKeys;
 
   try {
-    const res = await startTriage({ sessionId });
+    const res = await startTriage({ sessionId, economy_mode: economyMode.value });
     triageJobId.value = res.id;
     navigateToStep("processing");
   } catch (e) {

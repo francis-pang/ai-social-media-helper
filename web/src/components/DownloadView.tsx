@@ -1,5 +1,5 @@
 import { signal, computed } from "@preact/signals";
-import { navigateBack, navigateToStep, uploadSessionId } from "../app";
+import { navigateBack, navigateToStep, uploadSessionId, economyMode } from "../app";
 import { startDownload, getDownloadResults } from "../api/client";
 import { ActionBar } from "./shared/ActionBar";
 import { GroupCard } from "./download/GroupCard";
@@ -69,6 +69,7 @@ async function handleDownload(group: PostGroup) {
       sessionId,
       keys: group.keys,
       groupLabel: group.label || "media",
+      economy_mode: economyMode.value,
     });
 
     setGroupState(group.id, {

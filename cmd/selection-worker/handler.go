@@ -19,6 +19,13 @@ import (
 	"github.com/fpang/ai-social-media-helper/internal/store"
 )
 
+func resolveEconomyMode(eventEconomy bool) bool {
+	if v := os.Getenv("ECONOMY_MODE"); v == "true" {
+		return true
+	}
+	return eventEconomy
+}
+
 func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error) {
 	handlerStart := time.Now()
 	if coldStart {
@@ -133,9 +140,8 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 	logger.Info().Int("count", len(allMediaFiles)).Msg("Loaded media files, calling Gemini")
 
 	// Initialize Gemini client and run selection.
-	apiKey := os.Getenv("GEMINI_API_KEY")
 	logger.Debug().Str("model", model).Msg("Calling Gemini API for media selection")
-	client, err := ai.NewGeminiClient(ctx, apiKey)
+	client, err := ai.NewAIClient(ctx)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to create Gemini client: %v", err)
 		selJob.Status = "error"
@@ -169,7 +175,8 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 	cacheMgr := ai.NewCacheManager(client)
 	defer cacheMgr.DeleteAll(ctx, event.SessionID)
 
-	selResult, err := ai.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
+	economyMode := resolveEconomyMode(event.EconomyMode)
+	output, err := ai.AskMediaSelectionJSON(ctx, client, allMediaFiles, event.TripContext, model, event.SessionID, storeCompressed, keyMapper, cacheMgr, ragContext, economyMode)
 	if err != nil {
 		errMsg := fmt.Sprintf("selection failed: %v", err)
 		selJob.Status = "error"
@@ -177,6 +184,14 @@ func handler(ctx context.Context, event SelectionEvent) (SelectionResult, error)
 		sessionStore.PutSelectionJob(ctx, event.SessionID, selJob)
 		return SelectionResult{JobID: event.JobID, Error: errMsg}, err
 	}
+
+	// Economy mode: return batch_job_id for parent SFN to poll.
+	if output.BatchJobID != "" {
+		logger.Info().Str("batchJobId", output.BatchJobID).Msg("Selection submitted to Gemini Batch API (economy mode)")
+		return SelectionResult{JobID: event.JobID, BatchJobID: output.BatchJobID}, nil
+	}
+
+	selResult := output.Result
 
 	// Map results to items with S3 keys and thumbnail URLs.
 	for _, sel := range selResult.Selected {

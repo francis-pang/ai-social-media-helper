@@ -147,8 +147,8 @@ func EnhanceVideo(ctx context.Context, videoPath string, outputPath string, meta
 		config.TargetProfessionalScore = 8.5
 	}
 
-	// Initialize AI clients — create SDK client from API key
-	genaiClient, err := NewGeminiClient(ctx, config.GeminiAPIKey)
+	// Initialize AI clients — NewAIClient uses VERTEX_AI_PROJECT or GEMINI_API_KEY from env
+	genaiClient, err := NewAIClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}

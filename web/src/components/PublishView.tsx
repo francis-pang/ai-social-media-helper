@@ -4,6 +4,7 @@ import {
   navigateBack,
   navigateToStep,
   uploadSessionId,
+  economyMode,
 } from "../app";
 import { ActionBar } from "./shared/ActionBar";
 import { ElapsedTimer } from "./ProcessingIndicator";
@@ -148,6 +149,7 @@ async function handlePublish(group: PostGroup) {
       keys: group.keys,
       caption: state.caption,
       hashtags: state.hashtags,
+      economy_mode: economyMode.value,
     });
 
     setGroupState(group.id, {

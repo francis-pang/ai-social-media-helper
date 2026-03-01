@@ -41,6 +41,70 @@ func NewGeminiClient(ctx context.Context, apiKey string) (*genai.Client, error) 
 	return client, nil
 }
 
+// NewAIClient creates a Gemini client with automatic backend selection.
+// Priority: Vertex AI (if VERTEX_AI_PROJECT set) > Gemini API (if GEMINI_API_KEY set).
+func NewAIClient(ctx context.Context) (*genai.Client, error) {
+	if project := os.Getenv("VERTEX_AI_PROJECT"); project != "" {
+		region := os.Getenv("VERTEX_AI_REGION")
+		if region == "" {
+			region = "us-east4"
+		}
+		log.Debug().
+			Str("project", project).
+			Str("region", region).
+			Msg("Creating Vertex AI client")
+		client, err := genai.NewClient(ctx, &genai.ClientConfig{
+			Project:  project,
+			Location: region,
+			Backend:  genai.BackendVertexAI,
+		})
+		if err == nil {
+			log.Info().Msg("Using Vertex AI backend")
+			return client, nil
+		}
+		log.Warn().Err(err).Msg("Vertex AI client creation failed, falling back to Gemini API")
+	}
+
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("no AI backend configured: set VERTEX_AI_PROJECT or GEMINI_API_KEY")
+	}
+
+	log.Debug().Bool("api_key_present", true).Msg("Creating Gemini API client (fallback)")
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Gemini API client: %w", err)
+	}
+	log.Info().Msg("Using Gemini API backend (fallback)")
+	return client, nil
+}
+
+// LoadGCPServiceAccount writes the GCP service account JSON (from GCP_SERVICE_ACCOUNT_JSON env var)
+// to a temp file and sets GOOGLE_APPLICATION_CREDENTIALS for ADC.
+// No-op if the env var is not set (allows CLI usage without service account).
+func LoadGCPServiceAccount() error {
+	saJSON := os.Getenv("GCP_SERVICE_ACCOUNT_JSON")
+	if saJSON == "" {
+		log.Debug().Msg("GCP_SERVICE_ACCOUNT_JSON not set, skipping service account loading")
+		return nil
+	}
+
+	const saKeyPath = "/tmp/gcp-sa-key.json"
+	if err := os.WriteFile(saKeyPath, []byte(saJSON), 0600); err != nil {
+		return fmt.Errorf("failed to write service account key: %w", err)
+	}
+
+	if err := os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", saKeyPath); err != nil {
+		return fmt.Errorf("failed to set GOOGLE_APPLICATION_CREDENTIALS: %w", err)
+	}
+
+	log.Info().Str("path", saKeyPath).Msg("GCP service account loaded for ADC")
+	return nil
+}
+
 // AskTextQuestion sends a text-only question to the Gemini API and returns the response.
 func AskTextQuestion(ctx context.Context, client *genai.Client, question string) (string, error) {
 	modelName := GetModelName()

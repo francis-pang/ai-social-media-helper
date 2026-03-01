@@ -57,16 +57,24 @@ func main() {
 func runMain(cmd *cobra.Command, args []string) {
 	logging.Init()
 
+	if err := ai.LoadGCPServiceAccount(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to load GCP service account")
+	}
+
 	// Validate API key at startup
 	apiKey, err := auth.GetAPIKey()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to get API key")
 	}
+	// Ensure key is in env for NewAIClient (e.g. when loaded from GPG)
+	if apiKey != "" && os.Getenv("GEMINI_API_KEY") == "" {
+		os.Setenv("GEMINI_API_KEY", apiKey)
+	}
 
 	ctx := context.Background()
-	validationClient, err := ai.NewGeminiClient(ctx, apiKey)
+	validationClient, err := ai.NewAIClient(ctx)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Gemini client for validation")
+		log.Fatal().Err(err).Msg("Failed to create AI client for validation")
 	}
 	if err := auth.ValidateAPIKey(ctx, validationClient); err != nil {
 		log.Fatal().Err(err).Msg("Invalid API key")

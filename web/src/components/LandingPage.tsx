@@ -44,6 +44,19 @@ const WORKFLOWS: WorkflowOption[] = [
     accentColor: "var(--color-primary)",
     accentBg: "var(--color-primary-light)",
   },
+  {
+    id: "fb-prep",
+    title: "Facebook Prep",
+    description: "Generate captions, locations, and timestamps for Facebook photo/video uploads",
+    details: [
+      "AI generates captions for each photo and video",
+      "Location tags and dates for Facebook Memories",
+      "Ready for upload to Facebook",
+    ],
+    startStep: "fb-prep",
+    accentColor: "#1877F2",
+    accentBg: "rgba(24, 119, 242, 0.08)",
+  },
 ];
 
 function selectWorkflow(option: WorkflowOption) {

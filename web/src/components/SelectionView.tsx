@@ -8,6 +8,7 @@ import {
   uploadSessionId,
   tripContext,
   setStep,
+  economyMode,
 } from "../app";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import { createPoller } from "../hooks/usePolling";
@@ -77,6 +78,7 @@ function startSelectionJob() {
   startSelection({
     sessionId,
     tripContext: tripContext.value,
+    economy_mode: economyMode.value,
   })
     .then((res) => {
       selectionJobId.value = res.id;

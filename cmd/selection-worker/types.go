@@ -7,6 +7,7 @@ type SelectionEvent struct {
 	JobID         string           `json:"jobId"`
 	TripContext   string           `json:"tripContext"`
 	Model         string           `json:"model,omitempty"`
+	EconomyMode   bool             `json:"economy_mode,omitempty"`
 	MediaKeys     []string         `json:"mediaKeys"`
 	ThumbnailKeys []ThumbnailEntry `json:"thumbnailKeys"`
 	Bucket        string           `json:"bucket,omitempty"`
@@ -24,5 +25,6 @@ type SelectionResult struct {
 	SelectedCount   int    `json:"selectedCount"`
 	ExcludedCount   int    `json:"excludedCount"`
 	SceneGroupCount int    `json:"sceneGroupCount"`
+	BatchJobID      string `json:"batch_job_id,omitempty"`
 	Error           string `json:"error,omitempty"`
 }

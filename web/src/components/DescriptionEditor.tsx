@@ -5,6 +5,7 @@ import {
   navigateToStep,
   uploadSessionId,
   tripContext,
+  economyMode,
 } from "../app";
 import { createPoller } from "../hooks/usePolling";
 import { ProcessingIndicator } from "./ProcessingIndicator";
@@ -111,6 +112,7 @@ async function startGeneration() {
       keys: group.keys,
       groupLabel: group.label,
       tripContext: tripContext.value,
+      economy_mode: economyMode.value,
     });
 
     descriptionState.value = {

@@ -32,6 +32,7 @@ const STEP_TO_PATH: Partial<Record<Step, string>> = {
   publish: "/select/download",
   description: "/select/description",
   "instagram-publish": "/select/publish",
+  "fb-prep": "/fb-prep",
 };
 
 /** Reverse map: path → step. */
@@ -71,6 +72,7 @@ function workflowForStep(step: Step): Workflow {
   ) {
     return "triage";
   }
+  if (step === "fb-prep") return "fb-prep";
   return "selection";
 }
 

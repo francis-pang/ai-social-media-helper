@@ -272,6 +272,40 @@ func (s *DynamoStore) GetDownloadJob(ctx context.Context, sessionID, jobID strin
 	return &job, nil
 }
 
+// --- FB Prep job operations ---
+
+func (s *DynamoStore) PutFBPrepJob(ctx context.Context, sessionID string, job *FBPrepJob) error {
+	sk := skFBPrep + job.ID
+	if err := s.putItem(ctx, sessionPK(sessionID), sk, job); err != nil {
+		return fmt.Errorf("put FB prep job %s/%s: %w", sessionID, job.ID, err)
+	}
+
+	log.Debug().
+		Str("sessionId", sessionID).
+		Str("jobId", job.ID).
+		Str("status", job.Status).
+		Int("items", len(job.Items)).
+		Msg("FB prep job persisted")
+	return nil
+}
+
+func (s *DynamoStore) GetFBPrepJob(ctx context.Context, sessionID, jobID string) (*FBPrepJob, error) {
+	var job FBPrepJob
+	found, err := s.getItem(ctx, sessionPK(sessionID), skFBPrep+jobID, &job)
+	if err != nil {
+		return nil, fmt.Errorf("get FB prep job %s/%s: %w", sessionID, jobID, err)
+	}
+	if !found {
+		log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "fbPrep").Bool("found", false).Msg("GetFBPrepJob: job not found")
+		return nil, nil
+	}
+
+	job.ID = jobID
+	job.SessionID = sessionID
+	log.Debug().Str("sessionId", sessionID).Str("jobId", jobID).Str("jobType", "fbPrep").Str("status", job.Status).Bool("found", true).Msg("GetFBPrepJob: job retrieved")
+	return &job, nil
+}
+
 // --- Description job operations ---
 
 func (s *DynamoStore) PutDescriptionJob(ctx context.Context, sessionID string, job *DescriptionJob) error {

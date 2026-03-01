@@ -2,7 +2,9 @@
 
 ## System Overview
 
-The Gemini Media CLI is a collection of Go tools for analyzing, selecting, and enhancing photos and videos using Google's Gemini API. It runs in two modes: **local** (CLI + embedded web server) and **cloud** (AWS Lambda + S3 + CloudFront).
+The AI Social Media Helper is a collection of Go tools for analyzing, selecting, enhancing, and captioning photos and videos. It supports three workflows — **Media Triage**, **Media Selection + Instagram**, and **Facebook Prep** — and runs in two modes: **local** (CLI + embedded web server) and **cloud** (AWS Lambda + S3 + CloudFront).
+
+AI calls are routed through a dual-backend client: **Vertex AI** (primary, using a GCP service account) with **Gemini Developer API** as the free-tier fallback. A UI-configurable **Economy Mode** uses the Gemini Batch API (50% cost savings, ~5–15 min latency) for all non-interactive workflows.
 
 ```mermaid
 graph TD
@@ -74,12 +76,17 @@ graph TD
 | Component | Technology |
 |-----------|-----------|
 | Language | Go 1.24 |
-| AI Model | Gemini 3 (Flash for triage, 3.1 Pro for selection/enhancement) |
-| SDK | `google.golang.org/genai` |
+| AI Model | Gemini 3 Flash (triage), Gemini 3.1 Pro (selection/enhancement/FB Prep) |
+| AI Backend (primary) | Vertex AI (`us-east4`, GCP project `gen-lang-client-0436578028`) |
+| AI Backend (fallback) | Gemini Developer API (standalone free-tier key) |
+| AI SDK | `google.golang.org/genai` (unified Vertex AI + Gemini API) |
+| GCP Auth | Application Default Credentials via GCP service account JSON (SSM) |
+| Batch API | Gemini Batch API (Economy Mode, 50% cost savings) |
+| Maps Grounding | Google Maps Grounding via Vertex AI (FB Prep captions) |
 | CLI Framework | `github.com/spf13/cobra` |
 | Logging | `github.com/rs/zerolog` |
 | Web Frontend | Preact 10 + Vite 6 + TypeScript |
-| AWS SDK | `aws-sdk-go-v2` (S3, SSM, DynamoDB) |
+| AWS SDK | `aws-sdk-go-v2` (S3, SSM, DynamoDB, Step Functions) |
 | Lambda Adapter | `aws-lambda-go-api-proxy` (HTTP API v2 to `http.ServeMux`) |
 
 ## Local Architecture
@@ -190,22 +197,24 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 
 | Lambda | Purpose | Container | Memory | Timeout | Credentials |
 |--------|---------|-----------|--------|---------|-------------|
-| API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s | Gemini + Instagram |
-| Triage | Triage pipeline: prepare (list S3), run (presigned URLs, AI triage, thumbnails, cleanup) (DDR-053, DDR-059, DDR-060) | Light | 2 GB | 10 min | Gemini |
-| Description | Caption generation + feedback (DDR-053) | Light | 2 GB | 5 min | Gemini |
+| API | HTTP API, DynamoDB, presigned URLs, dispatch async work | Light | 256 MB | 30s | Vertex AI / Gemini + Instagram |
+| Triage | Triage pipeline: prepare (list S3), run (presigned URLs, AI triage, thumbnails, cleanup) (DDR-053, DDR-059, DDR-060) | Light | 2 GB | 10 min | Vertex AI / Gemini |
+| Description | Caption generation + feedback (DDR-053) | Light | 2 GB | 5 min | Vertex AI / Gemini |
 | Download | ZIP bundle creation (DDR-053) | Light | 2 GB | 10 min | None |
 | Publish | Publish pipeline: containers, poll Instagram, finalize (DDR-053) | Light | 256 MB | 5 min | Instagram |
-| Thumbnail | Per-file thumbnail generation | Heavy (ffmpeg) | 512 MB | 2 min | Gemini |
-| Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min | Gemini |
-| Enhancement | Per-photo Gemini image editing + feedback (DDR-053) | Light | 2 GB | 5 min | Gemini |
-| Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min | Gemini |
+| Thumbnail | Per-file thumbnail generation | Heavy (ffmpeg) | 512 MB | 2 min | Vertex AI / Gemini |
+| Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min | Vertex AI / Gemini |
+| Enhancement | Per-photo Gemini image editing + feedback (DDR-053) | Light | 2 GB | 5 min | Vertex AI / Gemini |
+| Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min | Vertex AI / Gemini |
+| FB Prep | Facebook caption + location (Google Maps grounding) + date/time from EXIF | Heavy (ffmpeg) | 2 GB | 10 min | Vertex AI / Gemini (Maps) |
+| Gemini Batch Poll | Lightweight Vertex AI / Gemini Batch API status poller (Gemini Batch Poll SFN worker) | Light | 128 MB | 10s | Vertex AI / Gemini |
 | Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s | None |
 | OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s | Instagram |
 | RAG Ingest | SQS → Bedrock Titan → Aurora pgvector (DDR-066) | Light | 1 GB | 2 min | Bedrock |
 | RAG Query | Vector + DynamoDB profile retrieval for triage/selection/caption | Light | 512 MB | 30s | Aurora Data API, DynamoDB |
 | RAG Status | Aurora cluster state + start if stopped | Light | 256 MB | 30s | RDS |
 | RAG Auto-Stop | Scheduled: stop Aurora if idle > 2h | Light | 256 MB | 30s | RDS, DynamoDB |
-| RAG Profile | Weekly: compute preference profile, write DynamoDB | Light | 2 GB | 5 min | Aurora Data API, SSM, Gemini |
+| RAG Profile | Weekly: compute preference profile, write DynamoDB | Light | 2 GB | 5 min | Aurora Data API, SSM, Vertex AI / Gemini |
 
 "Light" images (~55 MB) contain only the Go binary. "Heavy" images (~175 MB) include ffmpeg. Both share base Docker layers for efficient ECR storage. Webhook and OAuth Lambdas are deployed in a separate WebhookStack with their own CloudFront distribution (DDR-044, DDR-048). See [DDR-035](./design-decisions/DDR-035-multi-lambda-deployment.md), [DDR-053](./design-decisions/DDR-053-granular-lambda-split.md), and [docker-images.md](./docker-images.md).
 
@@ -219,9 +228,10 @@ The API Lambda dispatches all long-running work asynchronously — **no backgrou
 | Enhancement | Step Functions `StartExecution` | Enhancement + Video pipeline |
 | Triage | Step Functions `StartExecution` (DDR-052) | Triage Lambda (prepare → run; DDR-060 bypasses Gemini polling) |
 | Publish | Step Functions `StartExecution` (DDR-052) | Publish Lambda (containers → poll Instagram → finalize) |
+| Facebook Prep | `lambda:Invoke` (async) or Gemini Batch Poll SFN | FB Prep Lambda (session-aware captions, Maps grounding) |
 | Description | `lambda:Invoke` (async) | Description Lambda (DDR-053) |
 | Download | `lambda:Invoke` (async) | Download Lambda (DDR-053) |
-| Enhancement feedback | `lambda:Invoke` (async) | Enhancement Lambda (DDR-053) |
+| Enhancement feedback | `lambda:Invoke` (async) | Enhancement Lambda (DDR-053, real-time, not batchable) |
 
 Each domain has a dedicated Lambda with its own CloudWatch log group for easier troubleshooting (DDR-053). Download Lambda has no AI or Instagram dependencies (smallest binary). Publish Lambda needs only Instagram credentials.
 
@@ -241,6 +251,8 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 | Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, model, mediaKeys[], thumbnailKeys[]}` | `{jobId, selectedCount, excludedCount, sceneGroupCount}` |
 | Enhancement | `cmd/enhance-lambda` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
 | Video | `cmd/video-lambda` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
+| FB Prep | `cmd/fb-prep-lambda` | Async invoke | `{sessionId, jobId, mediaItems[], economyMode}` | writes DynamoDB |
+| Gemini Batch Poll | `cmd/gemini-batch-poll` | Step Functions | `{batch_job_id}` | `{state, results, error}` |
 
 Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
 
@@ -252,9 +264,10 @@ The `internal/` directory contains 18 shared packages used across Lambda binarie
 
 | Package | Purpose | Key Patterns |
 |---------|---------|-------------|
+| `ai` | Dual-backend AI client (Vertex AI + Gemini API), Batch API | `NewAIClient`, `LoadGCPServiceAccount`, `SubmitGeminiBatch`, `CheckGeminiBatch` |
 | `assets` | Embedded prompts and reference photos | `go:embed` directives |
 | `auth` | API key validation, Cognito JWT | Typed error classification |
-| `chat` | Gemini API integration (selection, triage, enhancement, description) | `UploadFileAndWait`, `BuildMediaParts`, `GenerateWithOptionalCache`, `ParseResponse[T]` |
+| `chat` | Gemini content generation (selection, triage, enhancement, description, FB Prep) | `UploadFileAndWait`, `BuildMediaParts`, `GenerateWithOptionalCache`, `ParseResponse[T]` |
 | `cli` | CLI utilities for `media-select` and `media-triage` | Cobra command builders |
 | `filehandler` | EXIF extraction, thumbnails, video compression | `runFFmpeg`/`runFFprobe` helpers, unified `ScanDirectoryWithOptions` |
 | `httputil` | Shared HTTP response/error helpers used by `media-lambda` and `media-web` | `RespondJSON`, `Error` |
@@ -264,6 +277,7 @@ The `internal/` directory contains 18 shared packages used across Lambda binarie
 | `jsonutil` | JSON parsing utilities | `ParseJSON[T]` generic parser |
 | `lambdaboot` | Shared Lambda initialization, cold-start detection | `ColdStartLog`, `InitSSMOnly`, AWS client creation |
 | `logging` | zerolog initialization, Lambda context enrichment | `WithLambdaContext`, `WithJob` |
+| `media` | Video compression profiles including caption-grade 1 FPS / no-audio for AI | `CompressVideoForCaptions` |
 | `metrics` | CloudWatch EMF metrics | Embedded metric format for Lambda |
 | `rag` | RAG query invocation, decision memory types | `InvokeRAGQuery` (shared across 3 Lambdas) |
 | `s3util` | S3 download, upload, thumbnail helpers | `DownloadToFile` (shared across 2 Lambdas) |
@@ -284,6 +298,7 @@ type SessionStore interface {
     DescriptionStore
     PublishStore
     PostGroupStore
+    FBPrepStore
 }
 ```
 
@@ -416,6 +431,77 @@ sequenceDiagram
 - **Confirm cleanup**: When the user confirms triage results, the API Lambda deletes the user-selected discard keys, then cleans up all remaining S3 artifacts (thumbnails, compressed videos) in a background goroutine.
 - **Pipeline timeout**: 30 minutes (starts after uploads complete via `/api/triage/finalize` — DDR-067). Triage Lambda timeout: 10 minutes (2 GB memory, Light container). MediaProcess Lambda: 15 minutes (4 GB memory — DDR-067). Photos are downscaled to WebP and videos compressed to AV1/WebM during per-file processing (DDR-071, DDR-018).
 
+## Dual-Backend AI Client (DDR-077)
+
+All AI Lambda binaries use `ai.NewAIClient(ctx)` which selects the backend at startup:
+
+1. **Vertex AI** (primary) — when `VERTEX_AI_PROJECT` is set. Uses Application Default Credentials (ADC) initialized from `GCP_SERVICE_ACCOUNT_JSON` (SSM → `/tmp/gcp-sa-key.json` → `GOOGLE_APPLICATION_CREDENTIALS`). Project: `gen-lang-client-0436578028`, Region: `us-east4`.
+2. **Gemini Developer API** (fallback) — when only `GEMINI_API_KEY` is present.
+
+```
+VERTEX_AI_PROJECT set?
+  ├── Yes → Vertex AI client (ADC via GCP service account)
+  └── No  → GEMINI_API_KEY set?
+              ├── Yes → Gemini Developer API client
+              └── No  → startup error
+```
+
+`ai.LoadGCPServiceAccount()` is called in each Lambda's `init()` to hydrate ADC before the client is created.
+
+### Economy Mode (Batch API)
+
+Most workflows support **Economy Mode** (toggled via the UI, persisted in `localStorage`, default: enabled). When enabled, `ai.SubmitGeminiBatch()` is called instead of `GenerateContent`; the Gemini Batch Poll Step Function polls for completion and unblocks the caller.
+
+| Mode | Latency | Cost | Used For |
+|------|---------|------|----------|
+| Real-time | Seconds | Full price | Enhancement feedback (interactive) |
+| Economy (Batch) | 5–15 min | 50% savings | Triage, Selection, Description, FB Prep |
+
+The **Gemini Batch Poll Step Function** (Standard Workflow) implements server-side polling:
+`Wait(15s) → GeminiBatchPollLambda → Choice (SUCCEEDED / FAILED / loop)`.
+Existing SFNs call it via `StartExecution.sync:2` to block until batch completion.
+
+## Facebook Prep Workflow (DDR-077)
+
+The Facebook Prep workflow generates per-photo/video metadata for manual Facebook uploads: personalized captions, verified location tags (Google Maps grounding), and EXIF-derived date/time stamps.
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as API Lambda
+    participant DB as DynamoDB
+    participant FBP as FB Prep Lambda
+    participant Gemini as Vertex AI / Gemini
+    participant Maps as Google Maps Grounding
+
+    FE->>API: POST /api/fb-prep/start (sessionId, mediaItems, economyMode)
+    API->>DB: Write pending FBPrepJob
+    API->>FBP: Invoke async (or start Gemini Batch Poll SFN)
+    API-->>FE: 202 Accepted with jobId
+
+    FBP->>FBP: Extract EXIF (GPS, date/time) per item
+    FBP->>FBP: Compress videos caption-grade (1 FPS, 768px, no audio)
+    FBP->>Gemini: GenerateContent — all items in one session-aware batch
+    Gemini->>Maps: Google Maps grounding for location verification
+    Maps-->>Gemini: Verified place names + coordinates
+    Gemini-->>FBP: JSON array [{caption, locationTag, dateTimestamp, confidence}]
+    FBP->>DB: Write complete FBPrepJob
+
+    loop Frontend polls until complete
+        FE->>API: GET /api/fb-prep/{id}/results
+        API->>DB: GetFBPrepJob
+        API-->>FE: items with captions, locations, timestamps
+    end
+
+    FE->>API: POST /api/fb-prep/{id}/feedback (per-item regeneration)
+```
+
+**Key design choices:**
+- **Session-aware batch**: All items in one `GenerateContent` call so Gemini understands the narrative (e.g., "a day in Seattle") and generates varied, non-repetitive captions.
+- **Google Maps grounding**: GPS coordinates from EXIF are injected via `ToolConfig` with `RetrievalConfig` + `LatLng`; responses include `GroundingChunkMaps` with verified place names and confidence scores.
+- **Caption-grade video compression**: `CompressVideoForCaptions` — 768px max dimension, 1 FPS, CRF 40, AV1, no audio, WebM. Optimised for AI analysis cost, not playback.
+- **No hashtags**: System prompt instructs the model to produce natural captions matching the user's personal posting style.
+
 ## Gemini Context Caching (DDR-065)
 
 The application uses Gemini's Context Caching API to avoid re-sending identical system prompts and media context across multiple `GenerateContent` calls within a session. This reduces both input token costs and latency.
@@ -478,7 +564,7 @@ flowchart LR
 
 | Component | Mode | Purpose |
 |-----------|------|---------|
-| `LandingPage.tsx` | Cloud | Workflow chooser (triage vs selection) |
+| `LandingPage.tsx` | Cloud | Workflow chooser (triage, selection, Facebook Prep) |
 | `FileUploader.tsx` | Cloud (triage) | Drag-and-drop S3 upload |
 | `MediaUploader.tsx` | Cloud (selection) | File System Access API pickers + trip context |
 | `SelectionView.tsx` | Cloud (selection) | AI selection results + review with override |
@@ -487,9 +573,12 @@ flowchart LR
 | `DownloadView.tsx` | Cloud (selection) | ZIP bundle download |
 | `DescriptionEditor.tsx` | Cloud (selection) | AI caption generation with feedback |
 | `PublishView.tsx` | Cloud (selection) | Instagram publishing |
+| `FBPrepView.tsx` | Cloud (FB Prep) | Per-item caption, location tag, date/time with copy buttons + regenerate |
 | `FileBrowser.tsx` | Local | Native OS file picker via Go backend |
 | `TriageView.tsx` | Both | Triage results and deletion interface |
 | `LoginForm.tsx` | Cloud | Cognito authentication UI |
+
+The app header includes an **Economy Mode** toggle (default: on) that persists in `localStorage` and is passed as `economy_mode` in all AI workflow start requests.
 
 **Shared utilities:** `hooks/usePolling.ts`, `hooks/useElapsedTimer.ts`, `components/shared/ActionBar.tsx`, `utils/format.ts`, `utils/fileSystem.ts`, `utils/statusBadge.ts`. Views use these instead of duplicated implementations.
 
@@ -502,7 +591,7 @@ Two independent CodePipelines triggered by GitHub pushes to main:
 | Pipeline | Flow |
 |----------|------|
 | Frontend | Preact build -> S3 sync -> CloudFront invalidation |
-| Backend | 11 parallel Docker builds (8 light + 3 heavy) with BuildKit caching -> 11 Lambda function updates |
+| Backend | 13 parallel Docker builds (10 light + 3 heavy) with BuildKit caching -> 13 Lambda function updates |
 
 ECR repositories are owned by a dedicated RegistryStack (DDR-046), deployed before any application stack. This breaks the chicken-and-egg dependency where `DockerImageFunction` requires an image that the pipeline hasn't pushed yet. See [DDR-046](./design-decisions/DDR-046-centralized-registry-stack.md).
 
@@ -552,7 +641,8 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-060](./design-decisions/DDR-060-s3-presigned-urls-for-gemini.md) — S3 Presigned URLs for Gemini Video Transfer
 - [DDR-062](./design-decisions/DDR-062-observability-and-version-tracking.md) — Observability gaps and version tracking
 - [DDR-065](./design-decisions/DDR-065-gemini-context-caching-and-batch-api.md) — Gemini Context Caching and Batch API Integration
+- [DDR-077](./design-decisions/DDR-077-cost-aware-vertex-ai-migration.md) — Cost-Aware Vertex AI Migration — Dual-Backend + Economy Mode + Facebook Prep
 
 ---
 
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01

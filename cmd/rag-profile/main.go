@@ -73,13 +73,12 @@ func handler(ctx context.Context) error {
 	}
 
 	bootstrap.LoadGeminiKey(ssmClient)
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("Gemini API key not available")
+	if err := ai.LoadGCPServiceAccount(); err != nil {
+		return fmt.Errorf("load GCP service account: %w", err)
 	}
-	genaiClient, err = ai.NewGeminiClient(ctx, apiKey)
+	genaiClient, err = ai.NewAIClient(ctx)
 	if err != nil {
-		return fmt.Errorf("create Gemini client: %w", err)
+		return fmt.Errorf("create AI client: %w", err)
 	}
 
 	dataAPI := rag.NewDataAPIClient(rdsDataClient, clusterARN, secretARN, database)

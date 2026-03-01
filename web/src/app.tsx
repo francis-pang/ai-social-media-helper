@@ -1,5 +1,25 @@
 import { signal, computed } from "@preact/signals";
 import { isCloudMode, invalidateSession } from "./api/client";
+
+const ECONOMY_MODE_KEY = "economy_mode";
+
+function loadEconomyMode(): boolean {
+  try {
+    const stored = localStorage.getItem(ECONOMY_MODE_KEY);
+    if (stored === null) return true; // default ON
+    return stored === "true";
+  } catch {
+    return true;
+  }
+}
+
+function saveEconomyMode(value: boolean) {
+  try {
+    localStorage.setItem(ECONOMY_MODE_KEY, String(value));
+  } catch {
+    // ignore
+  }
+}
 import {
   isAuthenticated,
   isAuthRequired,
@@ -35,6 +55,7 @@ import {
 } from "./components/PublishView";
 import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
+import { FBPrepView } from "./components/FBPrepView";
 import { FileUploader, resetFileUploaderState } from "./components/FileUploader";
 import { syncUrlToStep } from "./router";
 
@@ -58,7 +79,8 @@ export type Step =
   | "group-posts"
   | "publish"
   | "description"
-  | "instagram-publish";
+  | "instagram-publish"
+  | "fb-prep";
 
 /**
  * Active workflow — which feature the user chose from the landing page (DDR-042).
@@ -66,7 +88,7 @@ export type Step =
  * - "selection": Media selection pipeline (select, enhance, group, publish)
  * - null: Not yet chosen (on landing page)
  */
-export type Workflow = "triage" | "selection" | null;
+export type Workflow = "triage" | "selection" | "fb-prep" | null;
 export const activeWorkflow = signal<Workflow>(isCloudMode ? null : "triage");
 
 export const currentStep = signal<Step>(isCloudMode ? "landing" : "browse");
@@ -81,6 +103,15 @@ export const fileHandles = signal<Map<string, FileSystemFileHandle>>(new Map());
 
 /** Trip/event context for AI selection (e.g., "3-day trip to Tokyo, Oct 2025"). */
 export const tripContext = signal<string>("");
+
+/** Economy mode: 50% cost savings, ~10 min processing. Persisted in localStorage. */
+export const economyMode = signal<boolean>(loadEconomyMode());
+
+/** Set economy mode and persist to localStorage. */
+export function setEconomyMode(value: boolean) {
+  economyMode.value = value;
+  saveEconomyMode(value);
+}
 
 /** Step history stack for back-navigation in the selection flow. */
 export const stepHistory = signal<Step[]>([]);
@@ -190,6 +221,7 @@ const appTitle = computed(() => {
   if (!isCloudMode) return "Media Triage";
   if (activeWorkflow.value === "triage") return "Media Triage";
   if (activeWorkflow.value === "selection") return "Media Tools";
+  if (activeWorkflow.value === "fb-prep") return "Facebook Prep";
   return "Media Tools";
 });
 
@@ -228,6 +260,8 @@ const stepTitle = computed(() => {
       return "Post Description";
     case "instagram-publish":
       return "Publish to Instagram";
+    case "fb-prep":
+      return "Facebook Prep";
   }
 });
 
@@ -310,7 +344,63 @@ export function App() {
             </span>
           </div>
           <div />
-          <div />
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <label
+              class="economy-mode-toggle"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <span
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                }}
+              >
+                <span class="text-sm" style={{ fontWeight: 500, color: "var(--color-text)" }}>
+                  Economy Mode
+                </span>
+                <span class="text-xs" style={{ color: "var(--color-text-secondary)" }}>
+                  50% cost savings, ~10 min processing
+                </span>
+              </span>
+              <span
+                class="toggle-switch"
+                role="switch"
+                aria-checked={economyMode.value}
+                aria-label="Economy Mode"
+                onClick={() => setEconomyMode(!economyMode.value)}
+                style={{
+                  flexShrink: 0,
+                  width: "2.5rem",
+                  height: "1.375rem",
+                  borderRadius: "999px",
+                  background: economyMode.value ? "var(--color-primary)" : "var(--color-border)",
+                  position: "relative",
+                  transition: "background 0.15s",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "0.125rem",
+                    left: economyMode.value ? "1.25rem" : "0.125rem",
+                    width: "1.125rem",
+                    height: "1.125rem",
+                    borderRadius: "50%",
+                    background: "white",
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+                    transition: "left 0.15s",
+                  }}
+                />
+              </span>
+            </label>
+          </div>
         </nav>
         <LoginForm />
       </div>
@@ -366,6 +456,62 @@ export function App() {
         </div>
         <div class="navbar-progress" />
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          {/* Economy Mode toggle — 50% cost savings, ~10 min processing */}
+          <label
+            class="economy-mode-toggle"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            <span
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-end",
+              }}
+            >
+              <span class="text-sm" style={{ fontWeight: 500, color: "var(--color-text)" }}>
+                Economy Mode
+              </span>
+              <span class="text-xs" style={{ color: "var(--color-text-secondary)" }}>
+                50% cost savings, ~10 min processing
+              </span>
+            </span>
+            <span
+              class="toggle-switch"
+              role="switch"
+              aria-checked={economyMode.value}
+              aria-label="Economy Mode"
+              onClick={() => setEconomyMode(!economyMode.value)}
+              style={{
+                flexShrink: 0,
+                width: "2.5rem",
+                height: "1.375rem",
+                borderRadius: "999px",
+                background: economyMode.value ? "var(--color-primary)" : "var(--color-border)",
+                position: "relative",
+                transition: "background 0.15s",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: "0.125rem",
+                  left: economyMode.value ? "1.25rem" : "0.125rem",
+                  width: "1.125rem",
+                  height: "1.125rem",
+                  borderRadius: "50%",
+                  background: "white",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+                  transition: "left 0.15s",
+                }}
+              />
+            </span>
+          </label>
           {isCloudMode && !isOnLanding.value && (
             <button
               class="outline text-sm"
@@ -442,6 +588,9 @@ export function App() {
       {currentStep.value === "instagram-publish" && isCloudMode && (
         <PublishView />
       )}
+
+      {/* Facebook Prep (FB Prep workflow) */}
+      {currentStep.value === "fb-prep" && isCloudMode && <FBPrepView />}
 
       {/* Global overlay media player (DDR-038) */}
       <MediaPlayer />

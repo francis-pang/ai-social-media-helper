@@ -127,14 +127,21 @@ func AskMediaSelection(ctx context.Context, client *genai.Client, files []*media
 	return response, nil
 }
 
+// SelectionOutput holds either selection results or a batch job ID (economy mode).
+type SelectionOutput struct {
+	Result     *SelectionResult
+	BatchJobID string
+}
+
 // AskMediaSelectionJSON sends mixed media to Gemini and returns structured selection results.
 // Unlike AskMediaSelection which returns freeform text, this returns a parsed SelectionResult.
 // No item limit — the AI selects all worthy items. See DDR-030.
+// When economyMode is true, submits to Gemini Batch API and returns SelectionOutput{BatchJobID}.
 // sessionID is used for storing compressed videos in S3 (optional).
 // storeCompressed is an optional callback to store compressed videos in S3.
 // keyMapper maps local file paths to S3 keys (optional, for cloud mode).
 // cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
-func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*media.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string) (*SelectionResult, error) {
+func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*media.MediaFile, tripContext string, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string, economyMode bool) (*SelectionOutput, error) {
 	// Count media types for logging
 	var imageCount, videoCount int
 	for _, file := range files {
@@ -173,6 +180,21 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*m
 		Int("num_images", imageCount).
 		Int("num_videos", len(uploadedFiles)).
 		Msg("Sending media to Gemini for JSON selection...")
+
+	if economyMode {
+		parts = append(parts, &genai.Part{Text: prompt})
+		contents := []*genai.Content{{Role: "user", Parts: parts}}
+		config := &genai.GenerateContentConfig{
+			SystemInstruction: systemInstruction,
+			MediaResolution:   genai.MediaResolutionHigh,
+		}
+		req := &genai.InlinedRequest{Contents: contents, Config: config}
+		jobName, err := SubmitGeminiBatch(ctx, client, modelName, []*genai.InlinedRequest{req})
+		if err != nil {
+			return nil, err
+		}
+		return &SelectionOutput{BatchJobID: jobName}, nil
+	}
 
 	geminiStart := time.Now()
 	var resp *genai.GenerateContentResponse
@@ -264,7 +286,7 @@ func AskMediaSelectionJSON(ctx context.Context, client *genai.Client, files []*m
 		Int("scenes", len(selectionResult.SceneGroups)).
 		Msg("JSON media selection complete")
 
-	return selectionResult, nil
+	return &SelectionOutput{Result: selectionResult}, nil
 }
 
 // CompressedVideoStore is a callback function for storing compressed videos in S3.

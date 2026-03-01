@@ -18,24 +18,23 @@ import (
 	"github.com/fpang/ai-social-media-helper/internal/store"
 )
 
-func handleDescription(ctx context.Context, event DescriptionEvent) error {
+func resolveEconomyMode(eventEconomy bool) bool {
+	if v := os.Getenv("ECONOMY_MODE"); v == "true" {
+		return true
+	}
+	return eventEconomy
+}
+
+func handleDescription(ctx context.Context, event DescriptionEvent) (interface{}, error) {
 	jobStart := time.Now()
 	sessionStore.PutDescriptionJob(ctx, event.SessionID, &store.DescriptionJob{
 		ID: event.JobID, Status: "processing", GroupLabel: event.GroupLabel,
 		TripContext: event.TripContext, MediaKeys: event.Keys,
 	})
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "API key not configured", func(ctx context.Context, sessionID, jobID, errMsg string) error {
-			sessionStore.PutDescriptionJob(ctx, sessionID, &store.DescriptionJob{ID: jobID, Status: "error", Error: errMsg})
-			return nil
-		})
-	}
-
-	genaiClient, err := ai.NewGeminiClient(ctx, apiKey)
+	genaiClient, err := ai.NewAIClient(ctx)
 	if err != nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "failed to initialize AI client", func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, "failed to initialize AI client", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutDescriptionJob(ctx, sessionID, &store.DescriptionJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -43,7 +42,7 @@ func handleDescription(ctx context.Context, event DescriptionEvent) error {
 
 	mediaItems, err := buildDescriptionMediaItems(ctx, event.Keys)
 	if err != nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "failed to prepare media", func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, "failed to prepare media", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutDescriptionJob(ctx, sessionID, &store.DescriptionJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
@@ -68,16 +67,26 @@ func handleDescription(ctx context.Context, event DescriptionEvent) error {
 	cacheMgr := ai.NewCacheManager(genaiClient)
 	defer cacheMgr.DeleteAll(ctx, event.SessionID)
 
-	result, rawResponse, err := ai.GenerateDescription(
+	economyMode := resolveEconomyMode(event.EconomyMode)
+	output, err := ai.GenerateDescription(
 		ctx, genaiClient, event.GroupLabel, event.TripContext, mediaItems,
-		cacheMgr, event.SessionID, ragContext,
+		cacheMgr, event.SessionID, ragContext, economyMode,
 	)
 	if err != nil {
-		return jobs.SetJobError(ctx, event.SessionID, event.JobID, "caption generation failed", func(ctx context.Context, sessionID, jobID, errMsg string) error {
+		return nil, jobs.SetJobError(ctx, event.SessionID, event.JobID, "caption generation failed", func(ctx context.Context, sessionID, jobID, errMsg string) error {
 			sessionStore.PutDescriptionJob(ctx, sessionID, &store.DescriptionJob{ID: jobID, Status: "error", Error: errMsg})
 			return nil
 		})
 	}
+
+	// Economy mode: return batch_job_id for parent SFN to poll.
+	if output.BatchJobID != "" {
+		log.Info().Str("batchJobId", output.BatchJobID).Msg("Description submitted to Gemini Batch API (economy mode)")
+		return &DescriptionRunResult{BatchJobID: output.BatchJobID}, nil
+	}
+
+	result := output.Result
+	rawResponse := output.RawResponse
 
 	sessionStore.PutDescriptionJob(ctx, event.SessionID, &store.DescriptionJob{
 		ID: event.JobID, Status: "complete", GroupLabel: event.GroupLabel,
@@ -122,7 +131,7 @@ func handleDescription(ctx context.Context, event DescriptionEvent) error {
 	}
 
 	log.Info().Str("job", event.JobID).Int("caption_length", len(result.Caption)).Dur("duration", time.Since(jobStart)).Msg("Description generation complete")
-	return nil
+	return nil, nil
 }
 
 func invokeRAGQuery(ctx context.Context, queryType, userID, sessionContext string) (string, error) {

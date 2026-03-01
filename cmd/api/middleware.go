@@ -136,6 +136,8 @@ func normalizeEndpoint(path string) string {
 		return "/api/download/start"
 	case path == "/api/description/generate":
 		return "/api/description/generate"
+	case path == "/api/fb-prep/start":
+		return "/api/fb-prep/start"
 	case path == "/api/session/invalidate":
 		return "/api/session/invalidate"
 	case path == "/api/media/thumbnail":

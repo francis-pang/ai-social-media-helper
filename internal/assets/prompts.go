@@ -84,6 +84,11 @@ var MediaSelectionJSONSystemPrompt string
 //go:embed prompts/description-system.txt
 var DescriptionSystemPrompt string
 
+// FBPrepSystemPrompt provides instructions for Facebook post preparation (captions, location tags, dates).
+//
+//go:embed prompts/fb-prep-system.txt
+var FBPrepSystemPrompt string
+
 // --- Dynamic prompt templates (require metadata context) ---
 
 //go:embed prompts/social-media-image.txt

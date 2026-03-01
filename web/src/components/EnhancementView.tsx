@@ -7,6 +7,7 @@ import {
   invalidateDownstream,
   uploadSessionId,
   setStep,
+  economyMode,
 } from "../app";
 import { createPoller } from "../hooks/usePolling";
 import { ProcessingIndicator } from "./ProcessingIndicator";
@@ -73,7 +74,7 @@ function startEnhancementJob() {
   invalidateDownstream("grouping");
 
   error.value = null;
-  startEnhancement({ sessionId, keys })
+  startEnhancement({ sessionId, keys, economy_mode: economyMode.value })
     .then((res) => {
       enhancementJobId.value = res.id;
       pollResults(res.id, sessionId);

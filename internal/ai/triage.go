@@ -114,21 +114,38 @@ const triageBatchSize = 20
 // as a conservative threshold to leave headroom.
 const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB
 
+// TriageOutput holds either triage results or a batch job ID (economy mode).
+type TriageOutput struct {
+	Results   []TriageResult
+	BatchJobID string
+}
+
 // AskMediaTriage sends media files to Gemini for triage evaluation.
 // When len(files) > triageBatchSize the work is split into smaller batches
 // so the model reliably covers every item; results are merged and Media
 // indices adjusted to the caller's original file positions.
+//
+// When economyMode is true, submits to Gemini Batch API and returns
+// TriageOutput{BatchJobID: jobName}. Results is nil. The caller should
+// invoke the Gemini Batch Poll SFN.
 //
 // Photos are sent as thumbnails (inline blobs), videos as compressed file references.
 // sessionID is used for storing compressed videos in S3 (optional).
 // storeCompressed is an optional callback to store compressed videos in S3.
 // keyMapper maps local file paths to S3 keys (optional, for cloud mode).
 // cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
-// Returns a slice of TriageResult with one verdict per media item.
+// Returns a slice of TriageResult with one verdict per media item (or BatchJobID when economyMode).
 // See DDR-021: Media Triage Command with Batch AI Evaluation.
-func AskMediaTriage(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string) ([]TriageResult, error) {
+func AskMediaTriage(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, cacheMgr *CacheManager, ragContext string, economyMode bool) (*TriageOutput, error) {
+	if economyMode {
+		return askMediaTriageEconomy(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, ragContext)
+	}
 	if len(files) <= triageBatchSize {
-		return askMediaTriageSingle(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
+		results, err := askMediaTriageSingle(ctx, client, files, modelName, sessionID, storeCompressed, keyMapper, cacheMgr, ragContext)
+		if err != nil {
+			return nil, err
+		}
+		return &TriageOutput{Results: results}, nil
 	}
 
 	totalBatches := (len(files) + triageBatchSize - 1) / triageBatchSize
@@ -179,7 +196,147 @@ func AskMediaTriage(ctx context.Context, client *genai.Client, files []*media.Me
 		Int("total_files", len(files)).
 		Msg("All triage batches complete")
 
-	return allResults, nil
+	return &TriageOutput{Results: allResults}, nil
+}
+
+// askMediaTriageEconomy builds the same prompt/parts as askMediaTriageSingle,
+// submits to Gemini Batch API, and returns the batch job name for polling.
+func askMediaTriageEconomy(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, ragContext string) (*TriageOutput, error) {
+	var allRequests []*genai.InlinedRequest
+
+	for batchStart := 0; batchStart < len(files); batchStart += triageBatchSize {
+		batchEnd := batchStart + triageBatchSize
+		if batchEnd > len(files) {
+			batchEnd = len(files)
+		}
+		batch := files[batchStart:batchEnd]
+		req, err := buildTriageBatchRequest(ctx, client, batch, modelName, sessionID, storeCompressed, keyMapper, ragContext)
+		if err != nil {
+			return nil, fmt.Errorf("batch %d: %w", batchStart/triageBatchSize+1, err)
+		}
+		allRequests = append(allRequests, req)
+	}
+
+	jobName, err := SubmitGeminiBatch(ctx, client, modelName, allRequests)
+	if err != nil {
+		return nil, err
+	}
+	return &TriageOutput{BatchJobID: jobName}, nil
+}
+
+// buildTriageBatchRequest builds the InlinedRequest for a single triage batch.
+// Reuses the same logic as askMediaTriageSingle for building parts and config.
+func buildTriageBatchRequest(ctx context.Context, client *genai.Client, files []*media.MediaFile, modelName string, sessionID string, storeCompressed CompressedVideoStore, keyMapper KeyMapper, ragContext string) (*genai.InlinedRequest, error) {
+	var uploadedFiles []*genai.File
+	var cleanupFuncs []func()
+	defer func() {
+		for _, cleanup := range cleanupFuncs {
+			cleanup()
+		}
+		for _, f := range uploadedFiles {
+			if _, err := client.Files.Delete(ctx, f.Name, nil); err != nil {
+				log.Warn().Err(err).Str("file", f.Name).Msg("Failed to delete uploaded Gemini file")
+			}
+		}
+	}()
+
+	prompt := BuildMediaTriagePrompt(files, ragContext)
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: assets.TriageSystemPrompt}},
+		},
+		MaxOutputTokens:  65536,
+		MediaResolution: genai.MediaResolutionLow,
+	}
+
+	var parts []*genai.Part
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Path))
+		if media.IsImage(ext) {
+			if file.PresignedURL != "" {
+				imgData, err := downloadToBytes(ctx, file.PresignedURL)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to download image from presigned URL, skipping")
+					continue
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: file.MIMEType, Data: imgData},
+				})
+			} else {
+				thumbData, mimeType, err := media.GenerateThumbnail(file, media.DefaultThumbnailMaxDimension)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to generate thumbnail, skipping")
+					continue
+				}
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: mimeType, Data: thumbData},
+				})
+			}
+		} else if media.IsVideo(ext) {
+			if file.PresignedURL != "" && (file.Size == 0 || file.Size <= maxPresignedURLBytes) {
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{MIMEType: file.MIMEType, FileURI: file.PresignedURL},
+				})
+			} else if file.PresignedURL != "" {
+				tmpPath, tmpCleanup, err := downloadFromURL(ctx, file.PresignedURL)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to download video for Gemini upload, skipping")
+					continue
+				}
+				cleanupFuncs = append(cleanupFuncs, tmpCleanup)
+				uploaded, err := uploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video to Gemini Files API, skipping")
+					continue
+				}
+				uploadedFiles = append(uploadedFiles, uploaded)
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
+				})
+			} else {
+				var videoMeta *media.VideoMetadata
+				if file.Metadata != nil {
+					videoMeta, _ = file.Metadata.(*media.VideoMetadata)
+				}
+				compressedPath, _, cleanup, err := media.CompressVideoForGemini(ctx, file.Path, videoMeta)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to compress video, skipping")
+					continue
+				}
+				cleanupFuncs = append(cleanupFuncs, cleanup)
+				originalKey := file.Path
+				if keyMapper != nil {
+					if s3Key := keyMapper(file.Path); s3Key != "" {
+						originalKey = s3Key
+					}
+				}
+				if storeCompressed != nil && sessionID != "" {
+					_, _ = storeCompressed(ctx, sessionID, originalKey, compressedPath)
+				}
+				uploadedFile, err := uploadVideoFile(ctx, client, compressedPath)
+				if err != nil {
+					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video, skipping")
+					continue
+				}
+				uploadedFiles = append(uploadedFiles, uploadedFile)
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{MIMEType: uploadedFile.MIMEType, FileURI: uploadedFile.URI},
+				})
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("no media files could be processed for triage (all %d files skipped)", len(files))
+	}
+
+	parts = append(parts, &genai.Part{Text: prompt})
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+
+	return &genai.InlinedRequest{
+		Contents: contents,
+		Config:   config,
+	}, nil
 }
 
 // askMediaTriageSingle sends a single batch of media files to Gemini for

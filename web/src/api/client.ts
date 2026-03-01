@@ -30,6 +30,11 @@ import type {
   DescriptionResults,
   DescriptionFeedbackRequest,
   DescriptionFeedbackResponse,
+  FBPrepStartRequest,
+  FBPrepStartResponse,
+  FBPrepJob,
+  FBPrepFeedbackRequest,
+  FBPrepFeedbackResponse,
   PublishStartRequest,
   PublishStartResponse,
   PublishStatus,
@@ -586,6 +591,42 @@ export function submitDescriptionFeedback(
   );
 }
 
+// --- FB Prep APIs ---
+
+/** Start an FB prep job for the given media items. */
+export function startFBPrep(
+  req: FBPrepStartRequest,
+): Promise<FBPrepStartResponse> {
+  return fetchJSON<FBPrepStartResponse>("/api/fb-prep/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Get FB prep results (poll until status is "complete" or "error"). */
+export function getFBPrepResults(
+  id: string,
+  sessionId: string,
+): Promise<FBPrepJob> {
+  return fetchJSON<FBPrepJob>(
+    `/api/fb-prep/${id}/results?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
+/** Submit feedback to regenerate a caption for a single item. */
+export function submitFBPrepFeedback(
+  id: string,
+  req: FBPrepFeedbackRequest,
+): Promise<FBPrepFeedbackResponse> {
+  return fetchJSON<FBPrepFeedbackResponse>(
+    `/api/fb-prep/${id}/feedback`,
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+  );
+}
+
 // --- Publish APIs (DDR-040) ---
 
 /** Response from GET /api/health. */
@@ -681,4 +722,13 @@ export async function postOverrideFinalize(
     body: JSON.stringify(delta),
   });
 }
+
+/** Re-export FB Prep types for use by FBPrepView. */
+export type {
+  FBPrepStartRequest,
+  FBPrepStartResponse,
+  FBPrepJob,
+  FBPrepFeedbackRequest,
+  FBPrepFeedbackResponse,
+};
 

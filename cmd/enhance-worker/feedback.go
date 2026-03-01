@@ -45,13 +45,7 @@ func handleEnhancementFeedback(ctx context.Context, event EnhanceEvent) error {
 	}
 	item := job.Items[targetIdx]
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		log.Error().Str("jobId", event.JobID).Msg("GEMINI_API_KEY not configured for feedback")
-		return nil
-	}
-
-	genaiClient, err := ai.NewGeminiClient(ctx, apiKey)
+	genaiClient, err := ai.NewAIClient(ctx)
 	if err != nil {
 		log.Error().Err(err).Str("jobId", event.JobID).Msg("Failed to create Gemini client for feedback")
 		return nil

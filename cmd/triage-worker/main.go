@@ -66,6 +66,7 @@ func init() {
 	mediaBucket = s3s.Bucket
 	sessionStore = bootstrap.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
 	bootstrap.LoadGeminiKey(awsClients.SSM)
+	_ = ai.LoadGCPServiceAccount()
 
 	fpTableName := os.Getenv("FILE_PROCESSING_TABLE_NAME")
 	if fpTableName != "" {
@@ -119,7 +120,7 @@ func handler(ctx context.Context, event TriageEvent) (interface{}, error) {
 	case "triage-check-processing":
 		return handleTriageCheckProcessing(ctx, event)
 	case "triage-run":
-		return nil, handleTriageRun(ctx, event)
+		return handleTriageRun(ctx, event)
 	default:
 		return nil, fmt.Errorf("unknown event type: %s", event.Type)
 	}

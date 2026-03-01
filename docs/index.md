@@ -13,6 +13,7 @@
 | [media-triage.md](./media-triage.md) | Media triage workflow — AI identification of unsaveable media |
 | [media-selection.md](./media-selection.md) | Media selection workflow — AI-powered selection for Instagram carousels |
 | [rag-decision-memory.md](./rag-decision-memory.md) | RAG Decision Memory — feedback-driven personalization (DDR-066) |
+| [architecture.md#facebook-prep-workflow](./architecture.md#facebook-prep-workflow-ddr-077) | Facebook Prep workflow — AI captions, Google Maps location, EXIF timestamps |
 
 ## Media Processing
 
@@ -50,15 +51,17 @@
 
 | Document | Description |
 |----------|-------------|
-| [design-decisions/](./design-decisions/) | 71 DDRs documenting every architectural choice |
+| [design-decisions/](./design-decisions/) | 77 DDRs documenting every architectural choice |
 | [design-decisions/index.md](./design-decisions/index.md) | Chronological index of all decisions |
 
 ## External References
 
-- [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) — Model pricing and free tier limits
-- [Google AI Studio](https://aistudio.google.com/) — API key management
+- [Vertex AI Pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing) — Gemini on Vertex AI pricing and free tier
+- [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) — Standalone Gemini Developer API pricing
+- [Vertex AI Studio](https://console.cloud.google.com/vertex-ai/studio) — Vertex AI model management
 - [Gemini API Docs](https://ai.google.dev/gemini-api/docs) — Official API documentation
+- [Google Maps Grounding](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/google-maps) — Location grounding for Gemini
 
 ---
 
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01

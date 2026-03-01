@@ -31,8 +31,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/fpang/ai-social-media-helper/internal/ai"
-	"github.com/fpang/ai-social-media-helper/internal/media"
 	"github.com/fpang/ai-social-media-helper/internal/logging"
+	"github.com/fpang/ai-social-media-helper/internal/media"
 	"github.com/fpang/ai-social-media-helper/internal/s3util"
 	"github.com/fpang/ai-social-media-helper/internal/store"
 	"github.com/rs/zerolog/log"
@@ -89,6 +89,8 @@ func init() {
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
 		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
+
+	_ = ai.LoadGCPServiceAccount()
 
 	// Emit consolidated cold-start log for troubleshooting.
 	logging.NewStartupLogger("video-lambda").

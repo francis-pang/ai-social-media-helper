@@ -65,12 +65,20 @@ type DescriptionConversationEntry struct {
 
 // --- Description generation ---
 
+// DescriptionOutput holds either description results or a batch job ID (economy mode).
+type DescriptionOutput struct {
+	Result      *DescriptionResult
+	RawResponse string
+	BatchJobID  string
+}
+
 // GenerateDescription sends media with context to Gemini and returns a structured caption.
 // groupLabel is the user's descriptive text for the post group (from Step 6).
 // tripContext is the overall trip/event description (from Step 1).
 // mediaItems contains the thumbnail data and metadata for each item in the group.
 // cacheMgr is an optional CacheManager for context caching (DDR-065). Pass nil to disable.
 // sessionID is required when cacheMgr is provided.
+// When economyMode is true, submits to Gemini Batch API and returns DescriptionOutput{BatchJobID}.
 func GenerateDescription(
 	ctx context.Context,
 	client *genai.Client,
@@ -80,7 +88,8 @@ func GenerateDescription(
 	cacheMgr *CacheManager,
 	sessionID string,
 	ragContext string,
-) (*DescriptionResult, string, error) {
+	economyMode bool,
+) (*DescriptionOutput, error) {
 	log.Debug().
 		Str("group_label", truncateString(groupLabel, 100)).
 		Str("trip_context", truncateString(tripContext, 100)).
@@ -135,8 +144,19 @@ func GenerateDescription(
 		Bool("cache_enabled", cacheMgr != nil).
 		Msg("Sending media to Gemini for caption generation...")
 
-	// Generate content
 	modelName := GetModelName()
+
+	if economyMode {
+		contents := []*genai.Content{{Role: "user", Parts: parts}}
+		req := &genai.InlinedRequest{Contents: contents, Config: config}
+		jobName, err := SubmitGeminiBatch(ctx, client, modelName, []*genai.InlinedRequest{req})
+		if err != nil {
+			return nil, err
+		}
+		return &DescriptionOutput{BatchJobID: jobName}, nil
+	}
+
+	// Generate content
 	var streamedText string
 	callStart := time.Now()
 
@@ -180,7 +200,7 @@ func GenerateDescription(
 	duration := time.Since(callStart)
 	if err != nil {
 		log.Error().Err(err).Dur("duration", duration).Msg("Failed to generate description from Gemini")
-		return nil, "", fmt.Errorf("failed to generate content: %w", err)
+		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	responseText := streamedText
@@ -188,7 +208,7 @@ func GenerateDescription(
 		responseText = resp.Text()
 	}
 	if responseText == "" {
-		return nil, "", fmt.Errorf("received empty response from Gemini API")
+		return nil, fmt.Errorf("received empty response from Gemini API")
 	}
 
 	log.Debug().
@@ -201,7 +221,7 @@ func GenerateDescription(
 	result, err := parseDescriptionResponse(responseText)
 	if err != nil {
 		log.Debug().Err(err).Msg("Failed to parse description response")
-		return nil, responseText, fmt.Errorf("failed to parse description response: %w", err)
+		return nil, fmt.Errorf("failed to parse description response: %w", err)
 	}
 
 	log.Debug().
@@ -216,7 +236,7 @@ func GenerateDescription(
 		Str("location", result.LocationTag).
 		Msg("Caption generation complete")
 
-	return result, responseText, nil
+	return &DescriptionOutput{Result: result, RawResponse: responseText}, nil
 }
 
 // RegenerateDescription regenerates a caption using multi-turn feedback.

@@ -22,15 +22,24 @@ func runTriageJob(job *triageJob, model string) {
 
 	ctx := context.Background()
 
+	if err := ai.LoadGCPServiceAccount(); err != nil {
+		setJobError(job, fmt.Sprintf("GCP service account error: %v", err))
+		return
+	}
+
 	apiKey, err := auth.GetAPIKey()
 	if err != nil {
 		setJobError(job, fmt.Sprintf("API key error: %v", err))
 		return
 	}
+	// Ensure key is in env for NewAIClient (e.g. when loaded from GPG)
+	if apiKey != "" && os.Getenv("GEMINI_API_KEY") == "" {
+		os.Setenv("GEMINI_API_KEY", apiKey)
+	}
 
-	client, err := ai.NewGeminiClient(ctx, apiKey)
+	client, err := ai.NewAIClient(ctx)
 	if err != nil {
-		setJobError(job, fmt.Sprintf("Failed to create Gemini client: %v", err))
+		setJobError(job, fmt.Sprintf("Failed to create AI client: %v", err))
 		return
 	}
 
@@ -97,11 +106,12 @@ func runTriageJob(job *triageJob, model string) {
 
 	// Use the existing AskMediaTriage function from the chat package
 	// Local mode: no sessionID, no S3 storage
-	triageResults, err := ai.AskMediaTriage(ctx, client, mediaForAI, model, "", nil, nil, nil, "")
+	output, err := ai.AskMediaTriage(ctx, client, mediaForAI, model, "", nil, nil, nil, "", false)
 	if err != nil {
 		setJobError(job, fmt.Sprintf("Triage failed: %v", err))
 		return
 	}
+	triageResults := output.Results
 
 	// Map results to items with paths and thumbnail URLs
 	job.mu.Lock()

@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import { selectedPaths, triageJobId, uploadSessionId, setStep } from "../app";
+import { selectedPaths, triageJobId, uploadSessionId, setStep, economyMode } from "../app";
 import { startTriage, isCloudMode } from "../api/client";
 
 const loading = signal(false);
@@ -10,8 +10,8 @@ async function handleStartTriage() {
   error.value = null;
   try {
     const req = isCloudMode
-      ? { sessionId: uploadSessionId.value! }
-      : { paths: selectedPaths.value };
+      ? { sessionId: uploadSessionId.value!, economy_mode: economyMode.value }
+      : { paths: selectedPaths.value, economy_mode: economyMode.value };
 
     const res = await startTriage(req);
     triageJobId.value = res.id;

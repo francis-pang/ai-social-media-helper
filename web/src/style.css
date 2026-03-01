@@ -146,6 +146,20 @@ code {
   border-radius: 4px;
 }
 
+/* --- Economy Mode toggle --- */
+
+.economy-mode-toggle:hover .toggle-switch {
+  opacity: 0.9;
+}
+
+.toggle-switch {
+  cursor: pointer;
+}
+
+.toggle-switch:hover {
+  opacity: 0.9;
+}
+
 /* --- File-row card layout (DDR-058) --- */
 
 .file-row {

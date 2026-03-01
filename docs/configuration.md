@@ -21,12 +21,33 @@ Configuration values are resolved in the following order (highest priority first
 
 ### 1. API Configuration
 
-| Key | Env Variable | CLI Flag | Default | Description |
+The application supports a **dual-backend AI strategy** (see DDR-077). The client selects the backend at startup based on environment variables:
+
+| Key | Env Variable | Required | Default | Description |
 |-----|--------------|----------|---------|-------------|
-| `api.key` | `GEMINI_API_KEY` | `--api-key` | (required) | Gemini API key (see authentication.md) |
-| `api.model` | `GEMINI_MODEL` | `--model` | `gemini-3-flash-preview` | Model to use for generation (free tier compatible) |
-| `api.base_url` | `GEMINI_BASE_URL` | `--base-url` | (SDK default) | Override API endpoint (for testing/proxy) |
-| `api.timeout` | `GEMINI_TIMEOUT` | `--timeout` | `120s` | Request timeout for API calls |
+| `api.vertex_project` | `VERTEX_AI_PROJECT` | Cloud (primary) | — | GCP project ID (e.g., `gen-lang-client-0436578028`) |
+| `api.vertex_region` | `VERTEX_AI_REGION` | Cloud (primary) | — | GCP region (e.g., `us-east4`) |
+| `api.gcp_sa_json` | `GCP_SERVICE_ACCOUNT_JSON` | Cloud (primary) | — | GCP service account JSON string (loaded from SSM at `/ai-social-media/prod/vertex-ai-service-account`) |
+| `api.key` | `GEMINI_API_KEY` | Fallback | — | Standalone Gemini Developer API key (loaded from SSM at `/ai-social-media/prod/gemini-api-key`) |
+| `api.model` | `GEMINI_MODEL` | No | `gemini-3-flash-preview` | Model to use for generation |
+| `api.base_url` | `GEMINI_BASE_URL` | No | (SDK default) | Override API endpoint (for testing/proxy) |
+| `api.timeout` | `GEMINI_TIMEOUT` | No | `120s` | Request timeout for API calls |
+
+**Backend selection priority:**
+1. `VERTEX_AI_PROJECT` set → Vertex AI (ADC via `GCP_SERVICE_ACCOUNT_JSON`)
+2. `GEMINI_API_KEY` set → Gemini Developer API
+3. Neither → startup error
+
+### 1b. Economy Mode
+
+Economy Mode routes non-interactive AI workloads through the Gemini Batch API for 50% cost savings at the cost of 5–15 min latency.
+
+| Setting | Where | Default | Description |
+|---------|-------|---------|-------------|
+| Economy Mode toggle | Web UI header | On | Persisted in `localStorage`; passed as `economy_mode: true` in API requests |
+| `GEMINI_BATCH_POLL_SFN_ARN` | Lambda env var (CDK) | — | ARN of the Gemini Batch Poll Step Function; injected by CDK |
+
+Interactive workflows (enhancement feedback) always run in real-time regardless of this setting.
 
 ### 2. Resource Limits
 
@@ -571,5 +592,5 @@ log:
 
 ---
 
-**Last Updated**: 2025-12-31  
-**Version**: 1.1.0
+**Last Updated**: 2026-03-01  
+**Version**: 1.2.0

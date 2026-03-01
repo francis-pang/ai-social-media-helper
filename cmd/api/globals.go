@@ -28,8 +28,9 @@ var (
 
 	// Domain-specific Lambda ARNs for async dispatch (DDR-053).
 	descriptionLambdaArn string
-	downloadLambdaArn    string
-	enhanceLambdaArn     string
+	downloadLambdaArn     string
+	enhanceLambdaArn      string
+	fbPrepLambdaArn      string
 
 	// Step Functions client for pipelines (DDR-050, DDR-052).
 	sfnClient         *sfn.Client

@@ -89,8 +89,7 @@ func handleEnhance(ctx context.Context, event EnhanceEvent) (EnhanceResult, erro
 	logger.Debug().Int("width", imageWidth).Int("height", imageHeight).Bool("decoded", configErr == nil).Msg("Image dimensions")
 
 	// Initialize Gemini client.
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	genaiClient, err := ai.NewGeminiClient(ctx, apiKey)
+	genaiClient, err := ai.NewAIClient(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to create Gemini client")
 		updateItemError(ctx, event, "Gemini client initialization failed")

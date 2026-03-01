@@ -1,13 +1,21 @@
-# Gemini Media CLI Tools
+# AI Social Media Helper
 
-A collection of Go tools for analyzing, selecting, and enhancing photos and videos using Google's Gemini API.
+A collection of Go tools for analyzing, selecting, enhancing, and captioning photos and videos using Google's Gemini API and Vertex AI.
 
-## Tools
+## Workflows
+
+| Workflow | Description |
+|----------|-------------|
+| **Media Triage** | AI-powered triage to identify and delete unsaveable files |
+| **Media Selection + Instagram** | AI selection, enhancement, grouping, captions, and Instagram publish |
+| **Facebook Prep** | AI-generated captions, location tags, and date/time stamps for Facebook uploads |
+
+## Lambdas
 
 | Command | Description |
 |---------|-------------|
-| `media-select` | AI-powered media selection for Instagram carousels |
-| `media-triage` | AI-powered media triage to identify and delete unsaveable files |
+| `media-select` | AI-powered media selection for Instagram carousels (CLI) |
+| `media-triage` | AI-powered media triage to identify and delete unsaveable files (CLI) |
 | `media-web` | Web UI for visual triage and selection (local web server) |
 | `media-lambda` | Cloud-hosted API service via AWS Lambda + S3 + CloudFront |
 | `triage-lambda` | Triage pipeline processing (DDR-053) |
@@ -18,15 +26,17 @@ A collection of Go tools for analyzing, selecting, and enhancing photos and vide
 | `selection-lambda` | AI media selection via Gemini (Step Functions worker) |
 | `enhance-lambda` | Per-photo AI enhancement + feedback via Gemini (Step Functions worker) |
 | `video-lambda` | Per-video enhancement via ffmpeg (Step Functions worker) |
+| `fb-prep-lambda` | Facebook caption + location + timestamp generation with Google Maps grounding |
+| `gemini-batch-poll` | Lightweight Vertex AI / Gemini Batch API status poller (Step Functions worker) |
 
 ## Quick Start
 
 ### Prerequisites
 
 - Go 1.24 or later
-- Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
 - FFmpeg with `libsvtav1` and `libopus` (required for video compression)
 - Node.js 18+ (required only for building the web UI)
+- **GCP service account** with Vertex AI permissions (cloud mode) — or standalone Gemini API key (fallback)
 
 ### Build and Run
 
@@ -92,9 +102,14 @@ export GEMINI_API_KEY="your-api-key-here"
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | Yes | — | Gemini API key |
+| `VERTEX_AI_PROJECT` | Cloud (primary) | — | GCP project ID (`gen-lang-client-0436578028`) |
+| `VERTEX_AI_REGION` | Cloud (primary) | — | GCP region (`us-east4`) |
+| `GCP_SERVICE_ACCOUNT_JSON` | Cloud (primary) | — | GCP service account JSON (sourced from SSM) |
+| `GEMINI_API_KEY` | Fallback | — | Standalone Gemini API key (free-tier fallback) |
 | `GEMINI_MODEL` | No | `gemini-3-flash` | Model to use |
 | `GEMINI_LOG_LEVEL` | No | `info` | Log level: debug, info, warn, error |
+
+The AI client automatically selects the backend: **Vertex AI** is used when `VERTEX_AI_PROJECT` is set; the standalone Gemini API is the fallback when only `GEMINI_API_KEY` is present. See [DDR-077](./docs/design-decisions/DDR-077-cost-aware-vertex-ai-migration.md) for the full dual-backend strategy.
 
 See [docs/authentication.md](./docs/authentication.md) for GPG-encrypted credential storage and cloud authentication (Cognito).
 
@@ -105,7 +120,7 @@ All design documentation lives in [docs/](./docs/index.md):
 - **Architecture** — [architecture.md](./docs/architecture.md) — system components, local + cloud deployment
 - **Workflows** — [media-triage.md](./docs/media-triage.md), [media-selection.md](./docs/media-selection.md)
 - **Media processing** — [image-processing.md](./docs/image-processing.md), [video-processing.md](./docs/video-processing.md)
-- **Design decisions** — [69 DDRs](./docs/design-decisions/) documenting every architectural choice
+- **Design decisions** — [77 DDRs](./docs/design-decisions/) documenting every architectural choice
 
 ## Roadmap
 
@@ -124,6 +139,10 @@ All design documentation lives in [docs/](./docs/index.md):
 - [x] Gemini context caching for selection, triage, and description (DDR-065)
 - [x] RAG decision memory: feedback-driven personalization (DDR-066)
 - [x] RAG daily batch architecture: DynamoDB staging, daily profile rebuild, 3 Lambdas (DDR-068)
+- [x] Facebook Prep workflow: session-aware captions, Google Maps grounding, date/time stamps (DDR-077)
+- [x] Vertex AI migration: dual-backend (Vertex AI primary + Gemini API fallback), GCP service account (DDR-077)
+- [x] Economy Mode: Gemini Batch API (50% cost savings) for non-interactive workflows (DDR-077)
+- [x] Gemini Batch Poll Step Function + lightweight Lambda for server-side batch polling (DDR-077)
 - [ ] SOLID/DRY refactoring: shared handler helpers, store generics, chat utilities, interface segregation
 - [ ] Custom domain with ACM certificate
 
