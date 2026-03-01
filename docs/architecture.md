@@ -457,9 +457,38 @@ Most workflows support **Economy Mode** (toggled via the UI, persisted in `local
 | Real-time | Seconds | Full price | Enhancement feedback (interactive) |
 | Economy (Batch) | 5–15 min | 50% savings | Triage, Selection, Description, FB Prep |
 
-The **Gemini Batch Poll Step Function** (Standard Workflow) implements server-side polling:
-`Wait(15s) → GeminiBatchPollLambda → Choice (SUCCEEDED / FAILED / loop)`.
-Existing SFNs call it via `StartExecution.sync:2` to block until batch completion.
+The **Gemini Batch Poll Step Function** (Standard Workflow) implements server-side polling. Existing SFNs (Triage, Selection, Description, FB Prep) call it via `StartExecution.sync:2` to block until batch completion.
+
+```mermaid
+sequenceDiagram
+    participant Caller as Caller SFN<br/>(Triage / Selection / Description / FB Prep)
+    participant BatchPollSFN as Gemini Batch Poll SFN<br/>(Standard Workflow)
+    participant PollLambda as GeminiBatchPoll Lambda<br/>(128 MB, 10 s)
+    participant Gemini as Vertex AI / Gemini<br/>Batch API
+
+    Caller->>BatchPollSFN: StartExecution.sync:2 {batch_job_id}
+
+    loop Every 15 seconds until terminal state
+        BatchPollSFN->>BatchPollSFN: Wait (15 s)
+        BatchPollSFN->>PollLambda: Invoke {batch_job_id}
+        PollLambda->>Gemini: GetBatchJob(batch_job_id)
+        Gemini-->>PollLambda: {state, results, error}
+        PollLambda-->>BatchPollSFN: {state, results, error}
+
+        alt state == SUCCEEDED
+            BatchPollSFN-->>Caller: {results}
+        else state == FAILED
+            BatchPollSFN-->>Caller: Fail (error)
+        else state == RUNNING / PENDING
+            BatchPollSFN->>BatchPollSFN: loop (Wait again)
+        end
+    end
+```
+
+**Key details:**
+- `GeminiBatchPollLambda` is stateless and trivial — it only calls `CheckGeminiBatch` and returns `{state, results, error}`. No business logic.
+- The Wait state is 15 seconds; the SFN Standard Workflow charges per state transition, but the cost is negligible compared to the 50% batch API savings.
+- If the batch job exceeds the SFN execution timeout (24 h for Standard Workflows), the job is failed and the caller receives an error.
 
 ## Facebook Prep Workflow (DDR-077)
 
