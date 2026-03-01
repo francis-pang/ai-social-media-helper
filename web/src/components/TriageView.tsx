@@ -7,7 +7,6 @@ import { resetFileBrowserState } from "./FileBrowser";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
   getTriageResults,
-  getTriageLogs,
   finalizeTriageUploads,
   confirmTriage,
   isCloudMode,
