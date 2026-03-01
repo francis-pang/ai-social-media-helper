@@ -8,7 +8,7 @@
  * - "Continue to Facebook Prep" button appears when all uploads are done
  */
 import { useState } from "preact/hooks";
-import { createUploadEngine } from "../upload/uploadEngine";
+import { createUploadEngine, type UploadedFile } from "../upload/uploadEngine";
 import { fbPrepMediaKeys } from "./FBPrepView";
 import { uploadSessionId, navigateToStep } from "../app";
 import { syncUrlToStep } from "../router";
@@ -139,7 +139,7 @@ function proceedToFBPrep() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function FileCard({ f }: { f: ReturnType<typeof files.value>[number] }) {
+function FileCard({ f }: { f: UploadedFile }) {
   const isUploading = f.status === "uploading" || f.status === "pending";
   const isDone = f.status === "done";
   const isError = f.status === "error";
