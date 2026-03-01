@@ -30,6 +30,13 @@ type fbPrepResponseItem struct {
 }
 
 func handler(ctx context.Context, event interface{}) (*FBPrepOutput, error) {
+	// Check for feedback event type before attempting batch normalization.
+	if m, ok := event.(map[string]interface{}); ok {
+		if t, _ := m["type"].(string); t == "fb-prep-feedback" {
+			return handleFeedback(ctx, m)
+		}
+	}
+
 	input, err := normalizeFBPrepInput(event)
 	if err != nil {
 		return nil, err
@@ -351,4 +358,132 @@ func parseFBPrepResponse(responseText string, s3Keys []string) ([]store.FBPrepIt
 		})
 	}
 	return items, nil
+}
+
+// handleFeedback regenerates the caption for a single item using user feedback (DDR-078 §4).
+// It loads the existing job, re-runs Gemini for just the target item with sibling captions as context,
+// and updates only that item in DynamoDB.
+func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutput, error) {
+	sessionID, _ := m["sessionId"].(string)
+	jobID, _ := m["jobId"].(string)
+	feedbackText, _ := m["feedback"].(string)
+
+	itemIndexRaw, _ := m["itemIndex"].(float64)
+	itemIndex := int(itemIndexRaw)
+
+	if sessionID == "" || jobID == "" || feedbackText == "" {
+		return nil, fmt.Errorf("feedback: sessionId, jobId, and feedback are required")
+	}
+
+	if sessionStore == nil {
+		return nil, fmt.Errorf("feedback: session store not configured")
+	}
+
+	// Load existing job to get the media key and sibling captions.
+	job, err := sessionStore.GetFBPrepJob(ctx, sessionID, jobID)
+	if err != nil || job == nil {
+		return nil, fmt.Errorf("feedback: job not found: %w", err)
+	}
+	if itemIndex < 0 || itemIndex >= len(job.Items) {
+		return nil, fmt.Errorf("feedback: item index %d out of range (job has %d items)", itemIndex, len(job.Items))
+	}
+
+	targetItem := job.Items[itemIndex]
+	s3Key := targetItem.S3Key
+	if s3Key == "" {
+		s3Key = targetItem.Key
+	}
+
+	// Build media part for the target item only.
+	targetMediaItem := FBPrepMediaItem{
+		S3Key:     s3Key,
+		MediaType: "image",
+		Filename:  filepath.Base(s3Key),
+	}
+	ext := strings.ToLower(filepath.Ext(s3Key))
+	if media.IsVideo(ext) {
+		targetMediaItem.MediaType = "video"
+	}
+
+	parts, _, _, err := buildFBPrepMediaParts(ctx, []FBPrepMediaItem{targetMediaItem})
+	if err != nil {
+		return nil, fmt.Errorf("feedback: failed to prepare media: %w", err)
+	}
+
+	// Build context: include sibling captions (text only) for narrative coherence.
+	var siblingLines []string
+	for i, item := range job.Items {
+		if i == itemIndex {
+			siblingLines = append(siblingLines, fmt.Sprintf("Item %d (THIS ITEM — regenerate): filename=%s", i, filepath.Base(item.S3Key)))
+			continue
+		}
+		siblingLines = append(siblingLines, fmt.Sprintf("Item %d (accepted): caption=%q, location=%q", i, item.Caption, item.LocationTag))
+	}
+
+	prompt := fmt.Sprintf(
+		"## Existing session captions (for narrative context)\n\n%s\n\n## Feedback for item %d\n\n%s\n\n"+
+			"Regenerate only item %d's caption, location, and date. Return a JSON array with exactly one object.",
+		strings.Join(siblingLines, "\n"), itemIndex, feedbackText, itemIndex,
+	)
+	parts = append(parts, &genai.Part{Text: prompt})
+
+	genaiClient, err := ai.NewAIClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: failed to initialize AI client: %w", err)
+	}
+
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: assets.FBPrepSystemPrompt}},
+		},
+		Tools: []*genai.Tool{{GoogleMaps: &genai.GoogleMaps{}}},
+	}
+
+	modelName := ai.GetModelName()
+	contents := []*genai.Content{{Role: "user", Parts: parts}}
+	resp, err := genaiClient.Models.GenerateContent(ctx, modelName, contents, config)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: Gemini call failed: %w", err)
+	}
+
+	responseText := resp.Text()
+	if responseText == "" {
+		return nil, fmt.Errorf("feedback: empty response from Gemini")
+	}
+
+	// Parse the single-item response.
+	newItems, err := parseFBPrepResponse(responseText, []string{s3Key})
+	if err != nil || len(newItems) == 0 {
+		return nil, fmt.Errorf("feedback: failed to parse response: %w", err)
+	}
+
+	// Update only the target item in the job.
+	updatedItems := make([]store.FBPrepItem, len(job.Items))
+	copy(updatedItems, job.Items)
+	updatedItems[itemIndex] = newItems[0]
+	updatedItems[itemIndex].ItemIndex = itemIndex // Preserve correct index
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	updatedJob := &store.FBPrepJob{
+		ID:        jobID,
+		Status:    "complete",
+		Items:     updatedItems,
+		MediaKeys: job.MediaKeys,
+		CreatedAt: job.CreatedAt,
+		UpdatedAt: now,
+	}
+	if err := sessionStore.PutFBPrepJob(ctx, sessionID, updatedJob); err != nil {
+		return nil, fmt.Errorf("feedback: failed to save updated job: %w", err)
+	}
+
+	log.Info().
+		Str("sessionId", sessionID).
+		Str("jobId", jobID).
+		Int("itemIndex", itemIndex).
+		Msg("FB prep feedback regeneration complete")
+
+	return &FBPrepOutput{
+		SessionID: sessionID,
+		Status:    "complete",
+	}, nil
 }

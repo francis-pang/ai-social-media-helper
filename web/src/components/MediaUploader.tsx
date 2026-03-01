@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD } from "../api/client";
+import { createUploadEngine } from "../upload/uploadEngine";
 import {
   navigateToStep,
   selectedPaths,
@@ -38,19 +38,10 @@ const MEDIA_ACCEPT_TYPES: FilePickerAcceptType[] = [
   },
 ];
 
-interface MediaFile {
-  name: string;
-  size: number;
-  key: string;
-  status: "pending" | "uploading" | "done" | "error";
-  progress: number;
-  error?: string;
-  thumbnailDataUrl?: string;
-  mediaType: "image" | "video";
-}
-
-const files = signal<MediaFile[]>([]);
-const error = signal<string | null>(null);
+// Upload engine instance for media selection upload (DDR-080)
+const engine = createUploadEngine({ enableDedup: false, enableSpeedTracking: false });
+const files = engine.files;
+const error = engine.error;
 const isDragging = signal(false);
 let dragEnterCounter = 0;
 
@@ -64,11 +55,6 @@ function isMediaFile(file: File): boolean {
   if (dot === -1) return false;
   const ext = file.name.slice(dot).toLowerCase();
   return MEDIA_EXTENSIONS.has(ext);
-}
-
-/** Determine whether a file is an image or video based on MIME type. */
-function getMediaType(file: File): "image" | "video" {
-  return file.type.startsWith("video/") ? "video" : "image";
 }
 
 // ---------------------------------------------------------------------------
@@ -145,86 +131,26 @@ function addFiles(newFiles: File[]) {
   }
 
   const sessionId = uploadSessionId.value;
+  // Filter to only new names (engine also dedupes by name internally)
   const existing = new Set(files.value.map((f) => f.name));
+  const filtered = newFiles.filter((f) => !existing.has(f.name));
+  if (filtered.length === 0) return;
 
-  const toAdd: MediaFile[] = [];
-  const fileMap = new Map<string, File>();
+  // Start uploads via engine
+  engine.addFiles(sessionId, filtered);
 
-  for (const file of newFiles) {
-    if (existing.has(file.name)) continue;
-    existing.add(file.name);
-    toAdd.push({
-      name: file.name,
-      size: file.size,
-      key: `${sessionId}/${file.name}`,
-      status: "pending",
-      progress: 0,
-      mediaType: getMediaType(file),
-    });
-    fileMap.set(file.name, file);
-  }
-
-  if (toAdd.length === 0) return;
-  files.value = [...files.value, ...toAdd];
-
-  // Generate thumbnails and start uploads concurrently
-  for (const entry of toAdd) {
-    const file = fileMap.get(entry.name)!;
-
-    // Thumbnail generation (non-blocking, best-effort)
+  // Generate thumbnails in parallel (best-effort, non-blocking)
+  for (const file of filtered) {
     generateThumbnail(file).then((dataUrl) => {
       if (dataUrl) {
-        updateFile(entry.name, { thumbnailDataUrl: dataUrl });
+        engine.updateFile(file.name, { thumbnailDataUrl: dataUrl });
       }
     });
-
-    // S3 upload
-    uploadFile(sessionId, entry.name, file);
   }
-}
-
-async function uploadFile(sessionId: string, filename: string, file: File) {
-  updateFile(filename, { status: "uploading", progress: 0 });
-
-  try {
-    let key: string;
-
-    if (file.size > MULTIPART_THRESHOLD) {
-      // Large file: use S3 multipart upload with parallel chunks (DDR-054)
-      key = await uploadToS3Multipart(sessionId, file, (loaded, total) => {
-        updateFile(filename, { progress: Math.round((loaded / total) * 100) });
-      });
-    } else {
-      // Small file: use single presigned PUT (existing path)
-      const res = await getUploadUrl(sessionId, filename, file.type);
-      key = res.key;
-
-      await uploadToS3(res.uploadUrl, file, (loaded, total) => {
-        updateFile(filename, { progress: Math.round((loaded / total) * 100) });
-      });
-    }
-
-    updateFile(filename, { status: "done", progress: 100, key });
-  } catch (e) {
-    updateFile(filename, {
-      status: "error",
-      error: e instanceof Error ? e.message : "Upload failed",
-    });
-  }
-}
-
-function updateFile(filename: string, updates: Partial<MediaFile>) {
-  files.value = files.value.map((f) =>
-    f.name === filename ? { ...f, ...updates } : f,
-  );
-}
-
-function removeFile(filename: string) {
-  files.value = files.value.filter((f) => f.name !== filename);
 }
 
 function clearAll() {
-  files.value = [];
+  engine.clearAll();
   uploadSessionId.value = null;
 }
 
@@ -396,7 +322,7 @@ export function MediaUploader() {
                       textTransform: "uppercase",
                     }}
                   >
-                    {f.mediaType === "video" ? "VID" : "IMG"}
+                    {f.name.match(/\.(mp4|mov|avi|webm|mkv)$/i) ? "VID" : "IMG"}
                   </span>
                 )}
               </div>
@@ -423,11 +349,11 @@ export function MediaUploader() {
                   padding: "0.125rem 0.375rem",
                   borderRadius: "999px",
                   background:
-                    f.mediaType === "video"
+                    f.name.match(/\.(mp4|mov|avi|webm|mkv)$/i)
                       ? "var(--color-primary-light)"
                       : "rgba(34, 197, 94, 0.1)",
                   color:
-                    f.mediaType === "video"
+                    f.name.match(/\.(mp4|mov|avi|webm|mkv)$/i)
                       ? "var(--color-primary)"
                       : "var(--color-success)",
                   flexShrink: 0,
@@ -435,7 +361,7 @@ export function MediaUploader() {
                   fontWeight: 600,
                 }}
               >
-                {f.mediaType === "video" ? "Video" : "Photo"}
+                {f.name.match(/\.(mp4|mov|avi|webm|mkv)$/i) ? "Video" : "Photo"}
               </span>
 
               {/* Size */}
@@ -463,7 +389,7 @@ export function MediaUploader() {
               {/* Remove button (DDR-058: compact X) */}
               <button
                 class="btn-remove"
-                onClick={() => removeFile(f.name)}
+                onClick={() => engine.removeFile(f.name)}
                 disabled={f.status === "uploading"}
                 title="Remove file"
               >

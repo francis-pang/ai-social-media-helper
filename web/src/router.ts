@@ -32,6 +32,7 @@ const STEP_TO_PATH: Partial<Record<Step, string>> = {
   publish: "/select/download",
   description: "/select/description",
   "instagram-publish": "/select/publish",
+  "fb-prep-upload": "/fb-prep/upload",
   "fb-prep": "/fb-prep",
 };
 
@@ -54,6 +55,7 @@ const SESSION_STEPS = new Set<Step>([
   "publish",
   "description",
   "instagram-publish",
+  "fb-prep-upload",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -72,7 +74,7 @@ function workflowForStep(step: Step): Workflow {
   ) {
     return "triage";
   }
-  if (step === "fb-prep") return "fb-prep";
+  if (step === "fb-prep-upload" || step === "fb-prep") return "fb-prep";
   return "selection";
 }
 

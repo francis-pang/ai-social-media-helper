@@ -53,7 +53,7 @@ const WORKFLOWS: WorkflowOption[] = [
       "Location tags and dates for Facebook Memories",
       "Ready for upload to Facebook",
     ],
-    startStep: "fb-prep",
+    startStep: "fb-prep-upload",
     accentColor: "#1877F2",
     accentBg: "rgba(24, 119, 242, 0.08)",
   },

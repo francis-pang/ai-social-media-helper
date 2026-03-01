@@ -1,7 +1,7 @@
 import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
-import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, finalizeTriageUploads, getTriageResults, startTriage } from "../api/client";
-import { quickFingerprint, fullHash } from "../utils/fileHash";
+import { initTriage, updateTriageFiles, finalizeTriageUploads, getTriageResults, startTriage } from "../api/client";
+import { createUploadEngine } from "../upload/uploadEngine";
 import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep, fileHandles, economyMode } from "../app";
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
@@ -9,20 +9,18 @@ import { formatBytes, formatSpeed } from "../utils/format";
 import { formatElapsed } from "../hooks/useElapsedTimer";
 import type { FileProcessingStatus } from "../types/api";
 
+// Engine with dedup + speed tracking for triage upload (DDR-080)
+const engine = createUploadEngine({ enableDedup: true, enableSpeedTracking: true });
+
+// Aliases for engine state used throughout this module
+const files = engine.files;
+const error = engine.error;
+const uploadSpeed = engine.uploadSpeed;
+
 /** Media file MIME types accepted by the uploader. */
 const ACCEPT =
   "image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif," +
   "video/mp4,video/quicktime,video/x-msvideo,video/webm,video/x-matroska";
-
-interface UploadedFile {
-  name: string;
-  size: number;
-  key: string;
-  status: "pending" | "uploading" | "done" | "error";
-  progress: number; // 0-100
-  loaded: number; // bytes uploaded so far
-  error?: string;
-}
 
 /**
  * Combined lifecycle status for a file (DDR-063).
@@ -42,56 +40,14 @@ interface FileWithLifecycle {
   converted?: boolean;
 }
 
-const files = signal<UploadedFile[]>([]);
-const error = signal<string | null>(null);
 const triageInitialized = signal<boolean>(false);
 const triagePolling = signal<boolean>(false);
 const triageFinalized = signal<boolean>(false);
-
-/** DDR-067: Content fingerprint map for dedup. Maps fingerprint → filename. */
-const fingerprintMap = new Map<string, string>();
 
 /** Per-file server-side processing statuses from poll results (DDR-063). */
 const serverFileStatuses = signal<FileProcessingStatus[]>([]);
 const serverProcessedCount = signal<number>(0);
 const serverExpectedFileCount = signal<number>(0);
-
-/** Current aggregate upload speed in bytes per second. */
-const uploadSpeed = signal<number>(0);
-let speedTimer: ReturnType<typeof setInterval> | null = null;
-let prevSpeedBytes = 0;
-let prevSpeedTime = 0;
-
-function getTotalLoaded(): number {
-  return files.value.reduce((sum, f) => sum + f.loaded, 0);
-}
-
-function startSpeedTracking() {
-  if (speedTimer) return;
-  prevSpeedBytes = getTotalLoaded();
-  prevSpeedTime = performance.now();
-  speedTimer = setInterval(() => {
-    const now = performance.now();
-    const currentLoaded = getTotalLoaded();
-    const elapsedSec = (now - prevSpeedTime) / 1000;
-    if (elapsedSec > 0) {
-      uploadSpeed.value = (currentLoaded - prevSpeedBytes) / elapsedSec;
-    }
-    prevSpeedBytes = currentLoaded;
-    prevSpeedTime = now;
-    if (!files.value.some((f) => f.status === "uploading")) {
-      stopSpeedTracking();
-    }
-  }, 1000);
-}
-
-function stopSpeedTracking() {
-  if (speedTimer) {
-    clearInterval(speedTimer);
-    speedTimer = null;
-  }
-  uploadSpeed.value = 0;
-}
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -174,55 +130,9 @@ async function addFiles(newFiles: File[]) {
   }
 
   const sessionId = uploadSessionId.value;
-  const existing = new Set(files.value.map((f) => f.name));
 
-  const toAdd: UploadedFile[] = [];
-  const fileMap = new Map<string, File>();
-  let skippedDuplicates = 0;
-
-  for (const file of newFiles) {
-    if (existing.has(file.name)) continue;
-
-    // DDR-067: Content-based dedup via quick fingerprint
-    try {
-      const fp = await quickFingerprint(file);
-      const existingName = fingerprintMap.get(fp);
-      if (existingName) {
-        const existingFile = fileMap.get(existingName) ??
-          newFiles.find((f) => f.name === existingName);
-        if (existingFile) {
-          const fh1 = await fullHash(file);
-          const fh2 = await fullHash(existingFile);
-          if (fh1 === fh2) {
-            skippedDuplicates++;
-            console.info(`Skipping duplicate: ${file.name} matches ${existingName}`);
-            continue;
-          }
-        }
-      }
-      fingerprintMap.set(fp, file.name);
-    } catch {
-      // Fingerprinting failed — proceed with upload (dedup is best-effort)
-    }
-
-    existing.add(file.name);
-    toAdd.push({
-      name: file.name,
-      size: file.size,
-      key: `${sessionId}/${file.name}`,
-      status: "pending",
-      progress: 0,
-      loaded: 0,
-    });
-    fileMap.set(file.name, file);
-  }
-
-  if (skippedDuplicates > 0) {
-    console.info(`DDR-067: Skipped ${skippedDuplicates} duplicate file(s)`);
-  }
-  if (toAdd.length === 0) return;
-
-  files.value = [...files.value, ...toAdd];
+  const added = await engine.addFiles(sessionId, newFiles);
+  if (added === 0) return;
 
   // DDR-061: Initialize triage on first file drop
   if (!triageInitialized.value) {
@@ -231,50 +141,13 @@ async function addFiles(newFiles: File[]) {
   } else {
     const jobId = triageJobId.value;
     if (jobId) {
-      updateTriageFiles({ sessionId, jobId, expectedFileCount: files.value.length }).catch(
-        (e) => console.error("Failed to update file count:", e)
-      );
+      updateTriageFiles({
+        sessionId,
+        jobId,
+        expectedFileCount: files.value.length,
+      }).catch((e) => console.error("Failed to update file count:", e));
     }
   }
-
-  for (const entry of toAdd) {
-    uploadFile(sessionId, entry.name, fileMap.get(entry.name)!);
-  }
-}
-
-async function uploadFile(sessionId: string, filename: string, file: File) {
-  updateFile(filename, { status: "uploading", progress: 0, loaded: 0 });
-  startSpeedTracking();
-
-  try {
-    let key: string;
-
-    if (file.size > MULTIPART_THRESHOLD) {
-      key = await uploadToS3Multipart(sessionId, file, (loaded, total) => {
-        updateFile(filename, { progress: Math.round((loaded / total) * 100), loaded });
-      });
-    } else {
-      const res = await getUploadUrl(sessionId, filename, file.type);
-      key = res.key;
-
-      await uploadToS3(res.uploadUrl, file, (loaded, total) => {
-        updateFile(filename, { progress: Math.round((loaded / total) * 100), loaded });
-      });
-    }
-
-    updateFile(filename, { status: "done", progress: 100, loaded: file.size, key });
-  } catch (e) {
-    updateFile(filename, {
-      status: "error",
-      error: e instanceof Error ? e.message : "Upload failed",
-    });
-  }
-}
-
-function updateFile(filename: string, updates: Partial<UploadedFile>) {
-  files.value = files.value.map((f) =>
-    f.name === filename ? { ...f, ...updates } : f,
-  );
 }
 
 async function initTriageSession(sessionId: string, fileCount: number) {
@@ -462,28 +335,24 @@ function getFilesWithLifecycle(): FileWithLifecycle[] {
 }
 
 function clearAll() {
-  files.value = [];
+  engine.clearAll();
   uploadSessionId.value = null;
   serverFileStatuses.value = [];
   serverProcessedCount.value = 0;
   serverExpectedFileCount.value = 0;
   triageFinalized.value = false;
-  fingerprintMap.clear();
-  stopSpeedTracking();
 }
 
 /** Reset FileUploader state (called from navigateToLanding — DDR-042). */
 export function resetFileUploaderState() {
-  files.value = [];
-  error.value = null;
+  engine.resetState();
   triageInitialized.value = false;
   triagePolling.value = false;
   triageFinalized.value = false;
   serverFileStatuses.value = [];
   serverProcessedCount.value = 0;
   serverExpectedFileCount.value = 0;
-  fingerprintMap.clear();
-  stopSpeedTracking();
+  uploadSessionId.value = null;
 }
 
 /** Proceed to triage: start the triage job and navigate to processing (DDR-042). */
@@ -743,7 +612,7 @@ export function FileUploader() {
 
   const etaSeconds: number | null = (() => {
     if (!anyUploading || uploadSpeed.value <= 0) return null;
-    const remainingBytes = totalSize - getTotalLoaded();
+    const remainingBytes = totalSize - engine.getTotalLoaded();
     if (remainingBytes <= 0) return null;
     return Math.ceil(remainingBytes / uploadSpeed.value);
   })();

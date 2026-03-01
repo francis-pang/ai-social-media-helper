@@ -56,6 +56,7 @@ import {
 import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
 import { FBPrepView } from "./components/FBPrepView";
+import { FBPrepUploader, resetFBPrepUploaderState } from "./components/FBPrepUploader";
 import { FileUploader, resetFileUploaderState } from "./components/FileUploader";
 import { syncUrlToStep } from "./router";
 
@@ -80,6 +81,7 @@ export type Step =
   | "publish"
   | "description"
   | "instagram-publish"
+  | "fb-prep-upload"
   | "fb-prep";
 
 /**
@@ -260,6 +262,8 @@ const stepTitle = computed(() => {
       return "Post Description";
     case "instagram-publish":
       return "Publish to Instagram";
+    case "fb-prep-upload":
+      return "Upload Media";
     case "fb-prep":
       return "Facebook Prep";
   }
@@ -286,6 +290,7 @@ export function navigateToLanding() {
   resetDescriptionState();
   resetPublishState();
   resetFileUploaderState();
+  resetFBPrepUploaderState();
   syncUrlToStep("landing");
 }
 
@@ -589,7 +594,10 @@ export function App() {
         <PublishView />
       )}
 
-      {/* Facebook Prep (FB Prep workflow) */}
+      {/* Facebook Prep upload step (DDR-080) */}
+      {currentStep.value === "fb-prep-upload" && isCloudMode && <FBPrepUploader />}
+
+      {/* Facebook Prep results (FB Prep workflow) */}
       {currentStep.value === "fb-prep" && isCloudMode && <FBPrepView />}
 
       {/* Global overlay media player (DDR-038) */}
