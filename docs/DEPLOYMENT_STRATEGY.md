@@ -34,7 +34,7 @@ Developer workstation                         AWS (us-east-1)
 | Repository | What deploys | How it triggers | Workflow |
 |-----------|-------------|----------------|----------|
 | `ai-social-media-helper` | Backend (11 Lambda images) + Frontend (Preact SPA) | CodeStar `triggerOnPush: true` + GitHub Actions intelligent filter | `.github/workflows/deploy-on-main.yml` |
-| `ai-social-media-helper-deploy` | CDK infrastructure (10 CloudFormation stacks) | GitHub Actions on push to `main` | `.github/workflows/deploy-cdk.yml` |
+| `ai-social-media-helper-deploy` | CDK infrastructure (11 CloudFormation stacks) | GitHub Actions on push to `main` | `.github/workflows/deploy-cdk.yml` |
 
 ---
 
@@ -139,7 +139,33 @@ Stacks must deploy in dependency order. CDK enforces this via `addDependency()`.
 
 **Rule:** StorageStack and RegistryStack must deploy before everything else. They hold stateful resources that other stacks reference.
 
-**RAG stack (DDR-066):** The first-time RAG deployment and any change that adds or modifies the RAG stack (e.g. new Lambdas, Aurora, EventBridge rules) **must be deployed manually**. Use **Actions > CDK Deploy > Run workflow** and choose a target that includes the RAG stack (e.g. `full`), or run `cdk deploy RagStack` locally. Do not rely on the default automatic CDK deploy for introducing the RAG stack.
+**RAG stack (DDR-066):** The first-time RAG deployment and any change that adds or modifies the RAG stack (e.g. new Lambdas, Aurora, EventBridge rules) **must be deployed manually**. Use **Actions > CDK Deploy > Run workflow** and choose a target that includes the RAG stack (e.g. `full` or `rag`), or run `make deploy-rag` locally. Do not rely on the default automatic CDK deploy for introducing the RAG stack.
+
+### Stack Update Performance (DDR-072)
+
+Typical update times when no failures occur:
+
+| Stack | Typical update | Bottleneck |
+|-------|---------------|------------|
+| Registry, Webhook, Ops stacks | 6–14s | Lightweight resources |
+| Backend | 18–44s | IAM policy propagation (~16s per batch) |
+| Storage | ~33s | S3 configuration checks |
+| Rag | ~2 min | Aurora Serverless v2 + VPC |
+| Frontend | **7–8 min** | CloudFront edge propagation (AWS SLA, cannot be reduced) |
+
+All stacks are well within CloudFormation limits (largest is OperationsMonitoring at 95 resources, 19% of the 500-resource limit).
+
+### Cross-Stack Configuration Migration
+
+When migrating shared configuration between stacks (e.g., moving a secret from Secrets Manager to SSM), the deployment order must account for `addDependency()` — BackendStack deploys before FrontendStack. Removing a resource in a producer stack before consumers stop referencing it causes cascading failures and rollbacks.
+
+Safe migration order:
+
+1. Create the new configuration source (e.g., SSM parameter) outside CDK or in a separate deploy
+2. Update and deploy **consumers** to read from the new source
+3. Update and deploy **producers** to stop creating the old source
+
+For multi-stack migrations within a single `cdk deploy --all`, use a two-phase approach: first deploy adds the new source alongside the old one, second deploy removes the old one.
 
 ---
 
@@ -249,3 +275,4 @@ make deploy-full
 - [DDR-035: Multi-Lambda Deployment](./design-decisions/DDR-035-multi-lambda-deployment.md) — pipeline architecture
 - [DDR-045: Stateful/Stateless Split](./design-decisions/DDR-045-stateful-stateless-stack-split.md) — stack strategy
 - [DDR-047: CDK Deploy Optimization](./design-decisions/DDR-047-cdk-deploy-optimization.md) — Makefile targets and speed
+- [DDR-072: CloudFormation Stack Performance](./design-decisions/DDR-072-cloudformation-stack-performance.md) — Stack size analysis and growth ceilings

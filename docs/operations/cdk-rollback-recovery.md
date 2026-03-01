@@ -2,7 +2,7 @@
 
 Operator procedures for recovering from CloudFormation deployment failures.
 
-**Related:** [Deployment Strategy](../DEPLOYMENT_STRATEGY.md) | [DDR-055](../design-decisions/DDR-055-deployment-automation.md)
+**Related:** [Deployment Strategy](../DEPLOYMENT_STRATEGY.md) | [DDR-055](../design-decisions/DDR-055-deployment-automation.md) | [DDR-072](../design-decisions/DDR-072-cloudformation-stack-performance.md)
 
 ---
 
@@ -232,21 +232,47 @@ aws cloudfront get-invalidation \
 
 ---
 
-## 8. Deploy Order Violations
+## 8. Cross-Stack Configuration Migration Failure
+
+**Symptom:** `UPDATE_FAILED` with `Secrets Manager can't find the specified secret` or `SSM parameter not found` when a resource was removed from one stack while another stack still references it.
+
+**Cause:** When migrating shared configuration (e.g., moving a secret from Secrets Manager to SSM), the producer stack deleted the old resource before the consumer stack was updated to use the new source. CDK's `addDependency()` deploys the producer first, so the consumer fails on the next deploy.
+
+### Prevention
+
+Deploy in two phases:
+
+1. **Phase 1:** Add the new configuration source alongside the old one. Deploy all stacks.
+2. **Phase 2:** Update consumers to read from the new source. Deploy consumers first, then deploy producers to remove the old source.
+
+For urgent fixes, deploy individual stacks in the correct order:
+
+```bash
+cd ai-social-media-helper-deploy/cdk
+make deploy-frontend   # Update consumer first
+make deploy-backend    # Then remove old resource from producer
+```
+
+See [DDR-072](../design-decisions/DDR-072-cloudformation-stack-performance.md) for the full analysis of this failure pattern.
+
+---
+
+## 9. Deploy Order Violations
 
 **Symptom:** Stack deploy fails because a dependency stack hasn't been deployed yet (e.g., Lambda references an ECR repo that doesn't exist).
 
 ### Correct Deploy Order
 
 ```
-1. StorageStack        (S3, DynamoDB — must be first)
-2. RegistryStack       (ECR repos — must be before Backend/Webhook)
-3. BackendStack        (depends on Storage + Registry)
-4. FrontendStack       (depends on Storage)
-5. WebhookStack        (depends on Registry)
-6. FrontendPipeline    (depends on Frontend)
-7. BackendPipeline     (depends on Backend + Webhook)
-8-10. Operations stacks (depend on Backend + Storage)
+1. StorageStack         (S3, DynamoDB — must be first)
+2. RegistryStack        (ECR repos — must be before Backend/Webhook)
+3. BackendStack         (depends on Storage + Registry)
+4. RagStack             (depends on Backend)
+5. FrontendStack        (depends on Storage + Backend)
+6. WebhookStack         (depends on Registry)
+7. FrontendPipeline     (depends on Frontend)
+8. BackendPipeline      (depends on Backend + Webhook)
+9-11. Operations stacks (depend on Backend + Storage)
 ```
 
 **Full ordered deploy:**

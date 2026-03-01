@@ -84,6 +84,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-069](./DDR-069-batch-execute-statement-ingest.md) | 2026-02-28 | BatchExecuteStatement for RAG ingest throughput | Accepted |
 | [DDR-070](./DDR-070-mcp-server-rag-tools.md) | 2026-02-28 | MCP Server for RAG Tools | Accepted |
 | [DDR-071](./DDR-071-photo-downscaling-for-gemini.md) | 2026-02-28 | Photo Downscaling and Media Resolution Strategy | Accepted |
+| [DDR-072](./DDR-072-cloudformation-stack-performance.md) | 2026-02-28 | CloudFormation Stack Performance Analysis | Accepted |
 
 ---
 
@@ -98,4 +99,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-02-28 (DDR-068)
+**Last Updated**: 2026-02-28 (DDR-072)
