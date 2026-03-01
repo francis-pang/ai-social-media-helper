@@ -7,10 +7,8 @@ export function itemId(item: TriageItem): string {
   return isCloudMode ? (item.key ?? item.path) : item.path;
 }
 
-/** Get the thumbnail source for a triage item. */
-function itemThumb(item: TriageItem): string {
-  // Prefer the backend-provided thumbnailUrl which points to the pre-generated
-  // thumbnail (the original file may have been deleted after triage completes).
+/** Get the thumbnail source for a triage item (400px). */
+export function itemThumb(item: TriageItem): string {
   if (item.thumbnailUrl) {
     return item.thumbnailUrl;
   }
@@ -53,12 +51,15 @@ export function MediaCard({
       <div
         onClick={(e) => {
           e.stopPropagation();
-          const isVideo = isVideoFile(item.filename);
+          if (onReview) {
+            onReview();
+            return;
+          }
+          const mediaKey = (isCloudMode && item.processedKey) || itemId(item);
           openMediaPlayer(
-            itemId(item),
-            isVideo ? "Video" : "Photo",
+            mediaKey,
+            isVideoFile(item.filename) ? "Video" : "Photo",
             item.filename,
-            isVideo ? undefined : itemThumb(item),
           );
         }}
         style={{

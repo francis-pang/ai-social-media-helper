@@ -197,6 +197,7 @@ func handleCompressedVideo(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/media/full?key=sessionId/filename.jpg
 // Returns a presigned GET URL for the full-resolution image.
+// The caller is expected to pass the correct key (processedKey when available).
 func handleFullImage(w http.ResponseWriter, r *http.Request) {
 	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Msg("Handler entry: handleFullImage")
 

@@ -179,6 +179,7 @@ type TriageItem struct {
 	Media        int    `json:"media" dynamodbav:"media"`
 	Filename     string `json:"filename" dynamodbav:"filename"`
 	Key          string `json:"key" dynamodbav:"key"`
+	ProcessedKey string `json:"processedKey,omitempty" dynamodbav:"processedKey,omitempty"`
 	Saveable     bool   `json:"saveable" dynamodbav:"saveable"`
 	Reason       string `json:"reason" dynamodbav:"reason"`
 	ThumbnailURL string `json:"thumbnailUrl" dynamodbav:"thumbnailUrl"`

@@ -469,6 +469,7 @@ export function TriageView() {
           items={filteredDiscard.map((item) => ({
             id: itemId(item),
             url: item.thumbnailUrl || thumbnailUrl(isCloudMode && item.key ? item.key : item.path),
+            s3Key: isCloudMode ? (item.processedKey || item.key) : undefined,
             filename: item.filename,
             type: (isVideoFile(item.filename) ? "video" : "image") as "image" | "video",
             reason: item.reason,

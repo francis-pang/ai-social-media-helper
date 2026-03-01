@@ -172,11 +172,15 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 		})
 	}
 
-	// Build thumbnail URL map from file results
+	// Build thumbnail URL and processed key maps from file results
 	thumbnailURLs := make(map[int]string)
+	processedKeys := make(map[int]string)
 	for i, fr := range validFiles {
 		if fr.ThumbnailKey != "" {
 			thumbnailURLs[i] = fmt.Sprintf("/api/media/thumbnail?key=%s", fr.ThumbnailKey)
+		}
+		if fr.ProcessedKey != "" {
+			processedKeys[i] = fr.ProcessedKey
 		}
 	}
 
@@ -200,6 +204,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 			Media:        tr.Media,
 			Filename:     tr.Filename,
 			Key:          key,
+			ProcessedKey: processedKeys[idx],
 			Saveable:     tr.Saveable,
 			Reason:       tr.Reason,
 			ThumbnailURL: thumbURL,
@@ -226,6 +231,7 @@ func handleTriageRun(ctx context.Context, event TriageEvent) error {
 				Media:        i + 1,
 				Filename:     filepath.Base(mf.Path),
 				Key:          key,
+				ProcessedKey: processedKeys[i],
 				Saveable:     true,
 				Reason:       "Not evaluated by AI — kept by default",
 				ThumbnailURL: thumbURL,

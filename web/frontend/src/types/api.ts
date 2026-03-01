@@ -23,6 +23,8 @@ export interface TriageItem {
   path: string;
   /** S3 object key (Phase 2 cloud mode). */
   key?: string;
+  /** S3 key for the processed version (1920px WebP / compressed WebM). */
+  processedKey?: string;
   saveable: boolean;
   reason: string;
   /** Thumbnail URL: /api/media/thumbnail?path=... or ?key=... */

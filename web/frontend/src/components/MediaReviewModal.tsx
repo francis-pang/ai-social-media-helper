@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
+import { getFullMediaUrl, isCloudMode } from "../api/client";
 
 interface MediaReviewModalProps {
   items: Array<{
     id: string;
     url: string;
+    s3Key?: string;
     filename: string;
     type: "image" | "video";
     reason?: string;
@@ -34,6 +36,9 @@ export function MediaReviewModal({
   const [showMetadata, setShowMetadata] = useState(false);
   const queueRef = useRef<HTMLDivElement>(null);
 
+  const [resolvedUrls, setResolvedUrls] = useState<Record<string, string>>({});
+  const [resolving, setResolving] = useState(false);
+
   const item = items[currentIndex];
 
   const navigate = useCallback(
@@ -48,6 +53,19 @@ export function MediaReviewModal({
   useEffect(() => {
     setExposure(1.0);
     setAiVisionOn(false);
+  }, [currentIndex]);
+
+  useEffect(() => {
+    const cur = items[currentIndex];
+    if (!cur?.s3Key || !isCloudMode || resolvedUrls[cur.id]) return;
+
+    setResolving(true);
+    getFullMediaUrl(cur.s3Key, cur.type === "video" ? "Video" : "Photo")
+      .then((url) => {
+        setResolvedUrls((prev) => ({ ...prev, [cur.id]: url }));
+      })
+      .catch(() => {})
+      .finally(() => setResolving(false));
   }, [currentIndex]);
 
   useEffect(() => {
@@ -80,6 +98,7 @@ export function MediaReviewModal({
 
   if (!item) return null;
 
+  const previewUrl = resolvedUrls[item.id] || item.url;
   const filterStyle = aiVisionOn ? `brightness(${exposure})` : undefined;
   const confidencePercent =
     item.confidence != null ? Math.round(item.confidence * 100) : null;
@@ -205,10 +224,15 @@ export function MediaReviewModal({
           </button>
         )}
 
+        {resolving && !resolvedUrls[item.id] && (
+          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.875rem" }}>
+            Loading...
+          </div>
+        )}
         {item.type === "video" ? (
           <video
-            key={item.id}
-            src={item.url}
+            key={`${item.id}-${previewUrl}`}
+            src={previewUrl}
             controls
             playsInline
             style={{
@@ -220,8 +244,8 @@ export function MediaReviewModal({
           />
         ) : (
           <img
-            key={item.id}
-            src={item.url}
+            key={`${item.id}-${previewUrl}`}
+            src={previewUrl}
             alt={item.filename}
             style={{
               maxWidth: "100%",
