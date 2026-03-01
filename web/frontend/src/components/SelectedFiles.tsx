@@ -29,8 +29,7 @@ function goBack() {
 
 /** Extract just the filename from a path or S3 key. */
 function basename(pathOrKey: string): string {
-  const parts = pathOrKey.split("/");
-  return parts[parts.length - 1] || pathOrKey;
+  return pathOrKey.split("/").at(-1) || pathOrKey;
 }
 
 export function SelectedFiles() {

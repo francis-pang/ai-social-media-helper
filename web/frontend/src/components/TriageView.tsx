@@ -115,7 +115,7 @@ async function handleConfirmDeletion() {
       const localErrors: string[] = [];
 
       for (const id of ids) {
-        const filename = id.includes("/") ? id.split("/").pop()! : id;
+        const filename = id.includes("/") ? id.split("/").at(-1)! : id;
         const handle = fileHandles.value.get(filename);
         if (!handle) continue;
 

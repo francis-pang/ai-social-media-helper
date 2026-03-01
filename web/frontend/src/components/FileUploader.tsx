@@ -6,6 +6,7 @@ import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentSte
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
 import { formatBytes, formatSpeed } from "../utils/format";
+import { formatElapsed } from "../hooks/useElapsedTimer";
 import type { FileProcessingStatus } from "../types/api";
 
 /** Media file MIME types accepted by the uploader. */
@@ -389,10 +390,9 @@ async function pollTriageResults(jobId: string, sessionId: string) {
  * Returns files tagged with their combined lifecycle status.
  */
 function getFilesWithLifecycle(): FileWithLifecycle[] {
-  const serverMap = new Map<string, FileProcessingStatus>();
-  for (const fs of serverFileStatuses.value) {
-    serverMap.set(fs.filename, fs);
-  }
+  const serverMap = new Map(
+    serverFileStatuses.value.map((fs) => [fs.filename, fs] as const),
+  );
 
   return files.value.map((f) => {
     const serverStatus = serverMap.get(f.name);
@@ -529,8 +529,45 @@ function statusCardLabel(status: FileLifecycleStatus): string {
   }
 }
 
+type MiniPipelineStage = "done" | "active" | "pending";
+
+interface MiniPipelineStep {
+  label: string;
+  stage: MiniPipelineStage;
+}
+
+function getMiniPipelineSteps(status: FileLifecycleStatus): MiniPipelineStep[] {
+  switch (status) {
+    case "uploading":
+      return [
+        { label: "Uploading", stage: "active" },
+        { label: "Downsizing", stage: "pending" },
+        { label: "Thumbnail", stage: "pending" },
+      ];
+    case "processing":
+      return [
+        { label: "Uploading", stage: "done" },
+        { label: "Downsizing", stage: "active" },
+        { label: "Thumbnail", stage: "pending" },
+      ];
+    case "ready":
+      return [
+        { label: "Uploading", stage: "done" },
+        { label: "Downsizing", stage: "done" },
+        { label: "Thumbnail", stage: "done" },
+      ];
+    case "error":
+      return [
+        { label: "Uploading", stage: "pending" },
+        { label: "Downsizing", stage: "pending" },
+        { label: "Thumbnail", stage: "pending" },
+      ];
+  }
+}
+
 function FileCard({ f }: { f: FileWithLifecycle }) {
   const dotColor = statusDotColor(f.lifecycleStatus);
+  const pipelineSteps = getMiniPipelineSteps(f.lifecycleStatus);
 
   return (
     <div style={{
@@ -571,8 +608,31 @@ function FileCard({ f }: { f: FileWithLifecycle }) {
           borderRadius: "50%",
           background: dotColor,
           boxShadow: "0 0 0 2px var(--color-surface)",
-          animation: f.lifecycleStatus === "uploading" ? "pulse-dot 1.5s ease-in-out infinite" : "none",
+          animation: f.lifecycleStatus === "uploading" ? "pulse-ring 1.5s ease-in-out infinite" : "none",
         }} />
+        {/* Mini step pipeline overlay */}
+        <div class="mini-pipeline">
+          {pipelineSteps.flatMap((step, i) => {
+            const els = [
+              <div class={`mini-pipeline__step mini-pipeline__step--${step.stage}`} key={`s-${i}`}>
+                <div class="mini-pipeline__circle">
+                  {step.stage === "done" ? "✓" : ""}
+                </div>
+                <div class="mini-pipeline__label">{step.label}</div>
+              </div>,
+            ];
+            if (i < pipelineSteps.length - 1) {
+              const connDone = step.stage === "done";
+              els.push(
+                <div
+                  class={`mini-pipeline__connector${connDone ? " mini-pipeline__connector--done" : ""}`}
+                  key={`c-${i}`}
+                />,
+              );
+            }
+            return els;
+          })}
+        </div>
       </div>
 
       {/* File info below thumbnail */}
@@ -678,6 +738,13 @@ export function FileUploader() {
   const totalSize = files.value.reduce((sum, f) => sum + f.size, 0);
   const filesRemaining = totalFiles - ready.length;
   const hasFiles = files.value.length > 0;
+
+  const etaSeconds: number | null = (() => {
+    if (!anyUploading || uploadSpeed.value <= 0) return null;
+    const remainingBytes = totalSize - getTotalLoaded();
+    if (remainingBytes <= 0) return null;
+    return Math.ceil(remainingBytes / uploadSpeed.value);
+  })();
 
   function onDragEnter(e: DragEvent) {
     e.preventDefault();
@@ -835,18 +902,6 @@ export function FileUploader() {
               </button>
             </div>
 
-            {/* Thumbnail card grid */}
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
-              gap: "0.75rem",
-              marginBottom: "1rem",
-            }}>
-              {lifecycle.map((f) => (
-                <FileCard key={f.name} f={f} />
-              ))}
-            </div>
-
             {/* Overall upload progress bar */}
             {anyUploading && (
               <div style={{ marginBottom: "1rem" }}>
@@ -924,6 +979,18 @@ export function FileUploader() {
                 </div>
               </div>
             )}
+
+            {/* Thumbnail card grid */}
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(var(--grid-card-sm), 1fr))",
+              gap: "0.75rem",
+              marginBottom: "1rem",
+            }}>
+              {lifecycle.map((f) => (
+                <FileCard key={f.name} f={f} />
+              ))}
+            </div>
           </div>
 
           {/* ── Right sidebar ── */}
@@ -967,7 +1034,13 @@ export function FileUploader() {
                 {anyUploading && (
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "var(--color-text-secondary)" }}>ETA</span>
-                    <span style={{ fontWeight: 600, color: "var(--color-text-secondary)" }}>—</span>
+                    <span style={{
+                      fontWeight: 600,
+                      fontVariantNumeric: "tabular-nums",
+                      color: etaSeconds != null ? "var(--color-text)" : "var(--color-text-secondary)",
+                    }}>
+                      {etaSeconds != null ? formatElapsed(etaSeconds) : "—"}
+                    </span>
                   </div>
                 )}
               </div>

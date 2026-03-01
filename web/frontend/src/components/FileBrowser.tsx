@@ -15,8 +15,7 @@ async function openPicker(mode: "files" | "directory") {
       return;
     }
     // Append to existing selection (allow multiple pick operations)
-    const combined = new Set([...pickedPaths.value, ...res.paths]);
-    pickedPaths.value = Array.from(combined);
+    pickedPaths.value = [...new Set(pickedPaths.value).union(new Set(res.paths))];
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to open file picker";
   } finally {
@@ -46,8 +45,7 @@ function proceedWithSelection() {
 
 /** Extract just the filename from an absolute path. */
 function basename(path: string): string {
-  const parts = path.split("/");
-  return parts[parts.length - 1] || path;
+  return path.split("/").at(-1) || path;
 }
 
 export function FileBrowser() {

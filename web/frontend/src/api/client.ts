@@ -140,27 +140,27 @@ export async function uploadToS3(
   file: File,
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", uploadUrl, true);
-    xhr.setRequestHeader("Content-Type", file.type);
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const xhr = new XMLHttpRequest();
+  xhr.open("PUT", uploadUrl, true);
+  xhr.setRequestHeader("Content-Type", file.type);
 
-    if (onProgress) {
-      xhr.upload.addEventListener("progress", (e) => {
-        if (e.lengthComputable) onProgress(e.loaded, e.total);
-      });
+  if (onProgress) {
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    });
+  }
+
+  xhr.onload = () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      resolve();
+    } else {
+      reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
     }
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
-      }
-    };
-    xhr.onerror = () => reject(new Error("Upload failed: network error"));
-    xhr.send(file);
-  });
+  };
+  xhr.onerror = () => reject(new Error("Upload failed: network error"));
+  xhr.send(file);
+  return promise;
 }
 
 // --- S3 Multipart Upload (DDR-054) ---
@@ -216,35 +216,35 @@ function uploadChunk(
   blob: Blob,
   onProgress?: (loaded: number) => void,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const xhr = new XMLHttpRequest();
+  xhr.open("PUT", url, true);
 
-    if (onProgress) {
-      xhr.upload.addEventListener("progress", (e) => {
-        if (e.lengthComputable) onProgress(e.loaded);
-      });
-    }
+  if (onProgress) {
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) onProgress(e.loaded);
+    });
+  }
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        const etag = xhr.getResponseHeader("ETag");
-        if (!etag) {
-          reject(
-            new Error(
-              "Upload succeeded but ETag header missing (check S3 CORS exposedHeaders)",
-            ),
-          );
-          return;
-        }
-        resolve(etag);
-      } else {
-        reject(new Error(`Chunk upload failed: ${xhr.status} ${xhr.statusText}`));
+  xhr.onload = () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      const etag = xhr.getResponseHeader("ETag");
+      if (!etag) {
+        reject(
+          new Error(
+            "Upload succeeded but ETag header missing (check S3 CORS exposedHeaders)",
+          ),
+        );
+        return;
       }
-    };
-    xhr.onerror = () => reject(new Error("Chunk upload failed: network error"));
-    xhr.send(blob);
-  });
+      resolve(etag);
+    } else {
+      reject(new Error(`Chunk upload failed: ${xhr.status} ${xhr.statusText}`));
+    }
+  };
+  xhr.onerror = () => reject(new Error("Chunk upload failed: network error"));
+  xhr.send(blob);
+  return promise;
 }
 
 /**
@@ -323,14 +323,12 @@ export async function uploadToS3Multipart(
     await Promise.all(workers);
 
     // 3. Sort parts by part number (S3 requires ascending order).
-    completedParts.sort((a, b) => a.partNumber - b.partNumber);
-
     // 4. Complete the multipart upload.
     await completeMultipartUpload({
       sessionId,
       key,
       uploadId,
-      parts: completedParts,
+      parts: completedParts.toSorted((a, b) => a.partNumber - b.partNumber),
     });
 
     return key;
@@ -468,7 +466,7 @@ export async function openFullImage(pathOrKey: string): Promise<void> {
  * Used by components that lack an explicit media type field (e.g., TriageView).
  */
 export function isVideoFile(filename: string): boolean {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const ext = filename.split(".").at(-1)?.toLowerCase() ?? "";
   return ["mp4", "mov", "avi", "mkv", "webm", "m4v", "3gp"].includes(ext);
 }
 

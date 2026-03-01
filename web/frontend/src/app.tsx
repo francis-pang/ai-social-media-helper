@@ -128,7 +128,7 @@ export function navigateToStep(step: Step) {
 export function navigateBack() {
   const history = stepHistory.value;
   if (history.length === 0) return;
-  const prev = history[history.length - 1]!;
+  const prev = history.at(-1)!;
   stepHistory.value = history.slice(0, -1);
   currentStep.value = prev;
   syncUrlToStep(prev, uploadSessionId.value);

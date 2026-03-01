@@ -9,25 +9,27 @@
 export function readAllEntries(
   reader: FileSystemDirectoryReader,
 ): Promise<FileSystemEntry[]> {
-  return new Promise((resolve, reject) => {
-    const results: FileSystemEntry[] = [];
-    function readBatch() {
-      reader.readEntries((entries) => {
-        if (entries.length === 0) {
-          resolve(results);
-        } else {
-          results.push(...entries);
-          readBatch(); // readEntries may return results in batches
-        }
-      }, reject);
-    }
-    readBatch();
-  });
+  const { promise, resolve, reject } = Promise.withResolvers<FileSystemEntry[]>();
+  const results: FileSystemEntry[] = [];
+  function readBatch() {
+    reader.readEntries((entries) => {
+      if (entries.length === 0) {
+        resolve(results);
+      } else {
+        results.push(...entries);
+        readBatch(); // readEntries may return results in batches
+      }
+    }, reject);
+  }
+  readBatch();
+  return promise;
 }
 
 /** Convert a FileSystemFileEntry to a File. */
 export function entryToFile(entry: FileSystemFileEntry): Promise<File> {
-  return new Promise((resolve, reject) => entry.file(resolve, reject));
+  const { promise, resolve, reject } = Promise.withResolvers<File>();
+  entry.file(resolve, reject);
+  return promise;
 }
 
 /** Recursively collect all File objects from a FileSystemEntry tree. */
