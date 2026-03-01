@@ -8,7 +8,7 @@ This document covers logging, observability, error handling, and retry strategie
 
 ## Logging
 
-> See also [DDR-002](./design-decisions/DDR-002-logging-before-features.md) (original zerolog adoption) and [DDR-051](./design-decisions/DDR-051-comprehensive-logging-overhaul.md) (comprehensive logging overhaul).
+> See also [DDR-002](./design-decisions/DDR-002-logging-before-features.md) (original zerolog adoption), [DDR-051](./design-decisions/DDR-051-comprehensive-logging-overhaul.md) (comprehensive logging overhaul), and [DDR-077](./design-decisions/DDR-077-cost-aware-vertex-ai-migration.md) (Vertex AI migration — dual-backend AI client logging).
 
 ### Design Decision: zerolog
 
@@ -165,7 +165,10 @@ func init() {
     initStart := time.Now()
     logging.Init()
 
-    // ... setup ...
+    // ... setup (SSM loads, AWS config, etc.) ...
+
+    ai.LoadGCPServiceAccount() // DDR-077: reads GCP_SERVICE_ACCOUNT_JSON env var,
+                               // writes /tmp/gcp-sa-key.json, sets GOOGLE_APPLICATION_CREDENTIALS
 
     log.Info().
         Str("function", "media-lambda").
@@ -215,6 +218,24 @@ if err != nil {
 os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
 log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 ```
+
+> **DDR-077 note:** Lambdas that call the Gemini API now use a dual-backend AI client created via `ai.NewAIClient(ctx)`. The client attempts Vertex AI first (using GCP service account credentials); if that fails, it falls back to the Gemini API using the SSM-loaded key. The SSM parameter load above remains necessary as the fallback path.
+
+#### AI client initialization (DDR-077)
+
+Lambdas that use the Gemini API create a dual-backend client at init time:
+
+```go
+aiClient, err := ai.NewAIClient(ctx)
+```
+
+Log messages emitted during client creation:
+
+| Level | Message | Condition |
+|-------|---------|-----------|
+| `info` | `"Using Vertex AI backend"` | Vertex AI client creation succeeds |
+| `warn` | `"Vertex AI client creation failed, falling back to Gemini API"` | Vertex AI fails |
+| `info` | `"Using Gemini API backend (fallback)"` | Gemini API fallback succeeds |
 
 #### HTTP handlers (API Lambda)
 

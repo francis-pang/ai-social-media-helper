@@ -90,6 +90,7 @@ For new decisions, use [design-template.md](./design-template.md).
 | [DDR-075](./DDR-075-dashboard-restructuring-emf-dimension-fix.md) | 2026-03-01 | Dashboard Restructuring and EMF Dimension Fix | Accepted |
 | [DDR-076](./DDR-076-esnext-frontend-target-modernization.md) | 2026-03-01 | ESNext Frontend Target Modernization | Accepted |
 | [DDR-077](./DDR-077-cost-aware-vertex-ai-migration.md) | 2026-03-01 | Cost-Aware Vertex AI Migration — Dual-Backend + Economy Mode | Accepted |
+| [DDR-078](./DDR-078-facebook-prep-workflow.md) | 2026-03-01 | Facebook Prep Workflow — Session-Aware Captions with Google Maps Grounding | Accepted |
 
 ---
 
@@ -104,4 +105,4 @@ For new decisions, use [design-template.md](./design-template.md).
 
 ---
 
-**Last Updated**: 2026-03-01 (DDR-077)
+**Last Updated**: 2026-03-01 (DDR-078)

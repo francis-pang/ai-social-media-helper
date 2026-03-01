@@ -125,6 +125,16 @@ go test -v ./...
 - Default value application
 - Invalid configuration handling
 
+### 1b. AI Backend Configuration for Tests
+
+The AI client (`ai.NewAIClient(ctx)`) selects its backend based on environment variables:
+
+- Set `VERTEX_AI_PROJECT` and `VERTEX_AI_REGION` to run tests against the Vertex AI backend.
+- Set only `GEMINI_API_KEY` to fall back to the Gemini Developer API.
+- Tests that don't need a live AI backend should mock the `GeminiClient` interface (see Mocking Strategy below).
+
+See DDR-077 for full backend selection details.
+
 ### 2. File Handler Tests
 - MIME type detection
 - File size validation
@@ -249,5 +259,5 @@ jobs:
 
 ---
 
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01
 

@@ -5,7 +5,7 @@
 The application uses different authentication mechanisms depending on the deployment mode:
 
 - **Local mode** — Gemini API key via environment variable or GPG-encrypted file
-- **Cloud mode** — Amazon Cognito User Pool for user authentication; Gemini API key loaded from SSM Parameter Store at Lambda cold start
+- **Cloud mode** — Amazon Cognito User Pool for user authentication; Vertex AI (primary) with Gemini API key fallback, loaded from SSM at Lambda cold start (DDR-077)
 
 ## Credential Resolution (Local Mode)
 
@@ -96,6 +96,38 @@ sequenceDiagram
 - Tokens stored in browser memory, automatically refreshed
 - Health endpoint (`/api/health`) is unauthenticated
 
+## Cloud AI Backend (DDR-077)
+
+AI Lambdas use a dual-backend architecture for Gemini API access:
+
+```mermaid
+flowchart TD
+    Init["Lambda cold start"]
+    LoadSA{"GCP_SERVICE_ACCOUNT_JSON\nenv var set?"}
+    WriteSA["Write to /tmp/gcp-sa-key.json\nSet GOOGLE_APPLICATION_CREDENTIALS"]
+    CheckVAI{"VERTEX_AI_PROJECT\nenv var set?"}
+    VertexAI["Create Vertex AI client\n(BackendVertexAI + ADC)"]
+    VertexOK{"Client created\nsuccessfully?"}
+    CheckKey{"GEMINI_API_KEY\nenv var set?"}
+    GeminiAPI["Create Gemini API client\n(BackendGeminiAPI + API key)"]
+    Ready["AI client ready"]
+    FailNoBackend["Error: no backend configured"]
+
+    Init --> LoadSA
+    LoadSA -->|Yes| WriteSA --> CheckVAI
+    LoadSA -->|No| CheckVAI
+    CheckVAI -->|Yes| VertexAI --> VertexOK
+    CheckVAI -->|No| CheckKey
+    VertexOK -->|Yes| Ready
+    VertexOK -->|No| CheckKey
+    CheckKey -->|Yes| GeminiAPI --> Ready
+    CheckKey -->|No| FailNoBackend
+```
+
+**Key functions:**
+- `ai.LoadGCPServiceAccount()` — reads `GCP_SERVICE_ACCOUNT_JSON` (populated from SSM parameter `/ai-social-media/prod/vertex-ai-service-account`), writes to temp file, sets `GOOGLE_APPLICATION_CREDENTIALS` for Application Default Credentials. No-op if env var is not set.
+- `ai.NewAIClient(ctx)` — creates a `genai.Client` with automatic backend selection. Tries Vertex AI first (requires `VERTEX_AI_PROJECT`), falls back to Gemini API (requires `GEMINI_API_KEY`).
+
 **User provisioning:**
 ```bash
 aws cognito-idp admin-create-user \
@@ -129,6 +161,7 @@ Sensitive parameters are stored as **SecureString** type in SSM Parameter Store,
 | Parameter | Type |
 |-----------|------|
 | `/ai-social-media/prod/gemini-api-key` | SecureString |
+| `/ai-social-media/prod/vertex-ai-service-account` | SecureString (DDR-077) |
 | `/ai-social-media/prod/instagram-app-secret` | SecureString |
 | `/ai-social-media/prod/instagram-webhook-verify-token` | SecureString |
 | `/ai-social-media/prod/instagram-access-token` | SecureString |
@@ -158,7 +191,8 @@ Always use `/oauth/authorize` to initiate the OAuth flow instead of constructing
 - [DDR-005](./design-decisions/DDR-005-typed-validation-errors.md) — Typed validation errors
 - [DDR-025](./design-decisions/DDR-025-ssm-parameter-store-secrets.md) — SSM Parameter Store for runtime secrets
 - [DDR-028](./design-decisions/DDR-028-security-hardening.md) — Security hardening
+- [DDR-077](./design-decisions/DDR-077-cost-aware-vertex-ai-migration.md) — Cost-Aware Vertex AI Migration
 
 ---
 
-**Last Updated**: 2026-02-15
+**Last Updated**: 2026-03-01

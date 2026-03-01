@@ -111,7 +111,7 @@ sequenceDiagram
 | `GET` | `/api/enhance/{id}/results` | Poll enhancement progress and results |
 | `POST` | `/api/enhance/{id}/feedback` | Re-enhance a photo with user feedback |
 
-**Infrastructure:** Gemini 3 Pro Image uses the existing Gemini API key. Imagen 3 requires Vertex AI (GCP project, service account). If Vertex AI is not configured, Phase 3 is skipped gracefully.
+**Infrastructure:** All AI operations use `ai.NewAIClient(ctx)` with dual-backend support (Vertex AI primary, Gemini API fallback) per DDR-077. Imagen 3 requires Vertex AI; if Vertex AI is not configured, Phase 3 is skipped gracefully.
 
 ## Related DDRs
 
@@ -123,7 +123,8 @@ sequenceDiagram
 - [DDR-014](./design-decisions/DDR-014-thumbnail-selection-strategy.md) — Thumbnail selection strategy
 - [DDR-031](./design-decisions/DDR-031-multi-step-photo-enhancement.md) — Multi-step photo enhancement pipeline
 - [DDR-071](./design-decisions/DDR-071-photo-downscaling-for-gemini.md) — Photo downscaling and media resolution strategy
+- [DDR-077](./design-decisions/DDR-077-cost-aware-vertex-ai-migration.md) — Cost-Aware Vertex AI Migration
 
 ---
 
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01

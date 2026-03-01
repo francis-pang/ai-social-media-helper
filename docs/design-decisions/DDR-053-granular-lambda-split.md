@@ -174,3 +174,4 @@ The recommended approach for Phase 2:
 - [DDR-035](./DDR-035-multi-lambda-deployment.md): Multi-Lambda Deployment — the architecture being refined
 - [DDR-050](./DDR-050-replace-goroutines-with-async-dispatch.md): Async Dispatch — introduced the Worker Lambda being split
 - [DDR-052](./DDR-052-step-functions-polling-for-long-running-ops.md): Step Functions Polling — triage/publish pipelines now target new Lambdas
+- [DDR-077](./DDR-077-cost-aware-vertex-ai-migration.md) — Supersedes the per-Lambda `NewGeminiClient(ctx, apiKey)` pattern with `ai.NewAIClient(ctx)` (dual-backend, no API key parameter)
