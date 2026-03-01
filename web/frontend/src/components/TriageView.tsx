@@ -2,7 +2,7 @@ import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { createPoller } from "../hooks/usePolling";
 import { formatBytes } from "../utils/format";
-import { triageJobId, selectedPaths, uploadSessionId, navigateToLanding, navigateBack, setStep } from "../app";
+import { triageJobId, selectedPaths, uploadSessionId, fileHandles, navigateToLanding, navigateBack, setStep } from "../app";
 import { resetFileBrowserState } from "./FileBrowser";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import {
@@ -23,6 +23,11 @@ const confirmResult = signal<{
   deleted: number;
   errors: string[];
   reclaimedBytes: number;
+} | null>(null);
+/** DDR-074: Local file deletion results (separate from S3 cleanup). */
+const localDeleteResult = signal<{
+  deleted: number;
+  errors: string[];
 } | null>(null);
 const error = signal<string | null>(null);
 const reasonFilter = signal("all");
@@ -95,14 +100,41 @@ function deselectAll() {
 async function handleConfirmDeletion() {
   if (!triageJobId.value) return;
   confirmLoading.value = true;
+  localDeleteResult.value = null;
   try {
     const ids = Array.from(selectedForDeletion.value);
-    // Include sessionId for ownership verification in cloud mode (DDR-028)
     const req = isCloudMode
       ? { deleteKeys: ids, sessionId: uploadSessionId.value }
       : { deletePaths: ids };
     const res = await confirmTriage(triageJobId.value, req);
     confirmResult.value = res;
+
+    // DDR-074: Delete from local filesystem using stored file handles
+    if (isCloudMode && fileHandles.value.size > 0) {
+      let localDeleted = 0;
+      const localErrors: string[] = [];
+
+      for (const id of ids) {
+        const filename = id.includes("/") ? id.split("/").pop()! : id;
+        const handle = fileHandles.value.get(filename);
+        if (!handle) continue;
+
+        try {
+          const perm = await handle.requestPermission({ mode: "readwrite" });
+          if (perm !== "granted") {
+            localErrors.push(`Permission denied: ${filename}`);
+            continue;
+          }
+          await handle.remove();
+          localDeleted++;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Unknown error";
+          localErrors.push(`${filename}: ${msg}`);
+        }
+      }
+
+      localDeleteResult.value = { deleted: localDeleted, errors: localErrors };
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to confirm deletion";
   } finally {
@@ -114,6 +146,7 @@ function startOver() {
   results.value = null;
   selectedForDeletion.value = new Set();
   confirmResult.value = null;
+  localDeleteResult.value = null;
   error.value = null;
   triageJobId.value = null;
   selectedPaths.value = [];
@@ -131,6 +164,7 @@ function handleBack() {
   results.value = null;
   selectedForDeletion.value = new Set();
   confirmResult.value = null;
+  localDeleteResult.value = null;
   error.value = null;
   triageJobId.value = null;
   selectedPaths.value = [];
@@ -147,18 +181,30 @@ export function TriageView() {
 
   // Show deletion confirmation result
   if (confirmResult.value) {
+    const serverErrors = confirmResult.value.errors ?? [];
+    const localResult = localDeleteResult.value;
+    const localErrors = localResult?.errors ?? [];
+    const allErrors = [...serverErrors, ...localErrors];
+    const hasLocalDelete = localResult !== null;
+
     return (
       <div class="card" style={{ textAlign: "center" }}>
         <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>
-          {(confirmResult.value.errors ?? []).length === 0 ? "Done" : "Completed with errors"}
+          {allErrors.length === 0 ? "Done" : "Completed with errors"}
         </div>
-        <p>
-          Deleted {confirmResult.value.deleted} file(s)
-          {!isCloudMode && confirmResult.value.reclaimedBytes > 0 &&
-            `, reclaimed ${formatBytes(confirmResult.value.reclaimedBytes)}`
-          }.
-        </p>
-        {(confirmResult.value.errors ?? []).length > 0 && (
+        {hasLocalDelete ? (
+          <p>
+            Deleted {localResult.deleted} file(s) from your device.
+          </p>
+        ) : (
+          <p>
+            Deleted {confirmResult.value.deleted} file(s)
+            {!isCloudMode && confirmResult.value.reclaimedBytes > 0 &&
+              `, reclaimed ${formatBytes(confirmResult.value.reclaimedBytes)}`
+            }.
+          </p>
+        )}
+        {allErrors.length > 0 && (
           <div
             style={{
               color: "var(--color-danger)",
@@ -166,7 +212,7 @@ export function TriageView() {
               fontSize: "0.875rem",
             }}
           >
-            {(confirmResult.value.errors ?? []).map((err) => (
+            {allErrors.map((err) => (
               <div key={err}>{err}</div>
             ))}
           </div>

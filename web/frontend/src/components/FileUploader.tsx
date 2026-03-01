@@ -2,7 +2,7 @@ import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
 import { getUploadUrl, uploadToS3, uploadToS3Multipart, MULTIPART_THRESHOLD, initTriage, updateTriageFiles, finalizeTriageUploads, getTriageResults, startTriage } from "../api/client";
 import { quickFingerprint, fullHash } from "../utils/fileHash";
-import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep } from "../app";
+import { selectedPaths, uploadSessionId, triageJobId, navigateToStep, currentStep, fileHandles } from "../app";
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
 import { formatBytes, formatSpeed } from "../utils/format";
@@ -117,6 +117,53 @@ async function handleDrop(e: DragEvent) {
 function handleDragOver(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
+}
+
+/** DDR-074: Use showOpenFilePicker when available to retain handles for local deletion. */
+const supportsFilePicker = typeof window !== "undefined" && "showOpenFilePicker" in window;
+
+async function handleBrowseFiles() {
+  if (supportsFilePicker && window.showOpenFilePicker) {
+    try {
+      const handles = await window.showOpenFilePicker({
+        multiple: true,
+        types: [
+          {
+            description: "Media files",
+            accept: {
+              "image/jpeg": [".jpg", ".jpeg"],
+              "image/png": [".png"],
+              "image/gif": [".gif"],
+              "image/webp": [".webp"],
+              "image/heic": [".heic"],
+              "image/heif": [".heif"],
+              "video/mp4": [".mp4"],
+              "video/quicktime": [".mov"],
+              "video/webm": [".webm"],
+            },
+          },
+        ],
+      });
+
+      const newHandleMap = new Map(fileHandles.value);
+      const filesToAdd: File[] = [];
+      for (const handle of handles) {
+        const file = await handle.getFile();
+        newHandleMap.set(file.name, handle);
+        filesToAdd.push(file);
+      }
+      fileHandles.value = newHandleMap;
+
+      if (filesToAdd.length > 0) {
+        addFiles(filesToAdd);
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      (document.getElementById("file-input") as HTMLInputElement)?.click();
+    }
+  } else {
+    (document.getElementById("file-input") as HTMLInputElement)?.click();
+  }
 }
 
 async function addFiles(newFiles: File[]) {
@@ -683,7 +730,7 @@ export function FileUploader() {
               class="primary"
               onClick={(e) => {
                 e.stopPropagation();
-                (document.getElementById("file-input") as HTMLInputElement)?.click();
+                handleBrowseFiles();
               }}
               style={{ marginTop: "1rem" }}
             >
@@ -768,9 +815,7 @@ export function FileUploader() {
               </div>
               <button
                 class="outline"
-                onClick={() =>
-                  (document.getElementById("file-input") as HTMLInputElement)?.click()
-                }
+                onClick={() => handleBrowseFiles()}
                 style={{ fontSize: "0.875rem" }}
               >
                 + Add More

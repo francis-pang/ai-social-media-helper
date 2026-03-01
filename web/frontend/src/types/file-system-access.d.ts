@@ -8,6 +8,7 @@
  *
  * See: https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API
  * DDR-029: File System Access API for Cloud Media Upload
+ * DDR-074: Added requestPermission and remove for local file deletion
  */
 
 interface FilePickerAcceptType {
@@ -24,6 +25,14 @@ interface OpenFilePickerOptions {
 interface DirectoryPickerOptions {
   id?: string;
   mode?: "read" | "readwrite";
+}
+
+/** DDR-074: Chrome-only methods for permission and deletion. */
+interface FileSystemFileHandle {
+  requestPermission(descriptor: {
+    mode: "read" | "readwrite";
+  }): Promise<PermissionState>;
+  remove(): Promise<void>;
 }
 
 interface FileSystemDirectoryHandle {

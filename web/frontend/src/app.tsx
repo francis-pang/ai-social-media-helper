@@ -76,6 +76,9 @@ export const triageJobId = signal<string | null>(null);
 /** Upload session ID — groups uploaded files in S3 under a common prefix. */
 export const uploadSessionId = signal<string | null>(null);
 
+/** DDR-074: File handles retained from showOpenFilePicker() for local deletion after triage. */
+export const fileHandles = signal<Map<string, FileSystemFileHandle>>(new Map());
+
 /** Trip/event context for AI selection (e.g., "3-day trip to Tokyo, Oct 2025"). */
 export const tripContext = signal<string>("");
 
@@ -239,6 +242,7 @@ export function navigateToLanding() {
   selectedPaths.value = [];
   triageJobId.value = null;
   uploadSessionId.value = null;
+  fileHandles.value = new Map();
   tripContext.value = "";
   // Reset all downstream component state
   resetSelectionState();

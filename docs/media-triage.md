@@ -21,16 +21,17 @@ flowchart TD
     StoreThumbs["Store thumbnails to S3\nDelete originals (DDR-059)"]
     Review["User reviews flagged media\n(thumbnail previews)"]
     Confirm["User confirms deletion\n(multi-select)"]
+    LocalDelete["Delete from local drive\n(DDR-074: via File System Access API)"]
     Cleanup["Clean up all session S3 artifacts\n(thumbnails, compressed)"]
 
-    Init --> Upload --> Preprocess --> Finalize --> Gemini --> Categorize --> StoreThumbs --> Review --> Confirm --> Cleanup
+    Init --> Upload --> Preprocess --> Finalize --> Gemini --> Categorize --> StoreThumbs --> Review --> Confirm --> LocalDelete --> Cleanup
 ```
 
 ### Cloud UI Screens (DDR-063)
 
 The cloud triage flow splits into two distinct UI screens:
 
-1. **Upload & Process Media** (`triage-upload`): Users drag-and-drop files. Each file progresses through: Uploading to S3 → Server Processing (thumbnail, photo downscale to WebP, video compress) → Ready. Files that were resized or compressed show a green "CONVERTED" badge. The screen remains active until all per-file processing completes.
+1. **Upload & Process Media** (`triage-upload`): Users select files via the file picker or drag-and-drop. When using the File System Access API file picker (Chrome/Edge), the browser retains handles to the original files for local deletion after triage (DDR-074). Each file progresses through: Uploading to S3 → Server Processing (thumbnail, photo downscale to WebP, video compress) → Ready. Files that were resized or compressed show a green "CONVERTED" badge. The screen remains active until all per-file processing completes.
 2. **AI Analysis** (`processing`): Once all files are processed, the user transitions to a dedicated Gemini analysis screen showing only the three AI sub-phases: uploading to Gemini, video processing, and analyzing.
 
 ## How It Works
@@ -43,7 +44,8 @@ sequenceDiagram
     participant S3
     participant Gemini as Gemini API
 
-    User->>Frontend: Drag-and-drop files (cloud) or pick directory (local)
+    User->>Frontend: Pick files via showOpenFilePicker (DDR-074),\ndrag-and-drop (cloud), or pick directory (local)
+    Note over User,Frontend: File handles retained for local deletion (Chrome/Edge)
     Frontend->>API: POST /api/triage/init (DDR-067: DDB job only)
     API-->>Frontend: jobId
     Frontend->>S3: Upload via presigned PUT URLs (cloud mode)
@@ -58,8 +60,9 @@ sequenceDiagram
     API-->>Frontend: Categorized results with thumbnail URLs
     User->>Frontend: Review, select files to delete
     Frontend->>API: POST /api/triage/{id}/confirm
-    API->>API: Delete confirmed files
     API->>S3: Clean up all session artifacts (DDR-059)
+    API-->>Frontend: { deleted, errors }
+    Frontend->>Frontend: Delete from local drive via\nFileSystemFileHandle.remove() (DDR-074)
 ```
 
 ## Triage Criteria
@@ -76,11 +79,12 @@ The AI is instructed to be **generous** — if a normal person can understand th
 
 | Aspect | CLI (`media-triage`) | Local Web (`media-web`) | Cloud (`media-lambda`) |
 |--------|---------------------|------------------------|----------------------|
-| Input | `--directory` flag | File browser in UI | Drag-and-drop upload to S3 |
+| Input | `--directory` flag | File browser in UI | File picker or drag-and-drop upload to S3 |
 | Processing | Local Go binary | Local Go binary | AWS Lambda |
 | Media access | Local filesystem | Local filesystem | S3 presigned URLs |
 | Video support | Full (ffmpeg required) | Full (ffmpeg required) | Full — videos via S3 presigned URLs (DDR-060) |
 | Authentication | API key (env var / GPG) | API key (env var / GPG) | Cognito JWT |
+| Local deletion | Direct filesystem | Direct filesystem | Via File System Access API (DDR-074, Chrome/Edge) |
 
 ## S3 Storage Optimization (DDR-059)
 
@@ -115,7 +119,8 @@ This is controlled by the `RAG_MODE` environment variable on the triage Lambda (
 - [DDR-069](./design-decisions/DDR-069-batch-execute-statement-ingest.md) — BatchExecuteStatement for RAG ingest throughput
 - [DDR-070](./design-decisions/DDR-070-mcp-server-rag-tools.md) — MCP Server for RAG Tools
 - [DDR-071](./design-decisions/DDR-071-photo-downscaling-for-gemini.md) — Photo Downscaling and Media Resolution Strategy
+- [DDR-074](./design-decisions/DDR-074-local-file-deletion-fs-access-api.md) — Local File Deletion via File System Access API
 
 ---
 
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01
