@@ -128,12 +128,30 @@ func (r *Recorder) Flush() {
 		dimKeys = append(dimKeys, k)
 	}
 
+	// Emit two DimensionSets when FunctionName is present:
+	//   1. Custom dimensions only (without FunctionName) — matches dashboard queries
+	//      that omit FunctionName (CloudWatch requires exact dimension set match).
+	//   2. All dimensions including FunctionName — for per-Lambda debugging.
+	// When FunctionName is absent (CLI runs), emit a single DimensionSet as before.
+	var dimensionSets [][]string
+	if _, hasFn := r.dimensions["FunctionName"]; hasFn {
+		dimKeysWithoutFn := make([]string, 0, len(r.dimensions)-1)
+		for k := range r.dimensions {
+			if k != "FunctionName" {
+				dimKeysWithoutFn = append(dimKeysWithoutFn, k)
+			}
+		}
+		dimensionSets = [][]string{dimKeysWithoutFn, dimKeys}
+	} else {
+		dimensionSets = [][]string{dimKeys}
+	}
+
 	// _aws directive
 	doc["_aws"] = emfDirective{
 		Timestamp: time.Now().UnixMilli(),
 		CloudWatchMetrics: []cwMetric{{
 			Namespace:  r.namespace,
-			Dimensions: [][]string{dimKeys},
+			Dimensions: dimensionSets,
 			Metrics:    metricDefs,
 		}},
 	}

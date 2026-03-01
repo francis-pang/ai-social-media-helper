@@ -81,6 +81,12 @@ func TestRecorder_FlushOutput(t *testing.T) {
 		t.Errorf("expected namespace AiSocialMedia, got %v", cw["Namespace"])
 	}
 
+	// Without FunctionName: single DimensionSet
+	dims := cw["Dimensions"].([]interface{})
+	if len(dims) != 1 {
+		t.Errorf("expected 1 DimensionSet when FunctionName absent, got %d", len(dims))
+	}
+
 	// Check dimension value
 	if doc["Operation"] != "triage" {
 		t.Errorf("expected Operation=triage, got %v", doc["Operation"])
@@ -97,6 +103,66 @@ func TestRecorder_FlushOutput(t *testing.T) {
 	// Check property
 	if doc["sessionId"] != "abc-123" {
 		t.Errorf("expected sessionId=abc-123, got %v", doc["sessionId"])
+	}
+}
+
+func TestRecorder_FlushDualDimensionSets(t *testing.T) {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	// Simulate Lambda environment with FunctionName
+	functionName = "my-lambda"
+
+	rec := New("AiSocialMedia")
+	rec.Dimension("Operation", "triage")
+	rec.Metric("GeminiApiCalls", 1, UnitCount)
+	rec.Flush()
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse EMF output: %v", err)
+	}
+
+	awsMap := doc["_aws"].(map[string]interface{})
+	cwArr := awsMap["CloudWatchMetrics"].([]interface{})
+	cw := cwArr[0].(map[string]interface{})
+	dims := cw["Dimensions"].([]interface{})
+
+	// With FunctionName: two DimensionSets
+	if len(dims) != 2 {
+		t.Fatalf("expected 2 DimensionSets when FunctionName present, got %d", len(dims))
+	}
+
+	// First set must NOT contain FunctionName
+	set0 := dims[0].([]interface{})
+	for _, d := range set0 {
+		if d.(string) == "FunctionName" {
+			t.Error("first DimensionSet should not contain FunctionName")
+		}
+	}
+
+	// Second set must contain FunctionName
+	set1 := dims[1].([]interface{})
+	hasFn := false
+	for _, d := range set1 {
+		if d.(string) == "FunctionName" {
+			hasFn = true
+		}
+	}
+	if !hasFn {
+		t.Error("second DimensionSet should contain FunctionName")
+	}
+
+	// FunctionName must still be present as a top-level field (metric value for CloudWatch)
+	if doc["FunctionName"] != "my-lambda" {
+		t.Errorf("expected FunctionName=my-lambda in doc, got %v", doc["FunctionName"])
 	}
 }
 

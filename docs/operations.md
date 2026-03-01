@@ -398,102 +398,70 @@ aws lambda update-function-configuration \
 
 ### Metrics
 
-Track key operational metrics (in-memory for CLI, optionally exportable):
+Lambda functions emit custom metrics via the AWS CloudWatch Embedded Metrics Format (EMF) — structured JSON written to stdout, extracted automatically by CloudWatch with no API calls or added latency. See DDR-062 (original introduction) and DDR-075 (dimension fix and dashboard restructuring).
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `commands_total` | Counter | Total commands executed by type |
-| `uploads_total` | Counter | Total file uploads attempted |
-| `uploads_success` | Counter | Successful uploads |
-| `uploads_failed` | Counter | Failed uploads |
-| `upload_bytes_total` | Counter | Total bytes uploaded |
-| `upload_duration_seconds` | Histogram | Upload duration distribution |
-| `api_requests_total` | Counter | Total API requests |
-| `api_errors_total` | Counter | API errors by type |
-| `api_latency_seconds` | Histogram | API request latency |
-| `retries_total` | Counter | Total retry attempts |
-| `sessions_active` | Gauge | Currently active sessions |
-
-### Implementation
+**Package**: `internal/metrics/emf.go`
 
 ```go
-package metrics
-
-import (
-    "sync"
-    "time"
-)
-
-type Metrics struct {
-    mu sync.RWMutex
-    
-    CommandsTotal   map[string]int64
-    UploadsTotal    int64
-    UploadsSuccess  int64
-    UploadsFailed   int64
-    UploadBytes     int64
-    APIRequestsTotal int64
-    APIErrorsTotal  map[string]int64
-    RetriesTotal    int64
-    
-    uploadDurations []time.Duration
-    apiLatencies    []time.Duration
-}
-
-func NewMetrics() *Metrics {
-    return &Metrics{
-        CommandsTotal:  make(map[string]int64),
-        APIErrorsTotal: make(map[string]int64),
-    }
-}
-
-func (m *Metrics) RecordCommand(cmd string) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-    m.CommandsTotal[cmd]++
-}
-
-func (m *Metrics) RecordUpload(success bool, bytes int64, duration time.Duration) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-    
-    m.UploadsTotal++
-    if success {
-        m.UploadsSuccess++
-        m.UploadBytes += bytes
-    } else {
-        m.UploadsFailed++
-    }
-    m.uploadDurations = append(m.uploadDurations, duration)
-}
-
-func (m *Metrics) RecordAPIRequest(latency time.Duration, err error) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-    
-    m.APIRequestsTotal++
-    m.apiLatencies = append(m.apiLatencies, latency)
-    
-    if err != nil {
-        errType := categorizeError(err)
-        m.APIErrorsTotal[errType]++
-    }
-}
-
-func (m *Metrics) Summary() string {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
-    
-    // Return formatted summary
-    return fmt.Sprintf(
-        "Commands: %d | Uploads: %d/%d | API Errors: %d",
-        sumMapValues(m.CommandsTotal),
-        m.UploadsSuccess,
-        m.UploadsTotal,
-        sumMapValues(m.APIErrorsTotal),
-    )
-}
+rec := metrics.New("AiSocialMedia")
+rec.Dimension("Operation", "triage").
+    Metric("GeminiApiLatencyMs", latencyMs, metrics.UnitMilliseconds).
+    Count("GeminiApiCalls").
+    Property("sessionId", sessionID).
+    Flush()
 ```
+
+#### Custom CloudWatch Metrics (namespace: `AiSocialMedia`)
+
+| Metric | Unit | Dimensions | Description |
+|--------|------|-----------|-------------|
+| `GeminiApiCalls` | Count | `Operation` | Gemini API call count per operation type |
+| `GeminiApiLatencyMs` | Milliseconds | `Operation` | Gemini API round-trip latency |
+| `GeminiApiErrors` | Count | — | Gemini API errors (all types) |
+| `GeminiInputTokens` | Count | `Operation` | Gemini prompt token count |
+| `GeminiOutputTokens` | Count | `Operation` | Gemini completion token count |
+| `GeminiCacheHits` | Count | — | Gemini context cache hits |
+| `GeminiCacheMisses` | Count | — | Gemini context cache misses |
+| `GeminiCacheTokensSaved` | Count | — | Tokens saved by cache hits |
+| `GeminiFilesApiUploadBytes` | Bytes | — | Bytes uploaded via Gemini Files API |
+| `FilesProcessed` | Count | `Operation`, `FileType` | Files processed by MediaProcess Lambda |
+| `FileProcessingMs` | Milliseconds | `Operation` | Per-file processing duration |
+| `FileSize` | Bytes | `Operation` | File size at processing time |
+| `VideoCompressionMs` | Milliseconds | — | AV1 video compression duration |
+| `ImageResizeMs` | Milliseconds | — | WebP image resize/conversion duration |
+| `ImageSizeBytes` | Bytes | — | Image file size after resize |
+| `MediaFileSizeBytes` | Bytes | — | Media file size for S3 uploads |
+| `RequestCount` | Count | `Endpoint` | HTTP request count per API endpoint |
+| `RequestLatencyMs` | Milliseconds | `Endpoint` | HTTP handler end-to-end latency |
+| `JobDurationMs` | Milliseconds | `JobType` | Full job duration (triage or selection) |
+| `TriageJobFiles` | Count | — | Files included in a triage job |
+| `PublishAttempts` | Count | — | Instagram publish attempts |
+
+**Operation values**: `triage`, `mediaSelection`, `jsonSelection`, `filesApiUpload`, `mediaProcess`  
+**FileType values**: `image`, `video`  
+**JobType values**: `triage`, `selection`  
+**Endpoint values**: `/api/triage/start`, `/api/selection/start`, `/api/enhance/start`, `/api/upload-url`
+
+#### Dual DimensionSet Emission (DDR-075)
+
+When running in Lambda (`AWS_LAMBDA_FUNCTION_NAME` is set), each EMF flush emits **two DimensionSets**:
+
+1. Custom dimensions only (e.g., `{Operation: "triage"}`) — matches dashboard queries
+2. All dimensions including `FunctionName` (e.g., `{FunctionName: "...", Operation: "triage"}`) — for per-Lambda debugging via CloudWatch Metrics console
+
+When running in CLI mode (no `FunctionName`), a single DimensionSet is emitted.
+
+### CloudWatch Dashboards (DDR-075)
+
+Three purpose-built dashboards replace the original monolithic dashboard:
+
+| Dashboard | Name | Purpose |
+|-----------|------|---------|
+| Triage | `AiSocialMedia-Triage` | Active triage workflow — all widgets expected to show data |
+| Selection | `AiSocialMedia-Selection` | Selection/enhancement/publish — empty until those workflows run |
+| Infrastructure | `AiSocialMedia-Infrastructure` | API GW, CloudFront, Lambda cross-comparison, Sessions DynamoDB, S3, logs |
+
+Dashboard URLs are emitted as CloudFormation outputs from `OperationsDashboardStack`.
 
 ### Debug Command
 
