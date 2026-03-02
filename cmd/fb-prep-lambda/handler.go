@@ -9,16 +9,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 
 	"github.com/fpang/ai-social-media-helper/internal/assets"
 	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/httputil"
 	"github.com/fpang/ai-social-media-helper/internal/media"
 	"github.com/fpang/ai-social-media-helper/internal/s3util"
 	"github.com/fpang/ai-social-media-helper/internal/store"
 )
+
+const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB (DDR-060)
 
 // fbPrepResponseItem matches the JSON output format from the AI.
 type fbPrepResponseItem struct {
@@ -72,7 +76,7 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 
 	// Economy mode: submit to Gemini Batch API (FBPrepPipeline SFN polls to completion, DDR-082).
 	if input.EconomyMode {
-		parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.MediaItems)
+		parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.SessionID, input.MediaItems, genaiClient)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare media: %w", err)
 		}
@@ -123,7 +127,7 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 	}
 
 	// Build media parts and metadata context
-	parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.MediaItems)
+	parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.SessionID, input.MediaItems, genaiClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare media: %w", err)
 	}
@@ -195,91 +199,145 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 	}, nil
 }
 
-func buildFBPrepMediaParts(ctx context.Context, mediaItems []FBPrepMediaItem) ([]*genai.Part, string, []string, error) {
+func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []FBPrepMediaItem, genaiClient *genai.Client) ([]*genai.Part, string, []string, error) {
 	var parts []*genai.Part
 	var metaLines []string
 	var s3Keys []string
 
+	// Build filename -> FileResult map from session-scoped file processing (DDR-083).
+	fileResultMap := make(map[string]store.FileResult)
+	if fileProcessStore != nil {
+		results, err := fileProcessStore.GetSessionFileResults(ctx, sessionID)
+		if err == nil {
+			for _, fr := range results {
+				fileResultMap[fr.Filename] = fr
+			}
+		}
+	}
+
 	for i, item := range mediaItems {
 		s3Keys = append(s3Keys, item.S3Key)
 		ext := strings.ToLower(filepath.Ext(item.S3Key))
+		filename := filepath.Base(item.S3Key)
+		fr, hasFileResult := fileResultMap[filename]
 
 		if item.MediaType == "image" || media.IsImage(ext) {
-			// Try pre-generated thumbnail first; fall back to download + generate.
-			keyParts := strings.SplitN(item.S3Key, "/", 2)
-			thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filepath.Base(item.S3Key), filepath.Ext(item.S3Key)))
-
-			tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
-			if err != nil {
-				// Fallback: download original and generate thumbnail in-memory.
-				origPath, origCleanup, origErr := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, item.S3Key)
-				if origErr != nil {
-					log.Warn().Str("key", item.S3Key).Err(origErr).Msg("Skipping: failed to download")
-					continue
+			// Prefer processedKey (downsized WebP) > ThumbnailKey > originalKey for presigned URL.
+			useKey := item.S3Key
+			mimeType := "image/jpeg"
+			if hasFileResult {
+				if fr.ProcessedKey != "" {
+					useKey = fr.ProcessedKey
+					if m, _ := media.GetMIMEType(strings.ToLower(filepath.Ext(fr.ProcessedKey))); m != "" {
+						mimeType = m
+					}
+				} else if fr.ThumbnailKey != "" {
+					useKey = fr.ThumbnailKey
+					mimeType = "image/jpeg"
 				}
-				origData, readErr := os.ReadFile(origPath)
-				origCleanup() // free immediately after reading
-				if readErr != nil {
-					log.Warn().Str("key", item.S3Key).Err(readErr).Msg("Skipping: failed to read original")
-					continue
+				if fr.MimeType != "" {
+					mimeType = fr.MimeType
 				}
-				mime := "image/jpeg"
-				if m, ok := media.SupportedImageExtensions[ext]; ok {
-					mime = m
-				}
-				thumbData, thumbMIME, thumbErr := s3util.GenerateThumbnailFromBytes(origData, mime, media.DefaultThumbnailMaxDimension)
-				if thumbErr != nil {
-					log.Warn().Str("key", item.S3Key).Err(thumbErr).Msg("Skipping: failed to generate thumbnail")
-					continue
-				}
-				parts = append(parts, &genai.Part{
-					InlineData: &genai.Blob{MIMEType: thumbMIME, Data: thumbData},
-				})
 			} else {
-				data, err := os.ReadFile(tmpPath)
-				cleanup() // free immediately after reading
-				if err != nil {
-					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to read")
-					continue
-				}
-				parts = append(parts, &genai.Part{
-					InlineData: &genai.Blob{MIMEType: "image/jpeg", Data: data},
-				})
-			}
-		} else if item.MediaType == "video" || media.IsVideo(ext) {
-			tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, item.S3Key)
-			if err != nil {
-				// Video download failed — fall back to thumbnail image.
 				keyParts := strings.SplitN(item.S3Key, "/", 2)
-				thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filepath.Base(item.S3Key), filepath.Ext(item.S3Key)))
-				thumbPath, thumbCleanup, thumbErr := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
-				if thumbErr != nil {
-					log.Warn().Str("key", item.S3Key).Err(thumbErr).Msg("Skipping: failed to download video/thumbnail")
+				thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filename, ext))
+				processedKey := fmt.Sprintf("%s/processed/%s%s", keyParts[0], strings.TrimSuffix(filename, ext), ".webp")
+				// Try processed first, then thumbnail
+				if head, _ := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &mediaBucket, Key: &processedKey}); head != nil {
+					useKey = processedKey
+					mimeType = "image/webp"
+				} else if head, _ := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &mediaBucket, Key: &thumbKey}); head != nil {
+					useKey = thumbKey
+				}
+			}
+
+			url, err := s3util.GeneratePresignedURL(ctx, presignClient, mediaBucket, useKey, 15*time.Minute)
+			if err != nil {
+				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to generate presigned URL for image")
+				continue
+			}
+			imgData, err := httputil.FetchURLToBytes(ctx, url)
+			if err != nil {
+				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to fetch image from presigned URL")
+				continue
+			}
+			parts = append(parts, &genai.Part{
+				InlineData: &genai.Blob{MIMEType: mimeType, Data: imgData},
+			})
+		} else if item.MediaType == "video" || media.IsVideo(ext) {
+			// Prefer processedKey (pre-compressed WebM) > originalKey.
+			useKey := item.S3Key
+			mimeType := "video/webm"
+			fileSize := fr.FileSize
+			if hasFileResult {
+				if fr.ProcessedKey != "" {
+					useKey = fr.ProcessedKey
+					mimeType = "video/webm"
+				}
+				if fr.MimeType != "" {
+					mimeType = fr.MimeType
+				}
+			} else {
+				keyParts := strings.SplitN(item.S3Key, "/", 2)
+				processedKey := fmt.Sprintf("%s/processed/%s.webm", keyParts[0], strings.TrimSuffix(filename, ext))
+				if head, _ := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &mediaBucket, Key: &processedKey}); head != nil && head.ContentLength != nil {
+					useKey = processedKey
+					fileSize = *head.ContentLength
+				} else if head, _ := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &mediaBucket, Key: &item.S3Key}); head != nil && head.ContentLength != nil {
+					fileSize = *head.ContentLength
+				}
+			}
+
+			url, err := s3util.GeneratePresignedURL(ctx, presignClient, mediaBucket, useKey, 15*time.Minute)
+			if err != nil {
+				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to generate presigned URL for video")
+				continue
+			}
+
+			if fileSize <= maxPresignedURLBytes {
+				// Within size limit — Gemini fetches from S3 via presigned URL (DDR-060).
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{MIMEType: mimeType, FileURI: url},
+				})
+			} else if genaiClient != nil {
+				// Video exceeds presigned URL size limit — download and upload via Gemini Files API.
+				tmpPath, tmpCleanup, err := httputil.FetchURLToFile(ctx, url)
+				if err != nil {
+					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video for Files API upload")
 					continue
 				}
-				data, _ := os.ReadFile(thumbPath)
-				thumbCleanup() // free immediately after reading
+				uploaded, err := ai.UploadVideoToGeminiFiles(ctx, genaiClient, tmpPath, mimeType)
+				tmpCleanup()
+				if err != nil {
+					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to upload video to Gemini Files API")
+					continue
+				}
 				parts = append(parts, &genai.Part{
-					InlineData: &genai.Blob{MIMEType: "image/jpeg", Data: data},
+					FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
 				})
 			} else {
+				// Fallback: download original and compress with CompressVideoForCaptions.
+				tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, useKey)
+				if err != nil {
+					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video")
+					continue
+				}
 				var videoMeta *media.VideoMetadata
 				if item.GPS != nil {
 					videoMeta = &media.VideoMetadata{
 						Latitude: item.GPS.Latitude, Longitude: item.GPS.Longitude, HasGPS: true,
 					}
 				}
-				// CompressVideoForCaptions reads tmpPath, so cleanup() must wait until after compression.
 				compressedPath, _, compCleanup, compErr := media.CompressVideoForCaptions(ctx, tmpPath, videoMeta)
-				cleanup() // original download no longer needed after compression
+				cleanup()
 				if compErr != nil {
-					log.Warn().Str("key", item.S3Key).Err(compErr).Msg("Skipping: video compression failed")
+					log.Warn().Str("key", useKey).Err(compErr).Msg("Skipping: video compression failed")
 					continue
 				}
 				data, readErr := os.ReadFile(compressedPath)
-				compCleanup() // free compressed file immediately after reading
+				compCleanup()
 				if readErr != nil {
-					log.Warn().Str("key", item.S3Key).Err(readErr).Msg("Skipping: failed to read compressed video")
+					log.Warn().Str("key", useKey).Err(readErr).Msg("Skipping: failed to read compressed video")
 					continue
 				}
 				parts = append(parts, &genai.Part{
@@ -411,6 +469,11 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 		return nil, fmt.Errorf("feedback: session store not configured")
 	}
 
+	genaiClient, err := ai.NewAIClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: failed to initialize AI client: %w", err)
+	}
+
 	// Load existing job to get the media key and sibling captions.
 	job, err := sessionStore.GetFBPrepJob(ctx, sessionID, jobID)
 	if err != nil || job == nil {
@@ -437,7 +500,7 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 		targetMediaItem.MediaType = "video"
 	}
 
-	parts, _, _, err := buildFBPrepMediaParts(ctx, []FBPrepMediaItem{targetMediaItem})
+	parts, _, _, err := buildFBPrepMediaParts(ctx, sessionID, []FBPrepMediaItem{targetMediaItem}, genaiClient)
 	if err != nil {
 		return nil, fmt.Errorf("feedback: failed to prepare media: %w", err)
 	}
@@ -458,11 +521,6 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 		strings.Join(siblingLines, "\n"), itemIndex, feedbackText, itemIndex,
 	)
 	parts = append(parts, &genai.Part{Text: prompt})
-
-	genaiClient, err := ai.NewAIClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("feedback: failed to initialize AI client: %w", err)
-	}
 
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{

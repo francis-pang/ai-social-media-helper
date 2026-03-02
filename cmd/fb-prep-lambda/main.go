@@ -14,9 +14,11 @@ import (
 )
 
 var (
-	s3Client     *s3.Client
-	mediaBucket  string
-	sessionStore *store.DynamoStore
+	s3Client         *s3.Client
+	presignClient    *s3.PresignClient
+	mediaBucket      string
+	sessionStore     *store.DynamoStore
+	fileProcessStore *store.FileProcessingStore
 )
 
 func init() {
@@ -26,11 +28,17 @@ func init() {
 	awsClients := bootstrap.InitAWS()
 	s3s := bootstrap.InitS3(awsClients.Config, "MEDIA_BUCKET_NAME")
 	s3Client = s3s.Client
+	presignClient = s3s.Presigner
 	mediaBucket = s3s.Bucket
 	sessionStore = bootstrap.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
 	bootstrap.LoadGeminiKey(awsClients.SSM)
 	bootstrap.LoadGCPServiceAccountKey(awsClients.SSM)
 	_ = ai.LoadGCPServiceAccount()
+
+	fpTableName := os.Getenv("FILE_PROCESSING_TABLE_NAME")
+	if fpTableName != "" {
+		fileProcessStore = store.NewFileProcessingStore(sessionStore.Client(), fpTableName)
+	}
 
 	bootstrap.StartupLog("fb-prep-lambda", initStart).
 		S3Bucket("mediaBucket", mediaBucket).

@@ -292,7 +292,7 @@ func buildTriageBatchRequest(ctx context.Context, client *genai.Client, files []
 					continue
 				}
 				cleanupFuncs = append(cleanupFuncs, tmpCleanup)
-				uploaded, err := uploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
+				uploaded, err := UploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
 				if err != nil {
 					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video to Gemini Files API, skipping")
 					continue
@@ -486,7 +486,7 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*me
 				}
 				cleanupFuncs = append(cleanupFuncs, tmpCleanup)
 
-				uploaded, err := uploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
+				uploaded, err := UploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
 				if err != nil {
 					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video to Gemini Files API, skipping")
 					continue
@@ -909,11 +909,11 @@ func downloadToBytes(ctx context.Context, url string) ([]byte, error) {
 	return data, nil
 }
 
-// uploadVideoToGeminiFiles uploads a local video file to the Gemini Files API
+// UploadVideoToGeminiFiles uploads a local video file to the Gemini Files API
 // and waits for it to finish processing. Unlike uploadVideoFile (in selection.go)
 // which hardcodes video/webm, this accepts a custom MIME type for pre-compressed
 // videos downloaded from S3.
-func uploadVideoToGeminiFiles(ctx context.Context, client *genai.Client, localPath, mimeType string) (*genai.File, error) {
+func UploadVideoToGeminiFiles(ctx context.Context, client *genai.Client, localPath, mimeType string) (*genai.File, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
