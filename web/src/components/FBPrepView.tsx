@@ -378,6 +378,8 @@ export function FBPrepView() {
         completedCount={itemCount}
         totalCount={totalCount}
         startedAt={job?.createdAt ?? undefined}
+        inputTokens={job?.inputTokens}
+        outputTokens={job?.outputTokens}
         onCancel={() => navigateBack()}
       />
     );

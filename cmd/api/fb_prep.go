@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/fpang/ai-social-media-helper/internal/jobs"
 	"github.com/fpang/ai-social-media-helper/internal/store"
 	"github.com/rs/zerolog/log"
@@ -80,20 +82,39 @@ func handleFBPrepStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch to FB Prep Lambda asynchronously.
-	payload := map[string]interface{}{
-		"type":        "fb-prep",
+	// Dispatch to FBPrepPipeline Step Functions (DDR-082).
+	if sfnClient == nil || fbPrepSfnArn == "" {
+		log.Error().Str("jobId", jobID).Msg("FB Prep pipeline not configured")
+		errDetail := "fb prep processing is not available (pipeline not configured)"
+		if sessionStore != nil {
+			errJob := &store.FBPrepJob{ID: jobID, Status: "error", Error: errDetail}
+			sessionStore.PutFBPrepJob(context.Background(), req.SessionID, errJob)
+		}
+		httpError(w, http.StatusInternalServerError, errDetail)
+		return
+	}
+	sfnInput, err := json.Marshal(map[string]interface{}{
 		"sessionId":   req.SessionID,
-		"jobId":      jobID,
-		"mediaKeys":  keys,
+		"jobId":       jobID,
+		"mediaKeys":   keys,
 		"economyMode": req.EconomyMode,
+	})
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "failed to marshal input")
+		return
 	}
 	log.Info().
 		Str("jobId", jobID).
 		Str("sessionId", req.SessionID).
-		Msg("Job dispatched to fb-prep-lambda")
-	if err := invokeAsync(context.Background(), fbPrepLambdaArn, payload); err != nil {
-		log.Error().Err(err).Str("jobId", jobID).Str("lambdaArn", fbPrepLambdaArn).Msg("Failed to invoke fb-prep-lambda")
+		Str("sfnArn", fbPrepSfnArn).
+		Msg("Job dispatched to FBPrep Pipeline")
+	_, err = sfnClient.StartExecution(context.Background(), &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(fbPrepSfnArn),
+		Input:           aws.String(string(sfnInput)),
+		Name:            aws.String(jobID),
+	})
+	if err != nil {
+		log.Error().Err(err).Str("jobId", jobID).Str("sfnArn", fbPrepSfnArn).Msg("Failed to start fb prep pipeline")
 		errDetail := fmt.Sprintf("failed to start processing: %v", err)
 		if sessionStore != nil {
 			errJob := &store.FBPrepJob{ID: jobID, Status: "error", Error: errDetail}
@@ -163,9 +184,11 @@ func handleFBPrepResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	log.Debug().Str("jobId", jobID).Str("status", job.Status).Msg("FB prep job found in DynamoDB")
 
 	resp := map[string]interface{}{
-		"id":        job.ID,
-		"status":    job.Status,
-		"createdAt": job.CreatedAt,
+		"id":           job.ID,
+		"status":       job.Status,
+		"createdAt":    job.CreatedAt,
+		"inputTokens":  job.InputTokens,
+		"outputTokens": job.OutputTokens,
 	}
 	if len(job.Items) > 0 {
 		resp["items"] = job.Items

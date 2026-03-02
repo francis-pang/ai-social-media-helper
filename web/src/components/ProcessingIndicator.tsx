@@ -33,6 +33,8 @@ interface ProcessingIndicatorProps {
   completedCount?: number;
   totalCount?: number;
   startedAt?: string;
+  inputTokens?: number;
+  outputTokens?: number;
   /** Per-file processing status (DDR-058). */
   items?: ProcessingItem[];
   /** Triage job ID for raw CloudWatch log fetching (DDR-076). */
@@ -583,6 +585,93 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
                 {elapsedStr}
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* Resource Usage */}
+        <div class="sidebar-panel" style={{ marginTop: "1rem" }}>
+          <h3>Resource Usage</h3>
+
+          <div
+            style={{
+              fontSize: "0.8rem",
+              color: "var(--color-text-secondary)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.75rem",
+            }}
+          >
+            {/* Gemini Tokens */}
+            <div>
+              <span style={{ fontWeight: 500 }}>Gemini Tokens: </span>
+              {props.inputTokens != null || props.outputTokens != null ? (
+                <span>
+                  {((props.inputTokens ?? 0) + (props.outputTokens ?? 0)).toLocaleString()}
+                  <span
+                    style={{
+                      fontSize: "0.7rem",
+                      color: "var(--color-text-secondary)",
+                      marginLeft: "0.25rem",
+                    }}
+                  >
+                    ({props.inputTokens?.toLocaleString() ?? 0} in / {props.outputTokens?.toLocaleString() ?? 0} out)
+                  </span>
+                </span>
+              ) : (
+                <span style={{ fontStyle: "italic" }}>Estimating...</span>
+              )}
+            </div>
+
+            {/* Token Budget */}
+            {(() => {
+              const total = (props.inputTokens ?? 0) + (props.outputTokens ?? 0);
+              const budget = Math.max(props.totalCount ?? 1, 1) * 8000;
+              const pct = Math.min(Math.round((total / budget) * 100), 100);
+              const hasData = props.inputTokens != null || props.outputTokens != null;
+              return (
+                <div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginBottom: "0.25rem",
+                    }}
+                  >
+                    <span style={{ fontWeight: 500 }}>Token Budget</span>
+                    <span>{hasData ? `${pct}%` : "—"}</span>
+                  </div>
+                  <div
+                    style={{
+                      width: "100%",
+                      height: "0.5rem",
+                      background: "var(--color-surface-hover)",
+                      borderRadius: "4px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: hasData ? `${pct}%` : "0%",
+                        height: "100%",
+                        background: "var(--color-primary)",
+                        borderRadius: "4px",
+                        transition: "width 0.5s ease",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Items Processed */}
+            {props.totalCount != null && props.totalCount > 0 && (
+              <div>
+                <span style={{ fontWeight: 500 }}>Items Processed: </span>
+                <span>
+                  {props.completedCount ?? 0} / {props.totalCount}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 

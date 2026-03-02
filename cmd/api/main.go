@@ -122,6 +122,7 @@ func init() {
 	enhancementSfnArn = os.Getenv("ENHANCEMENT_STATE_MACHINE_ARN")
 	triageSfnArn = os.Getenv("TRIAGE_STATE_MACHINE_ARN")
 	publishSfnArn = os.Getenv("PUBLISH_STATE_MACHINE_ARN")
+	fbPrepSfnArn = os.Getenv("FB_PREP_SFN_ARN")
 	if selectionSfnArn == "" || enhancementSfnArn == "" {
 		log.Warn().Msg("Selection/Enhancement state machine ARNs not set — Step Functions dispatch disabled")
 	}
@@ -213,6 +214,7 @@ func init() {
 		StateMachine("enhancementPipeline", enhancementSfnArn).
 		StateMachine("triagePipeline", triageSfnArn).
 		StateMachine("publishPipeline", publishSfnArn).
+		StateMachine("fbPrepPipeline", fbPrepSfnArn).
 		LambdaFunc("descriptionLambda", descriptionLambdaArn).
 		LambdaFunc("downloadLambda", downloadLambdaArn).
 		LambdaFunc("enhanceLambda", enhanceLambdaArn).

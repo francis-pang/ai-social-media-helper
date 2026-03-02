@@ -39,6 +39,7 @@ var (
 	enhancementSfnArn string
 	triageSfnArn      string // DDR-052: Triage Pipeline
 	publishSfnArn     string // DDR-052: Publish Pipeline
+	fbPrepSfnArn      string // DDR-082: FBPrep Pipeline
 
 	// Instagram client for publishing (DDR-040).
 	// nil if Instagram credentials are not configured (publishing disabled).

@@ -30,10 +30,13 @@ type fbPrepResponseItem struct {
 }
 
 func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr error) {
-	// Check for feedback event type before attempting batch normalization.
+	// Check for special event types before attempting batch normalization.
 	if m, ok := event.(map[string]interface{}); ok {
 		if t, _ := m["type"].(string); t == "fb-prep-feedback" {
 			return handleFeedback(ctx, m)
+		}
+		if t, _ := m["type"].(string); t == "fb-prep-collect-batch" {
+			return handleCollectBatch(ctx, m)
 		}
 	}
 
@@ -66,6 +69,58 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 			})
 		}
 	}()
+
+	// Economy mode: submit to Gemini Batch API (FBPrepPipeline SFN polls to completion, DDR-082).
+	if input.EconomyMode {
+		parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.MediaItems)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare media: %w", err)
+		}
+		prompt := buildFBPrepPrompt(metadataCtx)
+		parts = append(parts, &genai.Part{Text: prompt})
+		config := &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Parts: []*genai.Part{{Text: assets.FBPrepSystemPrompt}},
+			},
+			Tools: []*genai.Tool{{GoogleMaps: &genai.GoogleMaps{}}},
+		}
+		modelName := ai.GetModelName()
+		now := time.Now().UTC().Format(time.RFC3339)
+		jobID := input.JobID
+		if jobID == "" {
+			jobID = "fbprep-" + uuid.New().String()[:8]
+		}
+		req := &genai.InlinedRequest{
+			Model:    modelName,
+			Contents: []*genai.Content{{Role: "user", Parts: parts}},
+			Config:   config,
+		}
+		batchJobID, err := ai.SubmitGeminiBatch(ctx, genaiClient, modelName, []*genai.InlinedRequest{req})
+		if err != nil {
+			return nil, fmt.Errorf("failed to submit batch job: %w", err)
+		}
+		if sessionStore != nil {
+			_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
+				ID:          jobID,
+				Status:      "pending",
+				BatchJobID:  batchJobID,
+				MediaKeys:   s3Keys,
+				EconomyMode: true,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			})
+		}
+		log.Info().
+			Str("sessionId", input.SessionID).
+			Str("batchJobId", batchJobID).
+			Int("mediaCount", len(input.MediaItems)).
+			Msg("FB prep batch job submitted (economy mode)")
+		return &FBPrepOutput{
+			SessionID:  input.SessionID,
+			Status:     "pending",
+			BatchJobID: batchJobID,
+		}, nil
+	}
 
 	// Build media parts and metadata context
 	parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.MediaItems)
@@ -104,6 +159,12 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 		return nil, fmt.Errorf("received empty response from Gemini")
 	}
 
+	var inputTokens, outputTokens int
+	if resp != nil && resp.UsageMetadata != nil {
+		inputTokens = int(resp.UsageMetadata.PromptTokenCount)
+		outputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+	}
+
 	items, err := parseFBPrepResponse(responseText, s3Keys)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
@@ -112,11 +173,14 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 	// Store complete job
 	if sessionStore != nil {
 		_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
-			ID:        jobID,
-			Status:    "complete",
-			Items:     items,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:           jobID,
+			Status:       "complete",
+			Items:        items,
+			MediaKeys:    s3Keys,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		})
 	}
 
@@ -454,4 +518,89 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 		SessionID: sessionID,
 		Status:    "complete",
 	}, nil
+}
+
+// handleCollectBatch reads the completed Gemini Batch job, parses results, and writes
+// the final completed FBPrepJob to DynamoDB (DDR-082: economy mode via FBPrepPipeline SFN).
+func handleCollectBatch(ctx context.Context, m map[string]interface{}) (*FBPrepOutput, error) {
+	sessionID, _ := m["sessionId"].(string)
+	jobID, _ := m["jobId"].(string)
+	batchJobID, _ := m["batchJobId"].(string)
+
+	if sessionID == "" || jobID == "" || batchJobID == "" {
+		return nil, fmt.Errorf("collect-batch: sessionId, jobId, and batchJobId are required")
+	}
+	if sessionStore == nil {
+		return nil, fmt.Errorf("collect-batch: session store not configured")
+	}
+
+	// Load existing job to get MediaKeys and CreatedAt.
+	job, err := sessionStore.GetFBPrepJob(ctx, sessionID, jobID)
+	if err != nil || job == nil {
+		return nil, fmt.Errorf("collect-batch: job not found: %w", err)
+	}
+
+	collectClient, err := ai.NewAIClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("collect-batch: failed to initialize AI client: %w", err)
+	}
+
+	batchStatus, err := ai.CheckGeminiBatch(ctx, collectClient, batchJobID)
+	if err != nil {
+		return nil, fmt.Errorf("collect-batch: failed to check batch: %w", err)
+	}
+	if batchStatus.State != "JOB_STATE_SUCCEEDED" {
+		return nil, fmt.Errorf("collect-batch: unexpected batch state %s", batchStatus.State)
+	}
+	if len(batchStatus.Results) == 0 {
+		return nil, fmt.Errorf("collect-batch: no results in batch response")
+	}
+
+	result := batchStatus.Results[0]
+	if result.Error != "" {
+		return nil, fmt.Errorf("collect-batch: batch request failed: %s", result.Error)
+	}
+	if result.Response == nil {
+		return nil, fmt.Errorf("collect-batch: nil response in batch result")
+	}
+
+	responseText := result.Response.Text()
+	if responseText == "" {
+		return nil, fmt.Errorf("collect-batch: empty response text")
+	}
+
+	var inputTokens, outputTokens int
+	if result.Response.UsageMetadata != nil {
+		inputTokens = int(result.Response.UsageMetadata.PromptTokenCount)
+		outputTokens = int(result.Response.UsageMetadata.CandidatesTokenCount)
+	}
+
+	items, err := parseFBPrepResponse(responseText, job.MediaKeys)
+	if err != nil {
+		return nil, fmt.Errorf("collect-batch: failed to parse response: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	_ = sessionStore.PutFBPrepJob(ctx, sessionID, &store.FBPrepJob{
+		ID:           jobID,
+		Status:       "complete",
+		Items:        items,
+		MediaKeys:    job.MediaKeys,
+		BatchJobID:   batchJobID,
+		EconomyMode:  true,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		CreatedAt:    job.CreatedAt,
+		UpdatedAt:    now,
+	})
+
+	log.Info().
+		Str("sessionId", sessionID).
+		Str("jobId", jobID).
+		Int("itemCount", len(items)).
+		Int("inputTokens", inputTokens).
+		Int("outputTokens", outputTokens).
+		Msg("FB prep batch collection complete")
+
+	return &FBPrepOutput{SessionID: sessionID, Status: "complete"}, nil
 }

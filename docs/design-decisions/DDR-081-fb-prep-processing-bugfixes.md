@@ -26,7 +26,7 @@ With `/tmp` at 1024 MB and 68 media items averaging ~15–50 MB each (after thum
 
 In economy mode, the Lambda submits to Gemini Batch API, writes `batchJobId` + `status: "pending"` to DynamoDB, and returns. Other workers (triage, description, selection) return the `batchJobId` to a Step Functions state machine, which uses the `gemini-batch-poll` Lambda to wait for completion. FB Prep was invoked directly (no SFN) and has no equivalent polling mechanism. The Gemini batch job completes (after ~10 min) but nothing reads the result or updates DynamoDB.
 
-**Fix:** Remove the economy mode code path in the FB Prep Lambda — always use synchronous `GenerateContent`. Real-time mode completes in 1–4 minutes for typical batch sizes. The global economy mode toggle continues to function for other features.
+**Fix:** Replaced direct `invokeAsync` with Step Functions dispatch via a new `FBPrepPipeline` SFN. Economy mode now correctly submits to Gemini Batch and waits for completion via the `GeminiBatchPollPipeline`. See DDR-082 for the full architecture.
 
 ### 3. DynamoDB Never Reaches Error State
 
@@ -64,8 +64,8 @@ Apply all six fixes as described. No new infrastructure required.
 ## Affected Files
 
 - `cmd/fb-prep-lambda/handler.go` — defer fix, remove economy mode, deferred error recorder
-- `cmd/api/fb_prep.go` — return `createdAt` in results
-- `web/src/types/api.ts` — add `createdAt` to `FBPrepJob`
-- `web/src/components/FBPrepView.tsx` — polling catch, timeout, pass `createdAt`
+- `cmd/api/fb_prep.go` — return `createdAt` in results; further updated in DDR-082 (SFN dispatch, token usage)
+- `web/src/types/api.ts` — add `createdAt` to `FBPrepJob`; further updated in DDR-082 (`inputTokens`, `outputTokens`)
+- `web/src/components/FBPrepView.tsx` — polling catch, timeout, pass `createdAt`; further updated in DDR-082 (pass token props)
 - `web/src/hooks/useElapsedTimer.ts` — accept optional `startedAtMs`
-- `web/src/components/ProcessingIndicator.tsx` — use `startedAt`, remove fake Resource Usage
+- `web/src/components/ProcessingIndicator.tsx` — use `startedAt`, remove fake Resource Usage; further updated in DDR-082 (real Resource Usage panel)

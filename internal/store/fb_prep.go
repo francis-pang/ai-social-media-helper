@@ -9,8 +9,10 @@ type FBPrepJob struct {
 	EconomyMode bool         `json:"economyMode,omitempty" dynamodbav:"economyMode,omitempty"`
 	MediaKeys   []string     `json:"mediaKeys,omitempty" dynamodbav:"mediaKeys,omitempty"`
 	Items       []FBPrepItem `json:"items,omitempty" dynamodbav:"items,omitempty"`
-	BatchJobID  string       `json:"batchJobId,omitempty" dynamodbav:"batchJobId,omitempty"`
-	CreatedAt   string       `json:"createdAt" dynamodbav:"createdAt"`
+	BatchJobID   string       `json:"batchJobId,omitempty"  dynamodbav:"batchJobId,omitempty"`
+	InputTokens  int          `json:"inputTokens,omitempty"  dynamodbav:"inputTokens,omitempty"`
+	OutputTokens int          `json:"outputTokens,omitempty" dynamodbav:"outputTokens,omitempty"`
+	CreatedAt    string       `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt   string       `json:"updatedAt" dynamodbav:"updatedAt"`
 	Error       string       `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }

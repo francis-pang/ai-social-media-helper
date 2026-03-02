@@ -474,6 +474,8 @@ export interface FBPrepJob {
   session_id?: string;
   status: string;
   createdAt?: string;
+  inputTokens?: number;
+  outputTokens?: number;
   items?: FBPrepItem[];
   error?: string;
 }
