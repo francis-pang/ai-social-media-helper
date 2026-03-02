@@ -268,7 +268,7 @@ jobs:
             START_RESULT=""
             local new_exec_id
             if new_exec_id=$(aws codepipeline start-pipeline-execution \
-              --pipeline-name "$pipeline_name" \
+              --name "$pipeline_name" \
               --query 'pipelineExecutionId' \
               --output text); then
               echo "::notice::$pipeline_name: started execution $new_exec_id"
