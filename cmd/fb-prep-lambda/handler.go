@@ -88,7 +88,7 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 			},
 			Tools: []*genai.Tool{{GoogleMaps: &genai.GoogleMaps{}}},
 		}
-		modelName := ai.GetModelName()
+		modelName := ai.GetBatchModelName()
 		now := time.Now().UTC().Format(time.RFC3339)
 		jobID := input.JobID
 		if jobID == "" {

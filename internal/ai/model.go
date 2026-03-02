@@ -32,11 +32,18 @@ const (
 	ModelGemini3ProImage = "gemini-3-pro-image-preview"
 )
 
-// DefaultModelName is the default Gemini model to use.
+// DefaultModelName is the default Gemini model to use for real-time inference.
 // Can be overridden via GEMINI_MODEL environment variable.
 const DefaultModelName = ModelGemini3FlashPreview
 
-// GetModelName returns the Gemini model to use, resolved from:
+// DefaultBatchModelName is the default model for Vertex AI batch prediction jobs.
+// gemini-3-flash-preview does not support Vertex AI batch prediction and is only
+// available via the global endpoint (not regional). gemini-2.5-flash supports both
+// batch prediction and regional endpoints (us-east4, etc.).
+// Can be overridden via GEMINI_BATCH_MODEL environment variable.
+const DefaultBatchModelName = ModelGemini25Flash
+
+// GetModelName returns the Gemini model to use for real-time inference, resolved from:
 // 1. GEMINI_MODEL environment variable (if set)
 // 2. Default: gemini-3-flash-preview (best for speed + intelligence)
 //
@@ -52,4 +59,17 @@ func GetModelName() string {
 		return env
 	}
 	return DefaultModelName
+}
+
+// GetBatchModelName returns the Gemini model to use for Vertex AI batch prediction
+// jobs, resolved from:
+// 1. GEMINI_BATCH_MODEL environment variable (if set)
+// 2. Default: gemini-2.5-flash (supports Vertex AI batch + regional endpoints)
+//
+// Note: gemini-3-flash-preview does NOT support Vertex AI batch prediction.
+func GetBatchModelName() string {
+	if env := os.Getenv("GEMINI_BATCH_MODEL"); env != "" {
+		return env
+	}
+	return DefaultBatchModelName
 }
