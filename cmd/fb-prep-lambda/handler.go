@@ -82,11 +82,12 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 		}
 		prompt := buildFBPrepPrompt(metadataCtx)
 		parts = append(parts, &genai.Part{Text: prompt})
+		// GoogleMaps tool is not supported in Vertex AI batch prediction — omit it.
+		// The JSONL format rejects empty struct fields (googleMaps: {}) at import time.
 		config := &genai.GenerateContentConfig{
 			SystemInstruction: &genai.Content{
 				Parts: []*genai.Part{{Text: assets.FBPrepSystemPrompt}},
 			},
-			Tools: []*genai.Tool{{GoogleMaps: &genai.GoogleMaps{}}},
 		}
 		modelName := ai.GetBatchModelName()
 		now := time.Now().UTC().Format(time.RFC3339)
