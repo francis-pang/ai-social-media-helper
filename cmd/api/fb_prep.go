@@ -163,8 +163,9 @@ func handleFBPrepResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	log.Debug().Str("jobId", jobID).Str("status", job.Status).Msg("FB prep job found in DynamoDB")
 
 	resp := map[string]interface{}{
-		"id":     job.ID,
-		"status": job.Status,
+		"id":        job.ID,
+		"status":    job.Status,
+		"createdAt": job.CreatedAt,
 	}
 	if len(job.Items) > 0 {
 		resp["items"] = job.Items

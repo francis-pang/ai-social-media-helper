@@ -32,6 +32,7 @@ interface ProcessingIndicatorProps {
   fileCount?: number;
   completedCount?: number;
   totalCount?: number;
+  startedAt?: string;
   /** Per-file processing status (DDR-058). */
   items?: ProcessingItem[];
   /** Triage job ID for raw CloudWatch log fetching (DDR-076). */
@@ -101,7 +102,8 @@ function nowTimestamp(): string {
 // ---------------------------------------------------------------------------
 
 export function ProcessingIndicator(props: ProcessingIndicatorProps) {
-  const elapsed = useElapsedTimer();
+  const startedAtMs = props.startedAt ? new Date(props.startedAt).getTime() : undefined;
+  const elapsed = useElapsedTimer(startedAtMs);
   const elapsedStr = formatElapsed(elapsed);
 
   const [logsExpanded, setLogsExpanded] = useState(true);
@@ -584,61 +586,6 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
           </div>
         </div>
 
-        {/* Resource Usage */}
-        <div class="sidebar-panel">
-          <h3>Resource Usage</h3>
-
-          <div
-            style={{
-              fontSize: "0.8rem",
-              color: "var(--color-text-secondary)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "0.75rem",
-            }}
-          >
-            <div>
-              <span style={{ fontWeight: 500 }}>Gemini Tokens: </span>
-              <span style={{ fontStyle: "italic" }}>Estimating...</span>
-            </div>
-
-            <div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  marginBottom: "0.25rem",
-                }}
-              >
-                <span style={{ fontWeight: 500 }}>Token Budget</span>
-                <span>60%</span>
-              </div>
-              <div
-                style={{
-                  width: "100%",
-                  height: "0.5rem",
-                  background: "var(--color-surface-hover)",
-                  borderRadius: "4px",
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    width: "60%",
-                    height: "100%",
-                    background: "var(--color-primary)",
-                    borderRadius: "4px",
-                  }}
-                />
-              </div>
-            </div>
-
-            <div>
-              <span style={{ fontWeight: 500 }}>S3 Bandwidth: </span>
-              <span style={{ fontStyle: "italic" }}>Calculating...</span>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

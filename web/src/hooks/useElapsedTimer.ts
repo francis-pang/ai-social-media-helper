@@ -6,17 +6,22 @@
  */
 import { useState, useEffect } from "preact/hooks";
 
-/** Hook that returns elapsed seconds since the component mounted. */
-export function useElapsedTimer(): number {
-  const [elapsed, setElapsed] = useState(0);
+/** Hook that returns elapsed seconds since mount, or since a given start time. */
+export function useElapsedTimer(startedAtMs?: number): number {
+  const [elapsed, setElapsed] = useState(
+    startedAtMs != null ? Math.floor((Date.now() - startedAtMs) / 1000) : 0
+  );
 
   useEffect(() => {
-    const start = Date.now();
     const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
+      setElapsed(
+        startedAtMs != null
+          ? Math.floor((Date.now() - startedAtMs) / 1000)
+          : (prev) => prev + 1
+      );
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [startedAtMs]);
 
   return elapsed;
 }

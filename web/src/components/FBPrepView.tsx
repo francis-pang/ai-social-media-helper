@@ -53,7 +53,7 @@ function pollResults(id: string, sessionId: string) {
   createPoller({
     fn: () => getFBPrepResults(id, sessionId),
     intervalMs: 2000,
-    timeoutMs: 60000,
+    timeoutMs: 720000,
     immediate: true,
     isDone: (res) => res.status === "complete" || res.status === "error",
     onPoll: (res) => {
@@ -63,12 +63,17 @@ function pollResults(id: string, sessionId: string) {
       error.value = e instanceof Error ? e.message : "Failed to poll results";
       return false;
     },
-  }).promise.then((res) => {
-    if (res.status === "error") {
-      error.value = res.error ?? "Processing failed";
-    }
-    feedbackLoading.value = false;
-  });
+  }).promise
+    .then((res) => {
+      if (res.status === "error") {
+        error.value = res.error ?? "Processing failed";
+      }
+      feedbackLoading.value = false;
+    })
+    .catch((err) => {
+      error.value = err instanceof Error ? err.message : "Processing timed out";
+      feedbackLoading.value = false;
+    });
 }
 
 // --- Copy ---
@@ -372,6 +377,7 @@ export function FBPrepView() {
         pollIntervalMs={2000}
         completedCount={itemCount}
         totalCount={totalCount}
+        startedAt={job?.createdAt ?? undefined}
         onCancel={() => navigateBack()}
       />
     );

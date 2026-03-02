@@ -29,7 +29,7 @@ type fbPrepResponseItem struct {
 	LocationConfidence string `json:"location_confidence"`
 }
 
-func handler(ctx context.Context, event interface{}) (*FBPrepOutput, error) {
+func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr error) {
 	// Check for feedback event type before attempting batch normalization.
 	if m, ok := event.(map[string]interface{}); ok {
 		if t, _ := m["type"].(string); t == "fb-prep-feedback" {
@@ -48,16 +48,24 @@ func handler(ctx context.Context, event interface{}) (*FBPrepOutput, error) {
 		return nil, fmt.Errorf("media_items cannot be empty")
 	}
 
-	// Default economy mode to true
-	economyMode := true
-	if !input.EconomyMode {
-		economyMode = false
-	}
-
 	genaiClient, err := ai.NewAIClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize AI client: %w", err)
 	}
+
+	// Always update DynamoDB to "error" if we return a non-nil error.
+	// Covers both the initial invocation and AWS async retries (DDR-081).
+	defer func() {
+		if retErr != nil && sessionStore != nil && input != nil {
+			now := time.Now().UTC().Format(time.RFC3339)
+			_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
+				ID:        input.JobID,
+				Status:    "error",
+				Error:     retErr.Error(),
+				UpdatedAt: now,
+			})
+		}
+	}()
 
 	// Build media parts and metadata context
 	parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.MediaItems)
@@ -84,46 +92,7 @@ func handler(ctx context.Context, event interface{}) (*FBPrepOutput, error) {
 		jobID = "fbprep-" + uuid.New().String()[:8]
 	}
 
-	if economyMode {
-		// Submit batch job
-		req := &genai.InlinedRequest{
-			Model: modelName,
-			Contents: []*genai.Content{
-				{Role: "user", Parts: parts},
-			},
-			Config: config,
-		}
-		batchJobID, err := ai.SubmitGeminiBatch(ctx, genaiClient, modelName, []*genai.InlinedRequest{req})
-		if err != nil {
-			return nil, fmt.Errorf("failed to submit batch job: %w", err)
-		}
-
-		// Store pending job
-		if sessionStore != nil {
-			_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
-				ID:         jobID,
-				Status:     "pending",
-				BatchJobID: batchJobID,
-				MediaKeys:  s3Keys,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			})
-		}
-
-		log.Info().
-			Str("sessionId", input.SessionID).
-			Str("batchJobId", batchJobID).
-			Int("mediaCount", len(input.MediaItems)).
-			Msg("FB prep batch job submitted")
-
-		return &FBPrepOutput{
-			SessionID:  input.SessionID,
-			Status:     "pending",
-			BatchJobID: batchJobID,
-		}, nil
-	}
-
-	// Real-time generation
+	// Real-time generation (economy mode removed — FB Prep has no SFN poller, DDR-081)
 	contents := []*genai.Content{{Role: "user", Parts: parts}}
 	resp, err := genaiClient.Models.GenerateContent(ctx, modelName, contents, config)
 	if err != nil {
@@ -172,20 +141,20 @@ func buildFBPrepMediaParts(ctx context.Context, mediaItems []FBPrepMediaItem) ([
 		ext := strings.ToLower(filepath.Ext(item.S3Key))
 
 		if item.MediaType == "image" || media.IsImage(ext) {
-			// Download thumbnail
+			// Try pre-generated thumbnail first; fall back to download + generate.
 			keyParts := strings.SplitN(item.S3Key, "/", 2)
 			thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filepath.Base(item.S3Key), filepath.Ext(item.S3Key)))
 
 			tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
 			if err != nil {
-				// Fallback: download original and generate thumbnail
+				// Fallback: download original and generate thumbnail in-memory.
 				origPath, origCleanup, origErr := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, item.S3Key)
 				if origErr != nil {
 					log.Warn().Str("key", item.S3Key).Err(origErr).Msg("Skipping: failed to download")
 					continue
 				}
-				defer origCleanup()
 				origData, readErr := os.ReadFile(origPath)
+				origCleanup() // free immediately after reading
 				if readErr != nil {
 					log.Warn().Str("key", item.S3Key).Err(readErr).Msg("Skipping: failed to read original")
 					continue
@@ -203,8 +172,8 @@ func buildFBPrepMediaParts(ctx context.Context, mediaItems []FBPrepMediaItem) ([
 					InlineData: &genai.Blob{MIMEType: thumbMIME, Data: thumbData},
 				})
 			} else {
-				defer cleanup()
 				data, err := os.ReadFile(tmpPath)
+				cleanup() // free immediately after reading
 				if err != nil {
 					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to read")
 					continue
@@ -214,40 +183,39 @@ func buildFBPrepMediaParts(ctx context.Context, mediaItems []FBPrepMediaItem) ([
 				})
 			}
 		} else if item.MediaType == "video" || media.IsVideo(ext) {
-			// Download and compress video
 			tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, item.S3Key)
 			if err != nil {
-				// Try thumbnail as fallback
+				// Video download failed — fall back to thumbnail image.
 				keyParts := strings.SplitN(item.S3Key, "/", 2)
 				thumbKey := fmt.Sprintf("%s/thumbnails/%s.jpg", keyParts[0], strings.TrimSuffix(filepath.Base(item.S3Key), filepath.Ext(item.S3Key)))
-				tmpPath, cleanup, err = s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
-				if err != nil {
-					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to download video/thumbnail")
+				thumbPath, thumbCleanup, thumbErr := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, thumbKey)
+				if thumbErr != nil {
+					log.Warn().Str("key", item.S3Key).Err(thumbErr).Msg("Skipping: failed to download video/thumbnail")
 					continue
 				}
-				defer cleanup()
-				data, _ := os.ReadFile(tmpPath)
+				data, _ := os.ReadFile(thumbPath)
+				thumbCleanup() // free immediately after reading
 				parts = append(parts, &genai.Part{
 					InlineData: &genai.Blob{MIMEType: "image/jpeg", Data: data},
 				})
 			} else {
-				defer cleanup()
 				var videoMeta *media.VideoMetadata
 				if item.GPS != nil {
 					videoMeta = &media.VideoMetadata{
 						Latitude: item.GPS.Latitude, Longitude: item.GPS.Longitude, HasGPS: true,
 					}
 				}
-				compressedPath, _, compCleanup, err := media.CompressVideoForCaptions(ctx, tmpPath, videoMeta)
-				if err != nil {
-					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: video compression failed")
+				// CompressVideoForCaptions reads tmpPath, so cleanup() must wait until after compression.
+				compressedPath, _, compCleanup, compErr := media.CompressVideoForCaptions(ctx, tmpPath, videoMeta)
+				cleanup() // original download no longer needed after compression
+				if compErr != nil {
+					log.Warn().Str("key", item.S3Key).Err(compErr).Msg("Skipping: video compression failed")
 					continue
 				}
-				defer compCleanup()
-
-				data, err := os.ReadFile(compressedPath)
-				if err != nil {
-					log.Warn().Str("key", item.S3Key).Err(err).Msg("Skipping: failed to read compressed video")
+				data, readErr := os.ReadFile(compressedPath)
+				compCleanup() // free compressed file immediately after reading
+				if readErr != nil {
+					log.Warn().Str("key", item.S3Key).Err(readErr).Msg("Skipping: failed to read compressed video")
 					continue
 				}
 				parts = append(parts, &genai.Part{
