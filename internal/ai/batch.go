@@ -239,10 +239,20 @@ func SubmitGeminiBatch(ctx context.Context, client *genai.Client, model string, 
 		}
 
 		outputPrefix := fmt.Sprintf("gs://%s/batch-output/", bucket)
+		// Extract the UUID from the input URI to use as the job display name.
+		// Vertex AI requires display_name to be set on batch prediction jobs.
+		jobDisplayName := fmt.Sprintf("batch-%s", uuid.New().String())
+		if parts := strings.Split(inputURI, "/"); len(parts) > 0 {
+			last := parts[len(parts)-1]
+			if name := strings.TrimSuffix(last, ".jsonl"); name != "" {
+				jobDisplayName = "batch-" + name
+			}
+		}
 		job, err := client.Batches.Create(ctx, model, &genai.BatchJobSource{
 			GCSURI: []string{inputURI},
 			Format: "jsonl",
 		}, &genai.CreateBatchJobConfig{
+			DisplayName: jobDisplayName,
 			Dest: &genai.BatchJobDestination{
 				Format: "jsonl",
 				GCSURI: outputPrefix,
