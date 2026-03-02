@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -231,4 +232,76 @@ func (s *FileProcessingStore) GetFileResultCount(ctx context.Context, sessionID,
 	}
 
 	return int(result.Count), nil
+}
+
+func (s *FileProcessingStore) PutSessionFileResult(ctx context.Context, sessionID string, result *FileResult) error {
+	pk := sessionID
+	sk := "file#" + result.Filename
+
+	start := time.Now()
+	item, err := attributevalue.MarshalMap(result)
+	if err != nil {
+		return fmt.Errorf("marshal session file result: %w", err)
+	}
+
+	item["PK"] = &types.AttributeValueMemberS{Value: pk}
+	item["SK"] = &types.AttributeValueMemberS{Value: sk}
+	item["expiresAt"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(fileProcessingExpiresAt(), 10)}
+
+	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: &s.tableName,
+		Item:      item,
+	})
+	duration := time.Since(start)
+	if err != nil {
+		log.Debug().Err(err).Str("pk", pk).Str("sk", sk).Dur("duration", duration).Msg("PutSessionFileResult: DynamoDB PutItem failed")
+		return fmt.Errorf("PutItem session file result PK=%s SK=%s: %w", pk, sk, err)
+	}
+	log.Debug().Str("pk", pk).Str("sk", sk).Str("status", result.Status).Dur("duration", duration).Msg("PutSessionFileResult: file result persisted")
+	return nil
+}
+
+func (s *FileProcessingStore) GetSessionFileResults(ctx context.Context, sessionID string) ([]FileResult, error) {
+	pk := sessionID
+
+	start := time.Now()
+	input := &dynamodb.QueryInput{
+		TableName:              &s.tableName,
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :skPrefix)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk":       &types.AttributeValueMemberS{Value: pk},
+			":skPrefix": &types.AttributeValueMemberS{Value: "file#"},
+		},
+	}
+
+	var allItems []map[string]types.AttributeValue
+	for {
+		result, err := s.client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("Query session file results PK=%s: %w", pk, err)
+		}
+		allItems = append(allItems, result.Items...)
+		if result.LastEvaluatedKey == nil {
+			break
+		}
+		input.ExclusiveStartKey = result.LastEvaluatedKey
+	}
+
+	duration := time.Since(start)
+	results := make([]FileResult, 0, len(allItems))
+	for _, item := range allItems {
+		var fr FileResult
+		if err := attributevalue.UnmarshalMap(item, &fr); err != nil {
+			log.Warn().Err(err).Str("pk", pk).Msg("Failed to unmarshal session file result, skipping")
+			continue
+		}
+		if skAttr, ok := item["SK"].(*types.AttributeValueMemberS); ok {
+			fr.Filename = strings.TrimPrefix(skAttr.Value, "file#")
+		}
+		fr.SessionID = sessionID
+		results = append(results, fr)
+	}
+
+	log.Debug().Str("pk", pk).Int("resultCount", len(results)).Dur("duration", duration).Msg("GetSessionFileResults: query completed")
+	return results, nil
 }

@@ -45,6 +45,7 @@ import type {
   MultipartCompleteResponse,
   MultipartAbortRequest,
   MultipartCompletedPart,
+  FileProcessingStatus,
 } from "../types/api";
 import { getIdToken } from "../auth/cognito";
 
@@ -404,6 +405,10 @@ export function getTriageLogs(id: string, sessionId: string, since?: number): Pr
   const params = new URLSearchParams({ sessionId });
   if (since != null) params.set('since', String(since));
   return fetchJSON<TriageLogsResponse>(`/api/triage/${id}/logs?${params}`);
+}
+
+export function getSessionFileStatuses(sessionId: string): Promise<{ fileStatuses: FileProcessingStatus[] }> {
+  return fetchJSON<{ fileStatuses: FileProcessingStatus[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/file-status`);
 }
 
 /** Confirm deletion of selected files. */

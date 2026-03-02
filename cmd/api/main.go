@@ -32,6 +32,7 @@
 //	POST /api/fb-prep/{id}/feedback — regenerate caption for a single item with feedback
 //	POST /api/publish/start         — start publishing a post group to Instagram (DDR-040)
 //	GET  /api/publish/{id}/status  — poll publishing progress (DDR-040)
+//	GET  /api/sessions/{sessionId}/file-status — per-file processing statuses for a session
 //	POST /api/session/invalidate   — invalidate downstream state on back-navigation (DDR-037)
 //	GET  /api/media/thumbnail      — generate thumbnail from S3 object
 //	GET  /api/media/full           — presigned GET URL for full-resolution image
@@ -250,6 +251,7 @@ func main() {
 	mux.HandleFunc("/api/fb-prep/", handleFBPrepRoutes)
 	mux.HandleFunc("/api/publish/start", handlePublishStart)           // DDR-040
 	mux.HandleFunc("/api/publish/", handlePublishRoutes)               // DDR-040
+	mux.HandleFunc("/api/sessions/", handleSessionRoutes)
 	mux.HandleFunc("/api/session/invalidate", handleSessionInvalidate) // DDR-037
 	mux.HandleFunc("/api/overrides/", handleOverrideRoutes)
 	mux.HandleFunc("/api/media/thumbnail", handleThumbnail)
@@ -273,6 +275,7 @@ func main() {
 		"/api/description/generate", "/api/description/",
 		"/api/fb-prep/start", "/api/fb-prep/",
 		"/api/publish/start", "/api/publish/",
+		"/api/sessions/",
 		"/api/session/invalidate",
 		"/api/overrides/",
 		"/api/media/thumbnail", "/api/media/full", "/api/media/compressed",

@@ -8,6 +8,7 @@ import { getFilesFromDataTransfer } from "../utils/fileSystem";
 import { formatBytes, formatSpeed } from "../utils/format";
 import { formatElapsed } from "../hooks/useElapsedTimer";
 import type { FileProcessingStatus } from "../types/api";
+import { MiniPipeline, type MiniPipelineStep } from "./shared/MiniPipeline";
 
 // Engine with dedup + speed tracking for triage upload (DDR-080)
 const engine = createUploadEngine({ enableDedup: true, enableSpeedTracking: true });
@@ -26,7 +27,7 @@ const ACCEPT =
  * Combined lifecycle status for a file (DDR-063).
  * Merges S3 upload status with server-side processing status.
  */
-type FileLifecycleStatus = "uploading" | "processing" | "ready" | "error";
+type FileLifecycleStatus = "uploading" | "processing" | "thumbnailed" | "ready" | "error";
 
 interface FileWithLifecycle {
   name: string;
@@ -43,6 +44,7 @@ interface FileWithLifecycle {
 const triageInitialized = signal<boolean>(false);
 const triagePolling = signal<boolean>(false);
 const triageFinalized = signal<boolean>(false);
+const statusFilter = signal<Set<FileLifecycleStatus>>(new Set());
 
 /** Per-file server-side processing statuses from poll results (DDR-063). */
 const serverFileStatuses = signal<FileProcessingStatus[]>([]);
@@ -320,6 +322,17 @@ function getFilesWithLifecycle(): FileWithLifecycle[] {
           converted: serverStatus.converted,
         };
       }
+      if (serverStatus.status === "thumbnailed") {
+        return {
+          name: f.name,
+          size: f.size,
+          key: f.key,
+          lifecycleStatus: "thumbnailed" as const,
+          uploadProgress: 100,
+          loaded: f.loaded,
+          thumbnailUrl: serverStatus.thumbnailUrl,
+        };
+      }
     }
 
     // Uploaded but no server status yet, or server status is "processing"
@@ -386,6 +399,7 @@ function statusDotColor(status: FileLifecycleStatus): string {
   switch (status) {
     case "uploading": return "var(--color-primary)";
     case "processing": return "var(--color-warning)";
+    case "thumbnailed": return "var(--color-info, #0891b2)";
     case "ready": return "var(--color-success)";
     case "error": return "var(--color-danger)";
   }
@@ -394,17 +408,11 @@ function statusDotColor(status: FileLifecycleStatus): string {
 function statusCardLabel(status: FileLifecycleStatus): string {
   switch (status) {
     case "uploading": return "UPLOADING\u2026";
-    case "processing": return "PROCESSING\u2026";
+    case "processing": return "THUMBNAIL\u2026";
+    case "thumbnailed": return "DOWNSIZING\u2026";
     case "ready": return "READY";
     case "error": return "ERROR";
   }
-}
-
-type MiniPipelineStage = "done" | "active" | "pending";
-
-interface MiniPipelineStep {
-  label: string;
-  stage: MiniPipelineStage;
 }
 
 function getMiniPipelineSteps(status: FileLifecycleStatus): MiniPipelineStep[] {
@@ -412,26 +420,32 @@ function getMiniPipelineSteps(status: FileLifecycleStatus): MiniPipelineStep[] {
     case "uploading":
       return [
         { label: "Uploading", stage: "active" },
-        { label: "Downsizing", stage: "pending" },
         { label: "Thumbnail", stage: "pending" },
+        { label: "Downsizing", stage: "pending" },
       ];
     case "processing":
       return [
         { label: "Uploading", stage: "done" },
+        { label: "Thumbnail", stage: "active" },
+        { label: "Downsizing", stage: "pending" },
+      ];
+    case "thumbnailed":
+      return [
+        { label: "Uploading", stage: "done" },
+        { label: "Thumbnail", stage: "done" },
         { label: "Downsizing", stage: "active" },
-        { label: "Thumbnail", stage: "pending" },
       ];
     case "ready":
       return [
         { label: "Uploading", stage: "done" },
-        { label: "Downsizing", stage: "done" },
         { label: "Thumbnail", stage: "done" },
+        { label: "Downsizing", stage: "done" },
       ];
     case "error":
       return [
         { label: "Uploading", stage: "pending" },
-        { label: "Downsizing", stage: "pending" },
         { label: "Thumbnail", stage: "pending" },
+        { label: "Downsizing", stage: "pending" },
       ];
   }
 }
@@ -481,33 +495,17 @@ function FileCard({ f }: { f: FileWithLifecycle }) {
           boxShadow: "0 0 0 2px var(--color-surface)",
           animation: f.lifecycleStatus === "uploading" ? "pulse-ring 1.5s ease-in-out infinite" : "none",
         }} />
-        {/* Mini step pipeline overlay */}
-        <div class="mini-pipeline">
-          {pipelineSteps.flatMap((step, i) => {
-            const els = [
-              <div class={`mini-pipeline__step mini-pipeline__step--${step.stage}`} key={`s-${i}`}>
-                <div class="mini-pipeline__circle">
-                  {step.stage === "done" ? "✓" : ""}
-                </div>
-                <div class="mini-pipeline__label">{step.label}</div>
-              </div>,
-            ];
-            if (i < pipelineSteps.length - 1) {
-              const connDone = step.stage === "done";
-              els.push(
-                <div
-                  class={`mini-pipeline__connector${connDone ? " mini-pipeline__connector--done" : ""}`}
-                  key={`c-${i}`}
-                />,
-              );
-            }
-            return els;
-          })}
-        </div>
+        <MiniPipeline steps={pipelineSteps} />
       </div>
 
       {/* File info below thumbnail */}
-      <div style={{ padding: "0.5rem 0.625rem" }}>
+      <div class="file-card__info" style={{ padding: "0.5rem 0.625rem" }}>
+        {f.lifecycleStatus === "uploading" && (
+          <div
+            class="file-card__gauge"
+            style={{ transform: `scaleX(${f.uploadProgress / 100})` }}
+          />
+        )}
         <div
           style={{
             fontFamily: "var(--font-mono)",
@@ -548,15 +546,29 @@ function FileCard({ f }: { f: FileWithLifecycle }) {
 // Sidebar status row (Phase 3a)
 // ---------------------------------------------------------------------------
 
-function StatusRow({ label, count, color }: { label: string; count: number; color: string }) {
+function StatusRow({ label, count, color, status }: { label: string; count: number; color: string; status: FileLifecycleStatus }) {
   if (count === 0) return null;
+  const isActive = statusFilter.value.has(status);
   return (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "0.375rem 0",
-    }}>
+    <div
+      onClick={() => {
+        const next = new Set(statusFilter.value);
+        if (next.has(status)) next.delete(status);
+        else next.add(status);
+        statusFilter.value = next;
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "0.375rem 0.5rem",
+        margin: "0 -0.5rem",
+        borderRadius: "var(--radius)",
+        cursor: "pointer",
+        background: isActive ? "var(--color-primary-light, rgba(99,102,241,0.08))" : "transparent",
+        transition: "background 0.15s",
+      }}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <span style={{
           width: "0.5rem",
@@ -565,7 +577,7 @@ function StatusRow({ label, count, color }: { label: string; count: number; colo
           background: color,
           flexShrink: 0,
         }} />
-        <span style={{ fontSize: "0.875rem", color: "var(--color-text)" }}>{label}</span>
+        <span style={{ fontSize: "0.875rem", color: "var(--color-text)", fontWeight: isActive ? 600 : 400 }}>{label}</span>
       </div>
       <span style={{
         fontSize: "0.875rem",
@@ -603,8 +615,14 @@ export function FileUploader() {
   const lifecycle = getFilesWithLifecycle();
   const uploading = lifecycle.filter((f) => f.lifecycleStatus === "uploading");
   const processing = lifecycle.filter((f) => f.lifecycleStatus === "processing");
+  const thumbnailed = lifecycle.filter((f) => f.lifecycleStatus === "thumbnailed");
   const ready = lifecycle.filter((f) => f.lifecycleStatus === "ready");
   const errored = lifecycle.filter((f) => f.lifecycleStatus === "error");
+
+  const activeFilters = statusFilter.value;
+  const filteredLifecycle = activeFilters.size === 0
+    ? lifecycle
+    : lifecycle.filter((f) => activeFilters.has(f.lifecycleStatus));
 
   const totalSize = files.value.reduce((sum, f) => sum + f.size, 0);
   const filesRemaining = totalFiles - ready.length;
@@ -858,7 +876,7 @@ export function FileUploader() {
               gap: "0.75rem",
               marginBottom: "1rem",
             }}>
-              {lifecycle.map((f) => (
+              {filteredLifecycle.map((f) => (
                 <FileCard key={f.name} f={f} />
               ))}
             </div>
@@ -868,12 +886,30 @@ export function FileUploader() {
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             {/* Pipeline Summary */}
             <div class="sidebar-panel">
-              <h3>Pipeline Summary</h3>
-              <StatusRow label="Uploading" count={uploading.length} color="var(--color-primary)" />
-              <StatusRow label="Processing" count={processing.length} color="var(--color-warning)" />
-              <StatusRow label="Ready" count={ready.length} color="var(--color-success)" />
-              <StatusRow label="Error" count={errored.length} color="var(--color-danger)" />
-              {uploading.length === 0 && processing.length === 0 && ready.length === 0 && errored.length === 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ margin: 0 }}>Pipeline Summary</h3>
+                {activeFilters.size > 0 && (
+                  <button
+                    onClick={() => { statusFilter.value = new Set(); }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--color-primary)",
+                      fontSize: "0.75rem",
+                      cursor: "pointer",
+                      padding: "0.125rem 0.25rem",
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <StatusRow label="Uploading" count={uploading.length} color="var(--color-primary)" status="uploading" />
+              <StatusRow label="Thumbnail" count={processing.length} color="var(--color-warning)" status="processing" />
+              <StatusRow label="Downsizing" count={thumbnailed.length} color="var(--color-info, #0891b2)" status="thumbnailed" />
+              <StatusRow label="Ready" count={ready.length} color="var(--color-success)" status="ready" />
+              <StatusRow label="Error" count={errored.length} color="var(--color-danger)" status="error" />
+              {uploading.length === 0 && processing.length === 0 && thumbnailed.length === 0 && ready.length === 0 && errored.length === 0 && (
                 <div style={{ fontSize: "0.875rem", color: "var(--color-text-secondary)", padding: "0.25rem 0" }}>
                   Waiting for status…
                 </div>

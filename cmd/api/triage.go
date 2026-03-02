@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"os"
 	"strconv"
 
@@ -635,5 +636,66 @@ func handleTriageLogs(w http.ResponseWriter, r *http.Request, _ string) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"entries":   entries,
 		"nextSince": nextSince,
+	})
+}
+
+func handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) < 2 || parts[0] == "" {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	sessionID := parts[0]
+	action := parts[1]
+
+	switch action {
+	case "file-status":
+		handleSessionFileStatus(w, r, sessionID)
+	default:
+		httpError(w, http.StatusNotFound, "not found")
+	}
+}
+
+func handleSessionFileStatus(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if fileProcessStore == nil {
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"fileStatuses": []map[string]interface{}{},
+		})
+		return
+	}
+
+	fileResults, err := fileProcessStore.GetSessionFileResults(context.Background(), sessionID)
+	if err != nil {
+		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to get session file results")
+		httpError(w, http.StatusInternalServerError, "failed to get file statuses")
+		return
+	}
+
+	fileStatuses := make([]map[string]interface{}, 0, len(fileResults))
+	for _, fr := range fileResults {
+		status := map[string]interface{}{
+			"key":       fr.OriginalKey,
+			"filename":  fr.Filename,
+			"status":    fr.Status,
+			"converted": fr.Converted,
+		}
+		if fr.ThumbnailKey != "" {
+			status["thumbnailUrl"] = fmt.Sprintf("/api/media/thumbnail?key=%s", fr.ThumbnailKey)
+		}
+		if fr.Error != "" {
+			status["error"] = fr.Error
+		}
+		fileStatuses = append(fileStatuses, status)
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"fileStatuses": fileStatuses,
 	})
 }

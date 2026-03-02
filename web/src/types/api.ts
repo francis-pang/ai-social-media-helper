@@ -123,7 +123,7 @@ export interface TriageUpdateFilesRequest {
 export interface FileProcessingStatus {
   key: string;
   filename: string;
-  status: "valid" | "invalid" | "error" | "processing";
+  status: "valid" | "invalid" | "error" | "processing" | "thumbnailed";
   converted: boolean;
   thumbnailUrl?: string;
   error?: string;

@@ -542,6 +542,21 @@ code {
   background: var(--color-success);
 }
 
+/* --- Upload progress gauge (file card info area) --- */
+.file-card__info {
+  position: relative;
+  overflow: hidden;
+}
+.file-card__gauge {
+  position: absolute;
+  inset: 0;
+  background: var(--color-primary);
+  opacity: 0.08;
+  transform-origin: left;
+  transition: transform 0.3s ease;
+  pointer-events: none;
+}
+
 /* --- Top progress bar --- */
 
 .progress-top-bar {

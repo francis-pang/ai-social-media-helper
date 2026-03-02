@@ -22,6 +22,18 @@ import (
 	"github.com/fpang/ai-social-media-helper/internal/store"
 )
 
+func writeFileResult(ctx context.Context, sessionID, jobID string, result *store.FileResult) {
+	if jobID != "" {
+		if err := fileProcessStore.PutFileResult(ctx, sessionID, jobID, result); err != nil {
+			log.Error().Err(err).Str("sessionId", sessionID).Str("filename", result.Filename).Msg("Failed to write file result")
+		}
+	} else if fileProcessStore != nil {
+		if err := fileProcessStore.PutSessionFileResult(ctx, sessionID, result); err != nil {
+			log.Error().Err(err).Str("sessionId", sessionID).Str("filename", result.Filename).Msg("Failed to write session file result")
+		}
+	}
+}
+
 func processFile(ctx context.Context, key string) error {
 	fileStart := time.Now()
 
@@ -165,6 +177,18 @@ func processFile(ctx context.Context, key string) error {
 			}
 		}
 
+		intermediateResult := &store.FileResult{
+			Filename:     filename,
+			Status:       "thumbnailed",
+			OriginalKey:  key,
+			ThumbnailKey: thumbnailKey,
+			FileType:     fileType,
+			MimeType:     mimeType,
+			FileSize:     fileSize,
+			Metadata:     metadataMap,
+		}
+		writeFileResult(ctx, sessionID, jobID, intermediateResult)
+
 		// DDR-071: Downscale large photos for Gemini (WebP when ffmpeg available, JPEG fallback)
 		resizeStart := time.Now()
 		resizedData, resizedMime, resizeErr := media.ResizeImageForGemini(mf, targetResizePx, 85)
@@ -229,6 +253,18 @@ func processFile(ctx context.Context, key string) error {
 				thumbnailKey = ""
 			}
 		}
+
+		intermediateResult := &store.FileResult{
+			Filename:     filename,
+			Status:       "thumbnailed",
+			OriginalKey:  key,
+			ThumbnailKey: thumbnailKey,
+			FileType:     fileType,
+			MimeType:     mimeType,
+			FileSize:     fileSize,
+			Metadata:     metadataMap,
+		}
+		writeFileResult(ctx, sessionID, jobID, intermediateResult)
 
 		// Video compression for Gemini (reuse existing CompressVideoForGemini)
 		// Use a shorter deadline than the Lambda timeout so we always have time
@@ -319,19 +355,15 @@ func processFile(ctx context.Context, key string) error {
 		Metadata:     metadataMap,
 	}
 
-	if jobID != "" {
-		if err := fileProcessStore.PutFileResult(ctx, sessionID, jobID, result); err != nil {
-			log.Error().Err(err).Str("key", key).Msg("Failed to write file result to DDB")
-		}
+	writeFileResult(ctx, sessionID, jobID, result)
 
-		// DDR-067: Store fingerprint mapping for dedup
+	if jobID != "" {
 		if fingerprint != "" && fileProcessStore != nil {
 			if err := fileProcessStore.PutFingerprintMapping(ctx, sessionID, jobID, fingerprint, filename); err != nil {
 				log.Warn().Err(err).Str("key", key).Msg("Failed to store fingerprint mapping (non-fatal)")
 			}
 		}
 
-		// Increment processedCount on the TriageJob
 		newCount, err := sessionStore.IncrementTriageProcessedCount(ctx, sessionID, jobID)
 		if err != nil {
 			log.Error().Err(err).Str("key", key).Msg("Failed to increment processedCount")
