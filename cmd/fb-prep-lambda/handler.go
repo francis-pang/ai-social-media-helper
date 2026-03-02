@@ -294,28 +294,30 @@ func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []F
 				continue
 			}
 
-			if fileSize <= maxPresignedURLBytes {
-				// Within size limit — Gemini fetches from S3 via presigned URL (DDR-060).
-				parts = append(parts, &genai.Part{
-					FileData: &genai.FileData{MIMEType: mimeType, FileURI: url},
-				})
-			} else if genaiClient != nil {
-				// Video exceeds presigned URL size limit — download and upload via Gemini Files API.
-				tmpPath, tmpCleanup, err := httputil.FetchURLToFile(ctx, url)
-				if err != nil {
-					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video for Files API upload")
-					continue
-				}
-				uploaded, err := ai.UploadVideoToGeminiFiles(ctx, genaiClient, tmpPath, mimeType)
-				tmpCleanup()
-				if err != nil {
-					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to upload video to Gemini Files API")
-					continue
-				}
-				parts = append(parts, &genai.Part{
-					FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
-				})
-			} else {
+		vertexAI := os.Getenv("VERTEX_AI_PROJECT") != ""
+		if fileSize <= maxPresignedURLBytes || vertexAI {
+			// Within size limit, or running on Vertex AI where Files.Upload is unsupported —
+			// let Gemini fetch the video directly from the S3 presigned URL (DDR-060).
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{MIMEType: mimeType, FileURI: url},
+			})
+		} else if genaiClient != nil {
+			// Gemini Developer API only: upload large videos via Files API.
+			tmpPath, tmpCleanup, err := httputil.FetchURLToFile(ctx, url)
+			if err != nil {
+				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video for Files API upload")
+				continue
+			}
+			uploaded, err := ai.UploadVideoToGeminiFiles(ctx, genaiClient, tmpPath, mimeType)
+			tmpCleanup()
+			if err != nil {
+				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to upload video to Gemini Files API")
+				continue
+			}
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
+			})
+		} else {
 				// Fallback: download original and compress with CompressVideoForCaptions.
 				tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, useKey)
 				if err != nil {

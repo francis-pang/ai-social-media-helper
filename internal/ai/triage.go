@@ -280,33 +280,37 @@ func buildTriageBatchRequest(ctx context.Context, client *genai.Client, files []
 					InlineData: &genai.Blob{MIMEType: mimeType, Data: thumbData},
 				})
 			}
-		} else if media.IsVideo(ext) {
-			if file.PresignedURL != "" && (file.Size == 0 || file.Size <= maxPresignedURLBytes) {
-				parts = append(parts, &genai.Part{
-					FileData: &genai.FileData{MIMEType: file.MIMEType, FileURI: file.PresignedURL},
-				})
-			} else if file.PresignedURL != "" {
-				tmpPath, tmpCleanup, err := downloadFromURL(ctx, file.PresignedURL)
-				if err != nil {
-					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to download video for Gemini upload, skipping")
-					continue
-				}
-				cleanupFuncs = append(cleanupFuncs, tmpCleanup)
-				uploaded, err := UploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
-				if err != nil {
-					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video to Gemini Files API, skipping")
-					continue
-				}
-				uploadedFiles = append(uploadedFiles, uploaded)
-				parts = append(parts, &genai.Part{
-					FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
-				})
-			} else {
-				var videoMeta *media.VideoMetadata
-				if file.Metadata != nil {
-					videoMeta, _ = file.Metadata.(*media.VideoMetadata)
-				}
-				compressedPath, _, cleanup, err := media.CompressVideoForGemini(ctx, file.Path, videoMeta)
+	} else if media.IsVideo(ext) {
+		vertexAI := os.Getenv("VERTEX_AI_PROJECT") != ""
+		if file.PresignedURL != "" && (file.Size == 0 || file.Size <= maxPresignedURLBytes || vertexAI) {
+			// Within size limit, or running on Vertex AI where Files.Upload is unsupported —
+			// let Gemini fetch the video directly from the S3 presigned URL (DDR-060).
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{MIMEType: file.MIMEType, FileURI: file.PresignedURL},
+			})
+		} else if file.PresignedURL != "" {
+			// Gemini Developer API only: upload large videos via Files API.
+			tmpPath, tmpCleanup, err := downloadFromURL(ctx, file.PresignedURL)
+			if err != nil {
+				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to download video for Gemini upload, skipping")
+				continue
+			}
+			cleanupFuncs = append(cleanupFuncs, tmpCleanup)
+			uploaded, err := UploadVideoToGeminiFiles(ctx, client, tmpPath, file.MIMEType)
+			if err != nil {
+				log.Warn().Err(err).Str("file", file.Path).Msg("Failed to upload video to Gemini Files API, skipping")
+				continue
+			}
+			uploadedFiles = append(uploadedFiles, uploaded)
+			parts = append(parts, &genai.Part{
+				FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
+			})
+		} else {
+			var videoMeta *media.VideoMetadata
+			if file.Metadata != nil {
+				videoMeta, _ = file.Metadata.(*media.VideoMetadata)
+			}
+			compressedPath, _, cleanup, err := media.CompressVideoForGemini(ctx, file.Path, videoMeta)
 				if err != nil {
 					log.Warn().Err(err).Str("file", file.Path).Msg("Failed to compress video, skipping")
 					continue
@@ -459,11 +463,14 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*me
 			}
 
 		} else if media.IsVideo(ext) {
-			if file.PresignedURL != "" && (file.Size == 0 || file.Size <= maxPresignedURLBytes) {
-				// Within size limit — Gemini fetches from S3 via presigned URL (DDR-060).
+			vertexAI := os.Getenv("VERTEX_AI_PROJECT") != ""
+			if file.PresignedURL != "" && (file.Size == 0 || file.Size <= maxPresignedURLBytes || vertexAI) {
+				// Within size limit, or running on Vertex AI where Files.Upload is unsupported —
+				// let Gemini fetch the video directly from the S3 presigned URL (DDR-060).
 				log.Info().
 					Str("file", filepath.Base(file.Path)).
 					Int64("size_bytes", file.Size).
+					Bool("vertex_ai", vertexAI).
 					Msg("Using presigned URL for video")
 				parts = append(parts, &genai.Part{
 					FileData: &genai.FileData{
@@ -472,7 +479,7 @@ func askMediaTriageSingle(ctx context.Context, client *genai.Client, files []*me
 					},
 				})
 			} else if file.PresignedURL != "" {
-				// Video exceeds presigned URL size limit — download and upload via Gemini Files API.
+				// Gemini Developer API only: upload large videos via Files API.
 				log.Info().
 					Str("file", filepath.Base(file.Path)).
 					Int64("size_bytes", file.Size).
