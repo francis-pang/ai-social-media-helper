@@ -31,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/bootstrap"
 	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/fpang/ai-social-media-helper/internal/media"
 	"github.com/fpang/ai-social-media-helper/internal/s3util"
@@ -71,9 +72,9 @@ func init() {
 	ddbClient := dynamodb.NewFromConfig(cfg)
 	sessionStore = store.NewDynamoStore(ddbClient, tableName)
 
-	// Load Gemini API key from SSM Parameter Store if not set.
+	// Load Gemini API key and GCP SA from SSM Parameter Store if not set.
+	ssmClient := ssm.NewFromConfig(cfg)
 	if os.Getenv("GEMINI_API_KEY") == "" {
-		ssmClient := ssm.NewFromConfig(cfg)
 		paramName := os.Getenv("SSM_API_KEY_PARAM")
 		if paramName == "" {
 			paramName = "/ai-social-media/prod/gemini-api-key"
@@ -89,7 +90,7 @@ func init() {
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
 		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
 	}
-
+	bootstrap.LoadGCPServiceAccountKey(ssmClient)
 	_ = ai.LoadGCPServiceAccount()
 
 	// Emit consolidated cold-start log for troubleshooting.

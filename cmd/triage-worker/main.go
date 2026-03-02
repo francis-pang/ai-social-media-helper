@@ -59,6 +59,7 @@ func init() {
 	mediaBucket = s3s.Bucket
 	sessionStore = bootstrap.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
 	bootstrap.LoadGeminiKey(awsClients.SSM)
+	bootstrap.LoadGCPServiceAccountKey(awsClients.SSM)
 	_ = ai.LoadGCPServiceAccount()
 
 	fpTableName := os.Getenv("FILE_PROCESSING_TABLE_NAME")

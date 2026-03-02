@@ -165,10 +165,11 @@ func init() {
     initStart := time.Now()
     logging.Init()
 
-    // ... setup (SSM loads, AWS config, etc.) ...
+    // ... setup (AWS config, SSM client, etc.) ...
 
-    ai.LoadGCPServiceAccount() // DDR-077: reads GCP_SERVICE_ACCOUNT_JSON env var,
-                               // writes /tmp/gcp-sa-key.json, sets GOOGLE_APPLICATION_CREDENTIALS
+    bootstrap.LoadGCPServiceAccountKey(ssmClient) // Fetches GCP SA JSON from SSM into GCP_SERVICE_ACCOUNT_JSON
+    ai.LoadGCPServiceAccount()                    // DDR-077: reads GCP_SERVICE_ACCOUNT_JSON env var,
+                                                 // writes /tmp/gcp-sa-key.json, sets GOOGLE_APPLICATION_CREDENTIALS
 
     log.Info().
         Str("function", "media-lambda").

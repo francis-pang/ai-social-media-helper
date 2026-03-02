@@ -27,8 +27,8 @@ The application supports a **dual-backend AI strategy** (see DDR-077). The clien
 |-----|--------------|----------|---------|-------------|
 | `api.vertex_project` | `VERTEX_AI_PROJECT` | Cloud (primary) | — | GCP project ID (e.g., `gen-lang-client-0436578028`) |
 | `api.vertex_region` | `VERTEX_AI_REGION` | Cloud (primary) | — | GCP region (e.g., `us-east4`) |
-| `api.gcp_sa_json` | `GCP_SERVICE_ACCOUNT_JSON` | Cloud (primary) | — | GCP service account JSON string (loaded from SSM at `/ai-social-media/prod/vertex-ai-service-account`) |
-| `api.ssm_gcp_sa` | `SSM_GCP_SA_PARAM` | Cloud (primary) | `/ai-social-media/prod/vertex-ai-service-account` | SSM parameter path for GCP service account JSON |
+| `api.gcp_sa_json` | `GCP_SERVICE_ACCOUNT_JSON` | Cloud (primary) | — | GCP service account JSON string. In Lambda: populated at runtime by `bootstrap.LoadGCPServiceAccountKey()` from SSM. In CLI: set directly or via `GOOGLE_APPLICATION_CREDENTIALS` pointing to a key file. |
+| `api.ssm_gcp_sa` | `SSM_GCP_SA_PARAM` | Cloud (primary) | `/ai-social-media/prod/vertex-ai-service-account` | SSM parameter path for GCP service account JSON. Lambda code fetches this at init via `bootstrap.LoadGCPServiceAccountKey(ssmClient)` before `ai.LoadGCPServiceAccount()`. |
 | `api.key` | `GEMINI_API_KEY` | Fallback | — | Standalone Gemini Developer API key (loaded from SSM at `/ai-social-media/prod/gemini-api-key`) |
 | `api.model` | `GEMINI_MODEL` | No | `gemini-3-flash-preview` | Model to use for generation |
 | `api.base_url` | `GEMINI_BASE_URL` | No | (SDK default) | Override API endpoint (for testing/proxy) |

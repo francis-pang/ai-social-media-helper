@@ -438,7 +438,7 @@ sequenceDiagram
 
 All AI Lambda binaries use `ai.NewAIClient(ctx)` which selects the backend at startup:
 
-1. **Vertex AI** (primary) — when `VERTEX_AI_PROJECT` is set. Uses Application Default Credentials (ADC) initialized from `GCP_SERVICE_ACCOUNT_JSON` (SSM → `/tmp/gcp-sa-key.json` → `GOOGLE_APPLICATION_CREDENTIALS`). Project: `gen-lang-client-0436578028`, Region: `us-east4`.
+1. **Vertex AI** (primary) — when `VERTEX_AI_PROJECT` is set. Uses Application Default Credentials (ADC) initialized from `GCP_SERVICE_ACCOUNT_JSON` (fetched by `bootstrap.LoadGCPServiceAccountKey()` from SSM at init → `/tmp/gcp-sa-key.json` → `GOOGLE_APPLICATION_CREDENTIALS`). Project: `gen-lang-client-0436578028`, Region: `us-east4`.
 2. **Gemini Developer API** (fallback) — when only `GEMINI_API_KEY` is present.
 
 ```
@@ -449,7 +449,7 @@ VERTEX_AI_PROJECT set?
               └── No  → startup error
 ```
 
-`ai.LoadGCPServiceAccount()` is called in each Lambda's `init()` to hydrate ADC before the client is created.
+`bootstrap.LoadGCPServiceAccountKey(ssmClient)` is called first to fetch the GCP SA JSON from SSM; then `ai.LoadGCPServiceAccount()` hydrates ADC before the client is created.
 
 ### Economy Mode (Batch API)
 

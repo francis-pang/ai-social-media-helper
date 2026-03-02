@@ -129,6 +129,25 @@ func LoadGeminiKey(ssmClient *ssm.Client) {
 	}
 }
 
+// LoadGCPServiceAccountKey fetches the GCP service account JSON from SSM Parameter
+// Store if not already set via GCP_SERVICE_ACCOUNT_JSON env var. Non-fatal: logs a
+// warning if missing (Vertex AI will be unavailable; Gemini API fallback used).
+func LoadGCPServiceAccountKey(ssmClient *ssm.Client) {
+	if os.Getenv("GCP_SERVICE_ACCOUNT_JSON") != "" {
+		return
+	}
+	paramName := os.Getenv("SSM_GCP_SA_PARAM")
+	if paramName == "" {
+		paramName = "/ai-social-media/prod/vertex-ai-service-account"
+	}
+	params := LoadParameters(ssmClient, []string{paramName})
+	if val, ok := params[paramName]; ok {
+		os.Setenv("GCP_SERVICE_ACCOUNT_JSON", val)
+	} else {
+		log.Warn().Str("param", paramName).Msg("GCP SA not found in SSM — Vertex AI will be unavailable")
+	}
+}
+
 // LoadInstagramCreds fetches Instagram access token and user ID from SSM
 // Parameter Store. Returns an Instagram client if both are available, nil otherwise.
 // Non-fatal: logs a warning if credentials are missing.

@@ -4,11 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/bootstrap"
+	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/rs/zerolog/log"
 )
+
+func init() {
+	initStart := time.Now()
+	logging.Init()
+
+	awsClients := bootstrap.InitAWS()
+	bootstrap.LoadGeminiKey(awsClients.SSM)
+	bootstrap.LoadGCPServiceAccountKey(awsClients.SSM)
+	if err := ai.LoadGCPServiceAccount(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to load GCP service account")
+	}
+
+	logging.NewStartupLogger("gemini-batch-poll").InitDuration(time.Since(initStart)).Log()
+}
 
 // PollInput is the input for the batch poll Lambda.
 type PollInput struct {
@@ -25,10 +42,6 @@ type PollOutput struct {
 func handler(ctx context.Context, input PollInput) (PollOutput, error) {
 	if input.BatchJobID == "" {
 		return PollOutput{}, fmt.Errorf("batch_job_id is required")
-	}
-
-	if err := ai.LoadGCPServiceAccount(); err != nil {
-		return PollOutput{}, fmt.Errorf("failed to load GCP service account: %w", err)
 	}
 
 	client, err := ai.NewAIClient(ctx)

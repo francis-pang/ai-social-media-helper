@@ -57,6 +57,7 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
 	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/bootstrap"
 	"github.com/fpang/ai-social-media-helper/internal/instagram"
 	"github.com/fpang/ai-social-media-helper/internal/logging"
 	"github.com/fpang/ai-social-media-helper/internal/store"
@@ -68,10 +69,6 @@ var coldStart = true
 func init() {
 	initStart := time.Now()
 	logging.Init()
-
-	if err := ai.LoadGCPServiceAccount(); err != nil {
-		log.Fatal().Err(err).Msg("Failed to load GCP service account")
-	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -148,6 +145,10 @@ func init() {
 		}
 		os.Setenv("GEMINI_API_KEY", *result.Parameter.Value)
 		log.Debug().Str("param", paramName).Dur("elapsed", time.Since(ssmStart)).Msg("Gemini API key loaded from SSM")
+	}
+	bootstrap.LoadGCPServiceAccountKey(ssmClient)
+	if err := ai.LoadGCPServiceAccount(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to load GCP service account")
 	}
 
 	// Load Instagram credentials from SSM Parameter Store (DDR-040).

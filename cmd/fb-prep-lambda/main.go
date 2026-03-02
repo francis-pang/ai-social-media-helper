@@ -29,6 +29,7 @@ func init() {
 	mediaBucket = s3s.Bucket
 	sessionStore = bootstrap.InitDynamo(awsClients.Config, "DYNAMO_TABLE_NAME")
 	bootstrap.LoadGeminiKey(awsClients.SSM)
+	bootstrap.LoadGCPServiceAccountKey(awsClients.SSM)
 	_ = ai.LoadGCPServiceAccount()
 
 	bootstrap.StartupLog("fb-prep-lambda", initStart).

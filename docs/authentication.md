@@ -125,7 +125,8 @@ flowchart TD
 ```
 
 **Key functions:**
-- `ai.LoadGCPServiceAccount()` — reads `GCP_SERVICE_ACCOUNT_JSON` (populated from SSM parameter `/ai-social-media/prod/vertex-ai-service-account`), writes to temp file, sets `GOOGLE_APPLICATION_CREDENTIALS` for Application Default Credentials. No-op if env var is not set.
+- `bootstrap.LoadGCPServiceAccountKey(ssmClient)` — fetches GCP service account JSON from SSM (`SSM_GCP_SA_PARAM`, default `/ai-social-media/prod/vertex-ai-service-account`) and sets `GCP_SERVICE_ACCOUNT_JSON` env var. Must be called before `LoadGCPServiceAccount` in Lambda init.
+- `ai.LoadGCPServiceAccount()` — reads `GCP_SERVICE_ACCOUNT_JSON` env var, writes to `/tmp/gcp-sa-key.json`, sets `GOOGLE_APPLICATION_CREDENTIALS` for Application Default Credentials. No-op if env var is not set.
 - `ai.NewAIClient(ctx)` — creates a `genai.Client` with automatic backend selection. Tries Vertex AI first (requires `VERTEX_AI_PROJECT`), falls back to Gemini API (requires `GEMINI_API_KEY`).
 
 **User provisioning:**

@@ -73,6 +73,7 @@ func handler(ctx context.Context) error {
 	}
 
 	bootstrap.LoadGeminiKey(ssmClient)
+	bootstrap.LoadGCPServiceAccountKey(ssmClient)
 	if err := ai.LoadGCPServiceAccount(); err != nil {
 		return fmt.Errorf("load GCP service account: %w", err)
 	}
