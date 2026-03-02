@@ -136,7 +136,8 @@ graph TD
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
         VideoLambda["Video Lambda\n(4GB, 15min)"]
         MediaProcessLambda["MediaProcess Lambda\n(4GB, 15min, DDR-061, DDR-067, DDR-071)"]
-        StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish)"]
+        FBPrepLambda["FB Prep Lambda\n(2GB, 5min, DDR-082)"]
+        StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish, FBPrep)"]
         DynamoDB["DynamoDB\n(session state, TTL 24h)"]
         FileProcessingDB["DynamoDB\n(file processing, TTL 4h,\nDDR-061)"]
     end
@@ -167,12 +168,14 @@ graph TD
     StepFn --> SelectionLambda
     StepFn --> EnhancementLambda
     StepFn --> VideoLambda
+    StepFn --> FBPrepLambda
     TriageLambda --> GeminiAPI
     PublishLambda --> InstagramAPI
     ThumbLambda --> S3Media
     SelectionLambda --> GeminiAPI
     EnhancementLambda --> GeminiAPI
     VideoLambda --> S3Media
+    FBPrepLambda --> GeminiAPI
     APILambda --> SSM
     Browser -->|"presigned PUT"| S3Media
     S3Media -->|"S3 ObjectCreated"| MediaProcessLambda
@@ -206,7 +209,7 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min | Vertex AI / Gemini |
 | Enhancement | Per-photo Gemini image editing + feedback (DDR-053) | Light | 2 GB | 5 min | Vertex AI / Gemini |
 | Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min | Vertex AI / Gemini |
-| FB Prep | Facebook caption + location (Google Maps grounding) + date/time from EXIF | Heavy (ffmpeg) | 2 GB | 10 min | Vertex AI / Gemini (Maps) |
+| FB Prep | Facebook caption + location (Google Maps grounding) + date/time from EXIF (DDR-082: via FBPrepPipeline SFN) | Light | 2 GB | 5 min | Vertex AI / Gemini (Maps) |
 | Gemini Batch Poll | Lightweight Vertex AI / Gemini Batch API status poller (Gemini Batch Poll SFN worker) | Light | 128 MB | 10s | Vertex AI / Gemini |
 | Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s | None |
 | OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s | Instagram |
@@ -228,7 +231,7 @@ The API Lambda dispatches all long-running work asynchronously — **no backgrou
 | Enhancement | Step Functions `StartExecution` | Enhancement + Video pipeline |
 | Triage | Step Functions `StartExecution` (DDR-052) | Triage Lambda (prepare → run; DDR-060 bypasses Gemini polling) |
 | Publish | Step Functions `StartExecution` (DDR-052) | Publish Lambda (containers → poll Instagram → finalize) |
-| Facebook Prep | `lambda:Invoke` (async) or Gemini Batch Poll SFN | FB Prep Lambda (session-aware captions, Maps grounding) |
+| Facebook Prep | Step Functions `StartExecution` (DDR-082) | FBPrepPipeline SFN → FB Prep Lambda (real-time or Gemini Batch) |
 | Description | `lambda:Invoke` (async) | Description Lambda (DDR-053) |
 | Download | `lambda:Invoke` (async) | Download Lambda (DDR-053) |
 | Enhancement feedback | `lambda:Invoke` (async) | Enhancement Lambda (DDR-053, real-time, not batchable) |
@@ -251,7 +254,7 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 | Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, model, mediaKeys[], thumbnailKeys[]}` | `{jobId, selectedCount, excludedCount, sceneGroupCount}` |
 | Enhancement | `cmd/enhance-lambda` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
 | Video | `cmd/video-lambda` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
-| FB Prep | `cmd/fb-prep-lambda` | Async invoke | `{sessionId, jobId, mediaItems[], economyMode}` | writes DynamoDB |
+| FB Prep | `cmd/fb-prep-lambda` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, mediaKeys[], economyMode}` or `{type: fb-prep-collect-batch, sessionId, jobId, batchJobId}` | writes DynamoDB (pending → complete + token counts) |
 | Gemini Batch Poll | `cmd/gemini-batch-poll` | Step Functions | `{batch_job_id}` | `{state, results, error}` |
 
 Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
@@ -490,39 +493,75 @@ sequenceDiagram
 - The Wait state is 15 seconds; the SFN Standard Workflow charges per state transition, but the cost is negligible compared to the 50% batch API savings.
 - If the batch job exceeds the SFN execution timeout (24 h for Standard Workflows), the job is failed and the caller receives an error.
 
-## Facebook Prep Workflow (DDR-077)
+## Facebook Prep Workflow (DDR-077, DDR-082)
 
-The Facebook Prep workflow generates per-photo/video metadata for manual Facebook uploads: personalized captions, verified location tags (Google Maps grounding), and EXIF-derived date/time stamps.
+The Facebook Prep workflow generates per-photo/video metadata for manual Facebook uploads: personalized captions, verified location tags (Google Maps grounding), and EXIF-derived date/time stamps. The **FBPrepPipeline** Step Function orchestrates both real-time and economy (Gemini Batch) modes.
 
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
     participant API as API Lambda
     participant DB as DynamoDB
+    participant SFN as FBPrepPipeline SFN
     participant FBP as FB Prep Lambda
+    participant BatchPoll as GeminiBatchPollPipeline
     participant Gemini as Vertex AI / Gemini
     participant Maps as Google Maps Grounding
 
-    FE->>API: POST /api/fb-prep/start (sessionId, mediaItems, economyMode)
-    API->>DB: Write pending FBPrepJob
-    API->>FBP: Invoke async (or start Gemini Batch Poll SFN)
+    FE->>API: POST /api/fb-prep/start (sessionId, mediaKeys, economyMode)
+    API->>DB: Write FBPrepJob {status: processing, mediaKeys, createdAt}
+    API->>SFN: StartExecution (non-blocking)
     API-->>FE: 202 Accepted with jobId
 
-    FBP->>FBP: Extract EXIF (GPS, date/time) per item
-    FBP->>FBP: Compress videos caption-grade (1 FPS, 768px, no audio)
-    FBP->>Gemini: GenerateContent — all items in one session-aware batch
-    Gemini->>Maps: Google Maps grounding for location verification
-    Maps-->>Gemini: Verified place names + coordinates
-    Gemini-->>FBP: JSON array [{caption, locationTag, dateTimestamp, confidence}]
-    FBP->>DB: Write complete FBPrepJob
+    Note over SFN,FBP: FBPrepPipeline — RunFBPrep step
 
-    loop Frontend polls until complete
-        FE->>API: GET /api/fb-prep/{id}/results
-        API->>DB: GetFBPrepJob
-        API-->>FE: items with captions, locations, timestamps
+    SFN->>FBP: Invoke {type: fb-prep, sessionId, jobId, mediaKeys, economyMode}
+    FBP->>FBP: Build Gemini parts (download thumbnails, handle videos)
+    FBP->>FBP: Append EXIF metadata context (GPS, date/time)
+
+    alt economyMode = false (real-time)
+        FBP->>Gemini: GenerateContent — all items in one call
+        Gemini->>Maps: Google Maps grounding (GPS → verified place names)
+        Maps-->>Gemini: Verified locations
+        Gemini-->>FBP: JSON [{caption, location_tag, date_timestamp, confidence}]
+        FBP->>DB: Write complete FBPrepJob {items, inputTokens, outputTokens}
+        FBP-->>SFN: {status: complete} (no batch_job_id)
+
+        Note over SFN: FBPrepIsBatch Choice — no batch_job_id → Succeed
+
+    else economyMode = true (economy)
+        FBP->>Gemini: SubmitGeminiBatch (50% cost savings, ~10 min latency)
+        Gemini-->>FBP: batch_job_id
+        FBP->>DB: Write FBPrepJob {status: pending, batchJobId, mediaKeys}
+        FBP-->>SFN: {status: pending, batch_job_id}
+
+        Note over SFN: FBPrepIsBatch Choice — batch_job_id present → start polling
+
+        SFN->>BatchPoll: StartExecution.sync {batch_job_id}
+
+        loop Every 15 seconds until SUCCEEDED or FAILED
+            BatchPoll->>Gemini: GetBatchJob(batch_job_id)
+            Gemini-->>BatchPoll: {state, results}
+        end
+        BatchPoll-->>SFN: SUCCEEDED
+
+        Note over SFN: CollectBatchResults step
+
+        SFN->>FBP: Invoke {type: fb-prep-collect-batch, sessionId, jobId, batchJobId}
+        FBP->>Gemini: CheckGeminiBatch(batchJobId) — retrieve results
+        Gemini-->>FBP: [{response, usageMetadata}]
+        FBP->>DB: Write complete FBPrepJob {items, inputTokens, outputTokens}
+        FBP-->>SFN: {status: complete}
     end
 
-    FE->>API: POST /api/fb-prep/{id}/feedback (per-item regeneration)
+    loop Frontend polls until status = complete
+        FE->>API: GET /api/fb-prep/{id}/results
+        API->>DB: GetFBPrepJob
+        API-->>FE: {status, items, inputTokens, outputTokens, createdAt}
+        Note over FE: Resource Usage panel shows real token counts
+    end
+
+    FE->>API: POST /api/fb-prep/{id}/feedback (per-item regeneration, always real-time)
 ```
 
 **Key design choices:**
@@ -671,7 +710,8 @@ All AWS resources across all 9 stacks are tagged with `Project = ai-social-media
 - [DDR-062](./design-decisions/DDR-062-observability-and-version-tracking.md) — Observability gaps and version tracking
 - [DDR-065](./design-decisions/DDR-065-gemini-context-caching-and-batch-api.md) — Gemini Context Caching and Batch API Integration
 - [DDR-077](./design-decisions/DDR-077-cost-aware-vertex-ai-migration.md) — Cost-Aware Vertex AI Migration — Dual-Backend + Economy Mode + Facebook Prep
+- [DDR-082](./design-decisions/DDR-082-fb-prep-economy-mode-sfn.md) — FB Prep Economy Mode via Step Functions Pipeline
 
 ---
 
-**Last Updated**: 2026-03-01
+**Last Updated**: 2026-03-02
