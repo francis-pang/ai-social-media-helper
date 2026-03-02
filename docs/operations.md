@@ -458,6 +458,13 @@ rec.Dimension("Operation", "triage").
 | `JobDurationMs` | Milliseconds | `JobType` | Full job duration (triage or selection) |
 | `TriageJobFiles` | Count | — | Files included in a triage job |
 | `PublishAttempts` | Count | — | Instagram publish attempts |
+| `LocationEnrichmentMs` | `fbPrepLocationPreEnrich` | Milliseconds | Latency of the pre-enrichment real-time Maps call |
+| `LocationEnrichmentItemCount` | `fbPrepLocationPreEnrich` | Count | Number of items with GPS sent for pre-enrichment |
+| `LocationEnrichmentSuccess` | `fbPrepLocationPreEnrich` | Count | Successful pre-enrichment calls |
+| `LocationEnrichmentFailure` | `fbPrepLocationPreEnrich` | Count | Failed pre-enrichment calls (job continues without Maps) |
+| `LocationTagMatchCount` | `fbPrepLocationComparison` | Count | Items where pre-enrichment and batch location tags agree |
+| `LocationTagMismatchCount` | `fbPrepLocationComparison` | Count | Items where pre-enrichment and batch location tags differ |
+| `LocationTagAgreementRate` | `fbPrepLocationComparison` | None (0-100) | Percentage agreement between pre-enrichment and batch location tags |
 
 **Operation values**: `triage`, `mediaSelection`, `jsonSelection`, `filesApiUpload`, `mediaProcess`  
 **FileType values**: `image`, `video`  

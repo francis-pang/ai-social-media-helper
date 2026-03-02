@@ -112,6 +112,26 @@ Videos are compressed at caption-grade quality (more aggressive than the standar
 
 At 1 FPS, a 30-second video costs ~2,100 tokens at `MediaResolutionLow` — comparable to a few photo thumbnails.
 
+### Economy Mode: Location Pre-Enrichment (DDR-085)
+
+The Vertex AI batch prediction API does not support the GoogleMaps grounding tool in
+JSONL input. To preserve Maps-accurate location tags in economy mode, the fb-prep lambda
+runs a fast real-time pre-enrichment step before submitting the batch JSONL:
+
+1. **Pre-enrichment call** — A single real-time Gemini call is made with GPS coordinates
+   as plain text and the GoogleMaps tool enabled. The model reverse-geocodes each
+   coordinate and returns a `{index, location_tag}` JSON array.
+2. **Context injection** — The verified place names are added to the batch metadata
+   context as a `## Maps-verified locations` section. The batch model reads these names
+   directly and uses them for the `location_tag` field.
+3. **Silent fallback** — If the pre-enrichment call fails, the batch job proceeds with
+   raw GPS coordinates only (pre-DDR-085 behavior). This is logged and metricked.
+
+**Comparison metrics**: When the batch job completes, `handleCollectBatch` compares each
+item's `location_tag` from the batch model against the pre-enrichment value and emits
+`LocationTagAgreementRate` to CloudWatch. This allows evaluating whether the
+pre-enrichment call is worth keeping long-term.
+
 ## Related DDRs
 
 - [DDR-078](./design-decisions/DDR-078-facebook-prep-workflow.md) — Facebook Prep Workflow design decisions

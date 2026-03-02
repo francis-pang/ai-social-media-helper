@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/fpang/ai-social-media-helper/internal/ai"
 	"github.com/fpang/ai-social-media-helper/internal/httputil"
 	"github.com/fpang/ai-social-media-helper/internal/media"
+	"github.com/fpang/ai-social-media-helper/internal/metrics"
 	"github.com/fpang/ai-social-media-helper/internal/s3util"
 	"github.com/fpang/ai-social-media-helper/internal/store"
 )
@@ -41,6 +44,9 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 		}
 		if t, _ := m["type"].(string); t == "fb-prep-collect-batch" {
 			return handleCollectBatch(ctx, m)
+		}
+		if t, _ := m["type"].(string); t == "fb-prep-mark-error" {
+			return handleMarkError(ctx, m)
 		}
 	}
 
@@ -76,11 +82,19 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 
 	// Economy mode: submit to Gemini Batch API (FBPrepPipeline SFN polls to completion, DDR-082).
 	if input.EconomyMode {
+		// Pre-enrich location tags via a fast real-time Maps call before building the batch
+		// JSONL. The GoogleMaps tool is not supported in Vertex AI batch (DDR-085).
+		locationTags, locErr := resolveLocationTags(ctx, input.MediaItems, genaiClient)
+		if locErr != nil {
+			log.Warn().Err(locErr).Msg("Location pre-enrichment failed; proceeding with GPS-only metadata")
+			locationTags = nil
+		}
+
 		parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.SessionID, input.MediaItems, genaiClient)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare media: %w", err)
 		}
-		prompt := buildFBPrepPrompt(metadataCtx)
+		prompt := buildFBPrepPrompt(metadataCtx, locationTags)
 		parts = append(parts, &genai.Part{Text: prompt})
 		// GoogleMaps tool is not supported in Vertex AI batch prediction — omit it.
 		// The JSONL format rejects empty struct fields (googleMaps: {}) at import time.
@@ -105,20 +119,26 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 			return nil, fmt.Errorf("failed to submit batch job: %w", err)
 		}
 		if sessionStore != nil {
+			preEnrichStore := make(map[string]string, len(locationTags))
+			for idx, tag := range locationTags {
+				preEnrichStore[strconv.Itoa(idx)] = tag
+			}
 			_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
-				ID:          jobID,
-				Status:      "pending",
-				BatchJobID:  batchJobID,
-				MediaKeys:   s3Keys,
-				EconomyMode: true,
-				CreatedAt:   now,
-				UpdatedAt:   now,
+				ID:                 jobID,
+				Status:             "pending",
+				BatchJobID:         batchJobID,
+				MediaKeys:          s3Keys,
+				EconomyMode:        true,
+				PreEnrichLocations: preEnrichStore,
+				CreatedAt:          now,
+				UpdatedAt:          now,
 			})
 		}
 		log.Info().
 			Str("sessionId", input.SessionID).
 			Str("batchJobId", batchJobID).
 			Int("mediaCount", len(input.MediaItems)).
+			Int("preEnrichedLocations", len(locationTags)).
 			Msg("FB prep batch job submitted (economy mode)")
 		return &FBPrepOutput{
 			SessionID:  input.SessionID,
@@ -133,8 +153,9 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 		return nil, fmt.Errorf("failed to prepare media: %w", err)
 	}
 
-	// Append metadata context as text
-	prompt := buildFBPrepPrompt(metadataCtx)
+	// Append metadata context as text. Real-time mode uses the GoogleMaps tool directly;
+	// no pre-enrichment needed (locationTags=nil).
+	prompt := buildFBPrepPrompt(metadataCtx, nil)
 	parts = append(parts, &genai.Part{Text: prompt})
 
 	// Config with system instruction and Google Maps grounding
@@ -363,8 +384,120 @@ func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []F
 	return parts, metadataCtx, s3Keys, nil
 }
 
-func buildFBPrepPrompt(metadataCtx string) string {
-	return "## Metadata context\n\n" + metadataCtx + "\n\nGenerate the JSON array for each item in the same order as above."
+// buildFBPrepPrompt builds the user-turn prompt from the metadata context.
+// locationTags (DDR-085) is an optional map of item index → Maps-verified place name
+// to inject into the prompt as a supplementary section, bypassing the unavailable
+// GoogleMaps tool in Vertex AI batch prediction. Pass nil for the real-time path.
+func buildFBPrepPrompt(metadataCtx string, locationTags map[int]string) string {
+	base := "## Metadata context\n\n" + metadataCtx
+	if len(locationTags) > 0 {
+		indices := make([]int, 0, len(locationTags))
+		for i := range locationTags {
+			indices = append(indices, i)
+		}
+		sort.Ints(indices)
+		lines := make([]string, 0, len(indices))
+		for _, i := range indices {
+			lines = append(lines, fmt.Sprintf("Item %d location (Maps-verified): %s", i, locationTags[i]))
+		}
+		base += "\n\n## Maps-verified locations\n" + strings.Join(lines, "\n")
+	}
+	return base + "\n\nGenerate the JSON array for each item in the same order as above."
+}
+
+// resolveLocationTags makes a single fast real-time Gemini call with the GoogleMaps tool
+// to reverse-geocode GPS coordinates for each media item (DDR-085). Returns a map of
+// item index → verified place name. Returns nil on any error so the caller can fall
+// back to GPS-only metadata without blocking batch submission.
+func resolveLocationTags(ctx context.Context, mediaItems []FBPrepMediaItem, client *genai.Client) (map[int]string, error) {
+	type gpsItem struct {
+		index int
+		lat   float64
+		lon   float64
+	}
+	var gpsItems []gpsItem
+	for i, item := range mediaItems {
+		if item.GPS != nil {
+			gpsItems = append(gpsItems, gpsItem{i, item.GPS.Latitude, item.GPS.Longitude})
+		}
+	}
+	if len(gpsItems) == 0 {
+		return nil, nil
+	}
+
+	coordLines := make([]string, 0, len(gpsItems))
+	for _, g := range gpsItems {
+		coordLines = append(coordLines, fmt.Sprintf("Item %d: GPS %.6f, %.6f", g.index, g.lat, g.lon))
+	}
+	prompt := "Use Google Maps to reverse-geocode each GPS coordinate and return the best location name for a Facebook location tag.\n\n" +
+		strings.Join(coordLines, "\n") +
+		"\n\nReturn a JSON array only: [{\"index\": 0, \"location_tag\": \"Place Name, City, Country\"}, ...]"
+
+	start := time.Now()
+	resp, err := client.Models.GenerateContent(ctx, ai.GetModelName(),
+		[]*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: prompt}}}},
+		&genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{GoogleMaps: &genai.GoogleMaps{}}},
+		},
+	)
+	elapsed := time.Since(start)
+
+	m := metrics.New("AiSocialMedia").
+		Dimension("Operation", "fbPrepLocationPreEnrich").
+		Metric("LocationEnrichmentMs", float64(elapsed.Milliseconds()), metrics.UnitMilliseconds).
+		Metric("LocationEnrichmentItemCount", float64(len(gpsItems)), metrics.UnitCount)
+	if err != nil {
+		m.Count("LocationEnrichmentFailure").Flush()
+		return nil, fmt.Errorf("pre-enrichment call: %w", err)
+	}
+	m.Count("LocationEnrichmentSuccess").Flush()
+
+	raw := strings.TrimSpace(resp.Text())
+	if start := strings.Index(raw, "["); start > 0 {
+		raw = raw[start:]
+	}
+	if end := strings.LastIndex(raw, "]"); end >= 0 {
+		raw = raw[:end+1]
+	}
+
+	var parsed []struct {
+		Index       int    `json:"index"`
+		LocationTag string `json:"location_tag"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		log.Warn().Err(err).Str("raw", raw).Msg("Failed to parse location pre-enrichment JSON")
+		return nil, fmt.Errorf("parse pre-enrichment response: %w", err)
+	}
+
+	result := make(map[int]string, len(parsed))
+	for _, p := range parsed {
+		if p.LocationTag != "" {
+			result[p.Index] = p.LocationTag
+		}
+	}
+	log.Info().
+		Int("resolvedCount", len(result)).
+		Dur("duration", elapsed).
+		Msg("Location pre-enrichment complete")
+	return result, nil
+}
+
+// handleMarkError writes status:"error" to DynamoDB for the given job. Invoked by the
+// FBPrepPipeline SFN catch handler when GeminiBatchPollPipeline fails (DDR-085).
+func handleMarkError(ctx context.Context, m map[string]interface{}) (*FBPrepOutput, error) {
+	sessionID, _ := m["sessionId"].(string)
+	jobID, _ := m["jobId"].(string)
+	log.Warn().Str("sessionId", sessionID).Str("jobId", jobID).Msg("Marking FB prep job as error (batch poll failure)")
+	if sessionStore != nil && sessionID != "" && jobID != "" {
+		now := time.Now().UTC().Format(time.RFC3339)
+		_ = sessionStore.PutFBPrepJob(ctx, sessionID, &store.FBPrepJob{
+			ID:        jobID,
+			Status:    "error",
+			Error:     "Batch prediction job failed",
+			UpdatedAt: now,
+		})
+	}
+	return &FBPrepOutput{SessionID: sessionID, Status: "error"}, nil
 }
 
 // normalizeFBPrepInput accepts either FBPrepInput or API event format (sessionId, jobId, mediaKeys, economyMode).
@@ -639,6 +772,40 @@ func handleCollectBatch(ctx context.Context, m map[string]interface{}) (*FBPrepO
 	items, err := parseFBPrepResponse(responseText, job.MediaKeys)
 	if err != nil {
 		return nil, fmt.Errorf("collect-batch: failed to parse response: %w", err)
+	}
+
+	// Compare batch model location tags against pre-enrichment values (DDR-085).
+	// Emits CloudWatch metrics so we can evaluate whether to keep the pre-enrichment call.
+	if len(job.PreEnrichLocations) > 0 {
+		matchCount, mismatchCount := 0, 0
+		for _, item := range items {
+			preEnrich := job.PreEnrichLocations[strconv.Itoa(item.ItemIndex)]
+			if preEnrich == "" {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(preEnrich), strings.TrimSpace(item.LocationTag)) {
+				matchCount++
+			} else {
+				mismatchCount++
+				log.Info().
+					Int("itemIndex", item.ItemIndex).
+					Str("preEnrichLocation", preEnrich).
+					Str("batchLocation", item.LocationTag).
+					Msg("Location tag differs between pre-enrichment and batch model")
+			}
+		}
+		total := matchCount + mismatchCount
+		if total > 0 {
+			agreementRate := float64(matchCount) / float64(total) * 100
+			metrics.New("AiSocialMedia").
+				Dimension("Operation", "fbPrepLocationComparison").
+				Metric("LocationTagMatchCount", float64(matchCount), metrics.UnitCount).
+				Metric("LocationTagMismatchCount", float64(mismatchCount), metrics.UnitCount).
+				Metric("LocationTagAgreementRate", agreementRate, metrics.UnitNone).
+				Property("sessionId", sessionID).
+				Property("jobId", jobID).
+				Flush()
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
