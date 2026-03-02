@@ -1,6 +1,6 @@
 import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
-import { createUploadEngine, type UploadedFile } from "../upload/uploadEngine";
+import { createUploadEngine } from "../upload/uploadEngine";
 import { fbPrepMediaKeys } from "./FBPrepView";
 import { uploadSessionId, navigateToStep } from "../app";
 import { syncUrlToStep } from "../router";
