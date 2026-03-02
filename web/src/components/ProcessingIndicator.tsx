@@ -76,16 +76,15 @@ interface LogEntry {
 
 const STAGES = [
   { label: "Upload to Gemini", icon: "☁️", num: 1 },
-  { label: "Video Processing", icon: "🎬", num: 2 },
-  { label: "AI Evaluation", icon: "🤖", num: 3 },
+  { label: "AI Analysis", icon: "🤖", num: 2 },
+  { label: "Generating Results", icon: "📋", num: 3 },
 ] as const;
 
 function deriveStage(status?: string): number {
   if (!status) return 1;
   const s = status.toLowerCase();
-  if (s.includes("evaluat") || s.includes("analy")) return 3;
-  if (s.includes("process") || s.includes("gemini")) return 2;
-  if (s.includes("upload")) return 1;
+  if (s.includes("complete") || s.includes("generat") || s.includes("result")) return 3;
+  if (s.includes("analy") || s.includes("process") || s.includes("evaluat")) return 2;
   return 1;
 }
 
