@@ -44,7 +44,7 @@ All 4 callers (`fb-prep-lambda`, `triage`, `description`, `selection_media`) are
 
 Bucket `social-media-ai-app-bucket` in project `gen-lang-client-0436578028` (pre-existing bucket).
 
-IAM: `Storage Folder Admin` already assigned to `aws-app@gen-lang-client-0436578028.iam.gserviceaccount.com` at project level. AI Platform Service Agent has automatic access to buckets within the same project.
+IAM: `Storage Folder Admin` already assigned to `aws-app@gen-lang-client-0436578028.iam.gserviceaccount.com` at project level. The batch job explicitly passes this SA via `CreateBatchJobConfig.HTTPOptions.ExtraBody{"serviceAccount": ...}` so Vertex AI uses it for GCS writes instead of the default AI Platform Service Agent (which has no bucket-level IAM).
 
 ### 3. New Dependency: `cloud.google.com/go/storage`
 

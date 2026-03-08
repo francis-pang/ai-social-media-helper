@@ -56,6 +56,22 @@ func newGCSClient(ctx context.Context) (*storage.Client, error) {
 	return client, nil
 }
 
+// gcpServiceAccountEmail extracts the client_email from the GCP service
+// account JSON already loaded into the environment by LoadGCPServiceAccount.
+func gcpServiceAccountEmail() string {
+	saJSON := os.Getenv("GCP_SERVICE_ACCOUNT_JSON")
+	if saJSON == "" {
+		return ""
+	}
+	var sa struct {
+		ClientEmail string `json:"client_email"`
+	}
+	if err := json.Unmarshal([]byte(saJSON), &sa); err != nil {
+		return ""
+	}
+	return sa.ClientEmail
+}
+
 // batchJSONLRow is the Vertex AI batch input format per line.
 type batchJSONLRow struct {
 	Request batchJSONLRequest `json:"request"`
@@ -248,16 +264,29 @@ func SubmitGeminiBatch(ctx context.Context, client *genai.Client, model string, 
 				jobDisplayName = "batch-" + name
 			}
 		}
-		job, err := client.Batches.Create(ctx, model, &genai.BatchJobSource{
-			GCSURI: []string{inputURI},
-			Format: "jsonl",
-		}, &genai.CreateBatchJobConfig{
+		cfg := &genai.CreateBatchJobConfig{
 			DisplayName: jobDisplayName,
 			Dest: &genai.BatchJobDestination{
 				Format: "jsonl",
 				GCSURI: outputPrefix,
 			},
-		})
+		}
+		// The genai SDK doesn't expose the serviceAccount field on
+		// BatchPredictionJob, so we inject it via ExtraBody. This tells
+		// Vertex AI to use our application SA (which has Storage Folder Admin)
+		// instead of the default AI Platform Service Agent (DDR-084).
+		if email := gcpServiceAccountEmail(); email != "" {
+			cfg.HTTPOptions = &genai.HTTPOptions{
+				ExtraBody: map[string]any{
+					"serviceAccount": email,
+				},
+			}
+			log.Debug().Str("service_account", email).Msg("Batch job will use custom service account")
+		}
+		job, err := client.Batches.Create(ctx, model, &genai.BatchJobSource{
+			GCSURI: []string{inputURI},
+			Format: "jsonl",
+		}, cfg)
 		if err != nil {
 			// Cleanup the uploaded input on failure.
 			deleteGCSObject(ctx, inputURI)
