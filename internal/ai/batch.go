@@ -175,34 +175,40 @@ func readBatchOutputFromGCS(ctx context.Context, outputGCSURI string) ([]GeminiB
 			return nil, fmt.Errorf("failed to read GCS output object %s: %w", attrs.Name, err)
 		}
 
-		scanner := bufio.NewScanner(rc)
-		// Increase buffer for large responses.
-		scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(bytes.TrimSpace(line)) == 0 {
-				continue
-			}
-			var row batchOutputRow
-			if err := json.Unmarshal(line, &row); err != nil {
-				log.Warn().Err(err).Int("line_idx", idx).Msg("Failed to parse batch output line")
-				results = append(results, GeminiBatchResult{Index: idx, Error: fmt.Sprintf("parse error: %v", err)})
+		// Use bufio.Reader.ReadBytes instead of bufio.Scanner so there is no
+		// hard line-length limit. Scanner caps at its buffer max (even if set
+		// to 4 MB) and returns "token too long" on large batch responses.
+		// ReadBytes dynamically allocates — the 4 MB here is just the initial
+		// read buffer, not a ceiling on line size.
+		reader := bufio.NewReaderSize(rc, 4*1024*1024)
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			// Process whatever was read before inspecting the error.
+			if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
+				var row batchOutputRow
+				if err := json.Unmarshal(trimmed, &row); err != nil {
+					log.Warn().Err(err).Int("line_idx", idx).Msg("Failed to parse batch output line")
+					results = append(results, GeminiBatchResult{Index: idx, Error: fmt.Sprintf("parse error: %v", err)})
+				} else {
+					result := GeminiBatchResult{Index: idx}
+					if row.Status != "" {
+						result.Error = row.Status
+					} else if row.Response != nil {
+						result.Response = row.Response
+					}
+					results = append(results, result)
+				}
 				idx++
-				continue
 			}
-			result := GeminiBatchResult{Index: idx}
-			if row.Status != "" {
-				result.Error = row.Status
-			} else if row.Response != nil {
-				result.Response = row.Response
+			if readErr == io.EOF {
+				break
 			}
-			results = append(results, result)
-			idx++
+			if readErr != nil {
+				rc.Close()
+				return nil, fmt.Errorf("failed to read GCS output object %s: %w", attrs.Name, readErr)
+			}
 		}
 		rc.Close()
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("failed to scan GCS output object %s: %w", attrs.Name, err)
-		}
 	}
 
 	log.Info().
