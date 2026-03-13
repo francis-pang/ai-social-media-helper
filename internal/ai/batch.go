@@ -106,8 +106,14 @@ func uploadBatchInputToGCS(ctx context.Context, bucketName string, requests []*g
 			},
 		}
 		if req.Config != nil {
-			row.Request.GenerationConfig = req.Config
-			row.Request.SystemInstruction = req.Config.SystemInstruction
+			// Copy config and nil out SystemInstruction so it doesn't appear
+			// inside generationConfig in the JSONL output. Vertex AI requires
+			// systemInstruction as a sibling of generationConfig, not nested
+			// within it.
+			cfgCopy := *req.Config
+			row.Request.SystemInstruction = cfgCopy.SystemInstruction
+			cfgCopy.SystemInstruction = nil
+			row.Request.GenerationConfig = &cfgCopy
 		}
 		line, err := json.Marshal(row)
 		if err != nil {
