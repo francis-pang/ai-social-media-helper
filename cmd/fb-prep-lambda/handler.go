@@ -564,7 +564,26 @@ func parseFBPrepResponse(responseText string, s3Keys []string) ([]store.FBPrepIt
 
 	var raw []fbPrepResponseItem
 	if err := json.Unmarshal([]byte(text), &raw); err != nil {
-		return nil, fmt.Errorf("parse JSON: %w", err)
+		// Vertex AI batch may return one JSON object per result line (not an array).
+		var single fbPrepResponseItem
+		if singleErr := json.Unmarshal([]byte(text), &single); singleErr == nil {
+			raw = []fbPrepResponseItem{single}
+		} else {
+			// Or JSONL: one JSON object per line within a single response.
+			for _, line := range strings.Split(text, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				var obj fbPrepResponseItem
+				if json.Unmarshal([]byte(line), &obj) == nil {
+					raw = append(raw, obj)
+				}
+			}
+			if len(raw) == 0 {
+				return nil, fmt.Errorf("parse JSON: %w", err)
+			}
+		}
 	}
 
 	items := make([]store.FBPrepItem, 0, len(raw))
@@ -750,28 +769,45 @@ func handleCollectBatch(ctx context.Context, m map[string]interface{}) (*FBPrepO
 		return nil, fmt.Errorf("collect-batch: no results in batch response")
 	}
 
-	result := batchStatus.Results[0]
-	if result.Error != "" {
-		return nil, fmt.Errorf("collect-batch: batch request failed: %s", result.Error)
-	}
-	if result.Response == nil {
-		return nil, fmt.Errorf("collect-batch: nil response in batch result")
-	}
-
-	responseText := result.Response.Text()
-	if responseText == "" {
-		return nil, fmt.Errorf("collect-batch: empty response text")
-	}
-
+	// Merge all batch results — Vertex AI may return one output line per input item
+	// (e.g. 6 items → 6 results). Previously we only used Results[0], losing items 1–5.
+	var allItems []store.FBPrepItem
 	var inputTokens, outputTokens int
-	if result.Response.UsageMetadata != nil {
-		inputTokens = int(result.Response.UsageMetadata.PromptTokenCount)
-		outputTokens = int(result.Response.UsageMetadata.CandidatesTokenCount)
+	for i, result := range batchStatus.Results {
+		if result.Error != "" {
+			return nil, fmt.Errorf("collect-batch: batch result %d failed: %s", i, result.Error)
+		}
+		if result.Response == nil {
+			return nil, fmt.Errorf("collect-batch: nil response in batch result %d", i)
+		}
+		responseText := result.Response.Text()
+		if responseText == "" {
+			continue // skip empty responses (e.g. from malformed output)
+		}
+		if result.Response.UsageMetadata != nil {
+			inputTokens += int(result.Response.UsageMetadata.PromptTokenCount)
+			outputTokens += int(result.Response.UsageMetadata.CandidatesTokenCount)
+		}
+		parsed, err := parseFBPrepResponse(responseText, job.MediaKeys)
+		if err != nil {
+			return nil, fmt.Errorf("collect-batch: failed to parse result %d: %w", i, err)
+		}
+		allItems = append(allItems, parsed...)
 	}
 
-	items, err := parseFBPrepResponse(responseText, job.MediaKeys)
-	if err != nil {
-		return nil, fmt.Errorf("collect-batch: failed to parse response: %w", err)
+	// Deduplicate by item_index (keep first occurrence) and sort for stable ordering.
+	seen := make(map[int]bool)
+	var items []store.FBPrepItem
+	for _, it := range allItems {
+		if seen[it.ItemIndex] {
+			continue
+		}
+		seen[it.ItemIndex] = true
+		items = append(items, it)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ItemIndex < items[j].ItemIndex })
+	if len(items) == 0 {
+		return nil, fmt.Errorf("collect-batch: no items parsed from %d batch result(s)", len(batchStatus.Results))
 	}
 
 	// Compare batch model location tags against pre-enrichment values (DDR-085).

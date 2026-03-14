@@ -18,6 +18,12 @@ The batch JSONL was built by marshaling `genai.GenerateContentConfig` into the `
 
 The code attempted to nil out `cfgCopy.SystemInstruction` before marshaling, but the `genai.GenerateContentConfig` struct could still emit `systemInstruction` in the JSON output (e.g. via `omitempty` behavior or struct embedding), causing Vertex AI to reject the batch input during import.
 
+### Problem 2: 6 Items Show Only 1 Result
+
+After the schema fix, users reported that FB Prep jobs with multiple items (e.g. 6 photos) only displayed results for 1 item. The batch job completed successfully, but the UI showed a single item instead of all 6.
+
+**Root cause**: `handleCollectBatch` in `cmd/fb-prep-lambda/handler.go` only used the first batch result (`batchStatus.Results[0]`). Vertex AI batch output can contain multiple result lines — one per input item when the batch job splits or shards output. By using only `Results[0]`, items 1–5 were discarded.
+
 ## Decision
 
 ### 1. Vertex AI–Compatible generationConfig Struct
@@ -44,15 +50,28 @@ Change `batchJSONLRequest.GenerationConfig` from `*genai.GenerateContentConfig` 
 
 Add `TestBatchJSONLExcludesSystemInstructionFromGenerationConfig` in `internal/ai/batch_test.go` to assert that marshaled batch JSONL never places `systemInstruction` inside `generationConfig`.
 
+### 5. FB Prep Collect Batch — Merge All Results
+
+Iterate over all `batchStatus.Results` in `handleCollectBatch`, parse each response, and concatenate items. Deduplicate by `item_index` (keep first occurrence) and sort for stable ordering. Aggregate `inputTokens` and `outputTokens` across all results.
+
+### 6. Extend parseFBPrepResponse
+
+Support additional response formats that Vertex AI may return:
+
+- **Single JSON object** (not array): `{"item_index":0,"caption":"...",...}`
+- **JSONL** (one JSON object per line within a single response)
+
 ## Files Changed
 
 ### Backend (`ai-social-media-helper`)
 - `internal/ai/batch.go` — `vertexGenConfig` struct, `toVertexGenConfig()`, `batchJSONLRequest` uses `*vertexGenConfig`
 - `internal/ai/batch_test.go` — new unit test
+- `cmd/fb-prep-lambda/handler.go` — `handleCollectBatch` merges all results; `parseFBPrepResponse` handles single object and JSONL
 
 ## Consequences
 
 - Economy-mode batch jobs (FB Prep, Triage, Description, Selection) succeed on Vertex AI
+- All items from multi-item FB Prep jobs are now displayed (merge-all-results fix)
 - No change to callers — the fix is encapsulated in `batch.go`
 - `vertexGenConfig` is a strict subset; new genai config fields must be explicitly added if Vertex AI supports them
 - When config has only `SystemInstruction` (e.g. FB Prep), `toVertexGenConfig` returns `nil` and no `generationConfig` is emitted — valid per Vertex AI schema
