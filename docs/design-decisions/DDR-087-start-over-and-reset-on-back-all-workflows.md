@@ -32,8 +32,13 @@ Triage (handleBack) and SelectionView/EnhancementView (handleBack) already reset
 
 Add `resetFBPrepState()` to `navigateToLanding()` so that going Home from any workflow always clears FB Prep job state.
 
+### 4. Reset when proceeding (FB Prep Continue)
+
+In `FBPrepUploader.proceedToFBPrep()`, call `resetFBPrepState()` before setting `fbPrepMediaKeys` and navigating to `fb-prep`. That way each “Continue to Facebook Prep” starts a fresh job and never shows stale results (fixes the case where a fresh batch went straight to the result page with old data).
+
 ## Files Changed
 
+- `web/src/components/FBPrepUploader.tsx` — `proceedToFBPrep()` calls `resetFBPrepState()` before setting keys and navigating
 - `web/src/components/FBPrepView.tsx` — `startOver()`, Start Over button, import `navigateToLanding`, `resetFBPrepUploaderState`
 - `web/src/components/SelectionView.tsx` — import `navigateToLanding`, Start Over button
 - `web/src/components/EnhancementView.tsx` — import `navigateToLanding`, Start Over button

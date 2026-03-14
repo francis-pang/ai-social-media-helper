@@ -1,7 +1,7 @@
 import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
 import { createUploadEngine } from "../upload/uploadEngine";
-import { fbPrepMediaKeys } from "./FBPrepView";
+import { fbPrepMediaKeys, resetFBPrepState } from "./FBPrepView";
 import { uploadSessionId, navigateToStep } from "../app";
 import { syncUrlToStep } from "../router";
 import { getFilesFromDataTransfer } from "../utils/fileSystem";
@@ -306,13 +306,13 @@ export function resetFBPrepUploaderState() {
 function proceedToFBPrep() {
   const lifecycle = getFilesWithLifecycle();
   const doneFiles = lifecycle.filter((f) => f.lifecycleStatus === "ready" || f.lifecycleStatus === "thumbnailed");
-  if (doneFiles.length === 0) {
-    const uploadedFiles = files.value.filter((f) => f.status === "done");
-    if (uploadedFiles.length === 0) return;
-    fbPrepMediaKeys.value = uploadedFiles.map((f) => f.key);
-  } else {
-    fbPrepMediaKeys.value = doneFiles.map((f) => f.key);
-  }
+  const keys =
+    doneFiles.length > 0
+      ? doneFiles.map((f) => f.key)
+      : files.value.filter((f) => f.status === "done").map((f) => f.key);
+  if (keys.length === 0) return;
+  resetFBPrepState();
+  fbPrepMediaKeys.value = keys;
   stopPolling();
   navigateToStep("fb-prep");
 }
