@@ -41,6 +41,8 @@ interface ProcessingIndicatorProps {
   triageJobId?: string;
   /** Triage session ID for raw CloudWatch log fetching (DDR-076). */
   triageSessionId?: string;
+  /** Override derived stage (1–3) for the step pipeline. */
+  stage?: number;
   children?: ComponentChildren;
   onCancel?: () => void;
 }
@@ -124,7 +126,7 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
   const [rawLogs, setRawLogs] = useState<TriageLogEntry[]>([]);
   const rawLogSinceRef = useRef(0);
 
-  const currentStage = deriveStage(props.status);
+  const currentStage = props.stage ?? deriveStage(props.status);
 
   const hasProgress =
     props.completedCount != null &&

@@ -196,6 +196,16 @@ func handleFBPrepResults(w http.ResponseWriter, r *http.Request, jobID string) {
 	if job.Error != "" {
 		resp["error"] = job.Error
 	}
+	resp["totalCount"] = len(job.MediaKeys)
+	resp["completedCount"] = len(job.Items)
+	switch job.Status {
+	case "complete":
+		resp["stage"] = 3
+	case "pending":
+		resp["stage"] = 2
+	default:
+		resp["stage"] = 1
+	}
 	respondJSON(w, http.StatusOK, resp)
 }
 

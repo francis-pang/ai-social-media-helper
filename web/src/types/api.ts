@@ -478,6 +478,9 @@ export interface FBPrepJob {
   outputTokens?: number;
   items?: FBPrepItem[];
   error?: string;
+  totalCount?: number;
+  completedCount?: number;
+  stage?: number;
 }
 
 /** A single media item's Facebook prep output. */

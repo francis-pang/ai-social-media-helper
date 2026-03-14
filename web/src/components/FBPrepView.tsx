@@ -371,9 +371,6 @@ export function FBPrepView() {
     job.status === "pending" ||
     job.status === "processing"
   ) {
-    const itemCount = job?.items?.length ?? 0;
-    const totalCount = keys.length;
-
     return (
       <ProcessingIndicator
         title="Preparing for Facebook"
@@ -382,8 +379,9 @@ export function FBPrepView() {
         jobId={jobId.value ?? undefined}
         sessionId={sessionId ?? undefined}
         pollIntervalMs={2000}
-        completedCount={itemCount}
-        totalCount={totalCount}
+        completedCount={job?.completedCount ?? job?.items?.length ?? 0}
+        totalCount={job?.totalCount ?? keys.length}
+        stage={job?.stage}
         startedAt={job?.createdAt ?? undefined}
         inputTokens={job?.inputTokens}
         outputTokens={job?.outputTokens}

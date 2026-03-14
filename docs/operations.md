@@ -512,6 +512,89 @@ Session Metrics:
 
 ---
 
+## Debugging Methodology
+
+### Session ID vs Job ID
+
+When debugging FB Prep (and other workflows), two identifiers matter:
+
+| Identifier | Format | Example | Role |
+|------------|--------|---------|------|
+| **Session ID** | UUID | `7697250f-7572-42bb-9862-203d4f429d67` | Entry point — search logs by `sessionId` to find the corresponding `jobId` |
+| **Job ID** | `fb-` + 32 hex chars | `fb-c41bf1821111930c5fbf29665e91e439` | Step Functions execution name, log search (`jobId` field) |
+
+If the user provides a UUID-format value, treat it as **session ID**. Search logs by `sessionId`; the log output will contain the corresponding `jobId`. Use that job ID for Step Functions.
+
+### FB Prep Debugging Playbook
+
+**Step 1: Find job ID from session ID** (when user provides UUID)
+
+Use CloudWatch Logs Insights to search across FB Prep log groups. Replace `SESSION_ID` with the user's value:
+
+```bash
+aws logs start-query \
+  --log-group-names \
+    "/aws/lambda/AiSocialMediaBackend-FBPrepProcessor1316C492-5MGQIcTJKBCP" \
+    "/aws/lambda/AiSocialMediaBackend-FBPrepSubmitBatchProcessor4DB-rMqH39n0oQ6i" \
+    "/aws/lambda/AiSocialMediaBackend-FBPrepGcsUploadProcessorCBA70-gm1mvg1DoykD" \
+    "/aws/lambda/AiSocialMediaBackend-FBPrepCollectBatchProcessor81-CPUvq3D999bl" \
+    "/aws/lambda/AiSocialMediaBackend-GeminiBatchPollProcessor4EF19-YL3iGbkHpPPq" \
+  --start-time $(($(date +%s) - 86400*7)) \
+  --end-time $(date +%s) \
+  --query-string 'fields @timestamp, @message | filter @message like /SESSION_ID/ | sort @timestamp desc | limit 50'
+
+# Then: aws logs get-query-results --query-id <returned-query-id>
+```
+
+Logs will show both `sessionId` and `jobId`; use `jobId` for Step Functions.
+
+**Step 2: AWS Step Functions** (use job ID)
+
+```bash
+aws stepfunctions describe-execution \
+  --execution-arn "arn:aws:states:us-east-1:ACCOUNT_ID:execution:AiSocialMediaFBPrepPipeline:JOB_ID"
+
+aws stepfunctions get-execution-history \
+  --execution-arn "arn:aws:states:us-east-1:ACCOUNT_ID:execution:AiSocialMediaFBPrepPipeline:JOB_ID" \
+  --max-results 60
+```
+
+**Step 3: CloudWatch Lambda logs** (filter by session ID or job ID)
+
+```bash
+aws logs filter-log-events \
+  --log-group-name "/aws/lambda/AiSocialMediaBackend-FBPrepProcessor1316C492-5MGQIcTJKBCP" \
+  --filter-pattern '"SESSION_ID_OR_JOB_ID"' \
+  --start-time $(($(date +%s) - 86400*7))000
+```
+
+**Step 4: GCP / Vertex AI**
+
+- Vertex AI Batch Prediction Jobs: search by job name from submit-batch logs (`batch_job_id`).
+- GCS bucket (`GCS_BATCH_BUCKET`): `fb-prep-videos/{jobId}/` for videos; `batch-output/` for results.
+
+### FB Prep Log Groups and State Machine ARNs (us-east-1)
+
+| Component | Log Group |
+|-----------|-----------|
+| API | `/aws/lambda/AiSocialMediaBackend-ApiHandler5E7490E8-*` |
+| FB Prep Processor | `/aws/lambda/AiSocialMediaBackend-FBPrepProcessor1316C492-5MGQIcTJKBCP` |
+| GCS Upload | `/aws/lambda/AiSocialMediaBackend-FBPrepGcsUploadProcessorCBA70-gm1mvg1DoykD` |
+| Submit Batch | `/aws/lambda/AiSocialMediaBackend-FBPrepSubmitBatchProcessor4DB-rMqH39n0oQ6i` |
+| Collect Batch | `/aws/lambda/AiSocialMediaBackend-FBPrepCollectBatchProcessor81-CPUvq3D999bl` |
+| Gemini Batch Poll | `/aws/lambda/AiSocialMediaBackend-GeminiBatchPollProcessor4EF19-YL3iGbkHpPPq` |
+
+| State Machine | ARN |
+|----------------|-----|
+| FBPrepPipeline | `arn:aws:states:us-east-1:681565534940:stateMachine:AiSocialMediaFBPrepPipeline` |
+| GeminiBatchPollPipeline | `arn:aws:states:us-east-1:681565534940:stateMachine:AiSocialMediaGeminiBatchPollPipeline` |
+
+### Known Pitfall: UI May Show Session ID as Job ID
+
+The ProcessingIndicator may display the session ID where users expect a job ID (when `jobId` is undefined and it falls back to `sessionId`). If a user reports "Job ID" with a UUID format, treat it as **session ID** and search logs to find the actual `fb-`-prefixed job ID.
+
+---
+
 ## Error Handling
 
 ### Error Categories
