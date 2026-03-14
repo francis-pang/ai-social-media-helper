@@ -55,7 +55,7 @@ import {
 } from "./components/PublishView";
 import { MediaPlayer } from "./components/MediaPlayer";
 import { TriageView } from "./components/TriageView";
-import { FBPrepView } from "./components/FBPrepView";
+import { FBPrepView, resetFBPrepState } from "./components/FBPrepView";
 import { FBPrepUploader, resetFBPrepUploaderState } from "./components/FBPrepUploader";
 import { FileUploader, resetFileUploaderState } from "./components/FileUploader";
 import { syncUrlToStep } from "./router";
@@ -157,11 +157,22 @@ export function navigateToStep(step: Step) {
   syncUrlToStep(step, uploadSessionId.value);
 }
 
+/** Reset to call when leaving a step via Back (steps that use navigateBack directly). */
+const RESET_ON_BACK: Partial<Record<Step, () => void>> = {
+  "fb-prep": resetFBPrepState,
+  "group-posts": resetPostGrouperState,
+  "publish": resetDownloadState,
+  "description": resetDescriptionState,
+  "instagram-publish": resetPublishState,
+};
+
 /** Navigate back to the previous step (pops from history stack). */
 export function navigateBack() {
   const history = stepHistory.value;
   if (history.length === 0) return;
   const prev = history.at(-1)!;
+  const resetFn = RESET_ON_BACK[currentStep.value];
+  if (resetFn) resetFn();
   stepHistory.value = history.slice(0, -1);
   currentStep.value = prev;
   syncUrlToStep(prev, uploadSessionId.value);
@@ -291,6 +302,7 @@ export function navigateToLanding() {
   resetPublishState();
   resetFileUploaderState();
   resetFBPrepUploaderState();
+  resetFBPrepState();
   syncUrlToStep("landing");
 }
 

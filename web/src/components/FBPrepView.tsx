@@ -9,7 +9,8 @@ import {
   submitFBPrepFeedback,
   thumbnailUrl,
 } from "../api/client";
-import { navigateBack, uploadSessionId, economyMode } from "../app";
+import { navigateBack, navigateToLanding, uploadSessionId, economyMode } from "../app";
+import { resetFBPrepUploaderState } from "./FBPrepUploader";
 import type { FBPrepJob, FBPrepItem } from "../types/api";
 
 // --- State ---
@@ -32,6 +33,12 @@ const feedbackLoading = signal(false);
 
 /** Copy status: which field was just copied (for "Copied!" display). */
 const copyStatus = signal<{ itemIndex: number; field: string } | null>(null);
+
+function startOver() {
+  resetFBPrepState();
+  resetFBPrepUploaderState();
+  navigateToLanding();
+}
 
 /**
  * Reset all FB prep state.
@@ -515,9 +522,14 @@ export function FBPrepView() {
           </span>
         }
         right={
-          <button class="outline" onClick={() => navigateBack()}>
-            Back
-          </button>
+          <>
+            <button class="outline" onClick={() => navigateBack()}>
+              Back
+            </button>
+            <button class="outline" onClick={startOver}>
+              Start Over
+            </button>
+          </>
         }
       />
     </div>

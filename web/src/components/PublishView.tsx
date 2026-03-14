@@ -3,6 +3,7 @@ import { useEffect } from "preact/hooks";
 import {
   navigateBack,
   navigateToStep,
+  navigateToLanding,
   uploadSessionId,
   economyMode,
 } from "../app";
@@ -695,6 +696,9 @@ export function PublishView() {
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <button class="outline" onClick={() => navigateBack()}>
               Back
+            </button>
+            <button class="outline" onClick={navigateToLanding}>
+              Start Over
             </button>
             <button
               class="outline"

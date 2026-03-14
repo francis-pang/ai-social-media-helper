@@ -1,5 +1,5 @@
 import { signal, computed } from "@preact/signals";
-import { navigateBack, navigateToStep, uploadSessionId, economyMode } from "../app";
+import { navigateBack, navigateToStep, navigateToLanding, uploadSessionId, economyMode } from "../app";
 import { startDownload, getDownloadResults } from "../api/client";
 import { ActionBar } from "./shared/ActionBar";
 import { GroupCard } from "./download/GroupCard";
@@ -204,6 +204,9 @@ export function DownloadView() {
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <button class="outline" onClick={() => navigateBack()}>
               Back to Grouping
+            </button>
+            <button class="outline" onClick={navigateToLanding}>
+              Start Over
             </button>
             <button
               class="primary"

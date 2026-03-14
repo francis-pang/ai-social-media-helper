@@ -4,6 +4,7 @@ import {
   currentStep,
   navigateBack,
   navigateToStep,
+  navigateToLanding,
   invalidateDownstream,
   uploadSessionId,
   setStep,
@@ -369,6 +370,7 @@ export function EnhancementView() {
         right={
           <div style={{ display: "flex", gap: "0.75rem" }}>
             <button class="outline" onClick={handleBack}>Back to Selection</button>
+            <button class="outline" onClick={navigateToLanding}>Start Over</button>
             <button class="primary" onClick={handleProceed} disabled={completedItems.length === 0}>
               Proceed to Grouping ({completedItems.length})
             </button>

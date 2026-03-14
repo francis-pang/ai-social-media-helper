@@ -4,6 +4,7 @@ import {
   currentStep,
   navigateBack,
   navigateToStep,
+  navigateToLanding,
   invalidateDownstream,
   uploadSessionId,
   tripContext,
@@ -755,6 +756,9 @@ export function SelectionView() {
           <div style={{ display: "flex", gap: "0.75rem" }}>
             <button class="outline" onClick={handleBack}>
               Back to Upload
+            </button>
+            <button class="outline" onClick={navigateToLanding}>
+              Start Over
             </button>
             <button
               class="primary"

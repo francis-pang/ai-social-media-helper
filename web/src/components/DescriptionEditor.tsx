@@ -3,6 +3,7 @@ import { useEffect } from "preact/hooks";
 import {
   navigateBack,
   navigateToStep,
+  navigateToLanding,
   uploadSessionId,
   tripContext,
   economyMode,
@@ -402,6 +403,9 @@ export function DescriptionEditor() {
         <button class="outline" onClick={() => navigateBack()}>
           Back
         </button>
+        <button class="outline" onClick={navigateToLanding}>
+          Start Over
+        </button>
       </div>
     );
   }
@@ -708,7 +712,10 @@ export function DescriptionEditor() {
 
       <ActionBar
         left={
-          <button class="outline" onClick={() => navigateBack()}>Back</button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button class="outline" onClick={() => navigateBack()}>Back</button>
+            <button class="outline" onClick={navigateToLanding}>Start Over</button>
+          </div>
         }
         right={
           <div style={{ display: "flex", gap: "0.5rem" }}>

@@ -1,5 +1,5 @@
 import { computed } from "@preact/signals";
-import { navigateBack, navigateToStep } from "../app";
+import { navigateBack, navigateToStep, navigateToLanding } from "../app";
 import type { GroupableMediaItem } from "../types/api";
 import { ActionBar } from "./shared/ActionBar";
 import { MediaThumbnail } from "./post-grouper/MediaThumbnail";
@@ -494,6 +494,7 @@ export function PostGrouper() {
         right={
           <div style={{ display: "flex", gap: "0.75rem" }}>
             <button class="outline" onClick={handleBack}>Back to Enhancement</button>
+            <button class="outline" onClick={navigateToLanding}>Start Over</button>
             <button class="primary" onClick={handleProceed} disabled={nonEmptyGroups.length === 0}>
               Continue ({nonEmptyGroups.length} post{nonEmptyGroups.length !== 1 ? "s" : ""})
             </button>
