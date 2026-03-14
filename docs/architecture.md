@@ -136,7 +136,10 @@ graph TD
         EnhancementLambda["Enhancement Lambda\n(2GB, 5min)"]
         VideoLambda["Video Lambda\n(4GB, 15min)"]
         MediaProcessLambda["MediaProcess Lambda\n(4GB, 15min, DDR-061, DDR-067, DDR-071)"]
-        FBPrepLambda["FB Prep Lambda\n(2GB, 5min, DDR-082)"]
+        FBPrepLambda["FB Prep Lambda\n(2GB, 5min, Run/feedback)"]
+        FBPrepGcsUpload["FB Prep GCS Upload\n(512MB, 2min)"]
+        FBPrepSubmit["FB Prep Submit Batch\n(2GB, 5min)"]
+        FBPrepCollect["FB Prep Collect Batch\n(512MB, 5min)"]
         StepFn["Step Functions\n(Selection, Enhancement,\nTriage, Publish, FBPrep)"]
         DynamoDB["DynamoDB\n(session state, TTL 24h)"]
         FileProcessingDB["DynamoDB\n(file processing, TTL 4h,\nDDR-061)"]
@@ -169,6 +172,9 @@ graph TD
     StepFn --> EnhancementLambda
     StepFn --> VideoLambda
     StepFn --> FBPrepLambda
+    StepFn --> FBPrepGcsUpload
+    StepFn --> FBPrepSubmit
+    StepFn --> FBPrepCollect
     TriageLambda --> GeminiAPI
     PublishLambda --> InstagramAPI
     ThumbLambda --> S3Media
@@ -176,6 +182,8 @@ graph TD
     EnhancementLambda --> GeminiAPI
     VideoLambda --> S3Media
     FBPrepLambda --> GeminiAPI
+    FBPrepSubmit --> GeminiAPI
+    FBPrepCollect --> GeminiAPI
     APILambda --> SSM
     Browser -->|"presigned PUT"| S3Media
     S3Media -->|"S3 ObjectCreated"| MediaProcessLambda
@@ -209,7 +217,10 @@ Processing steps that exceed API Gateway's 30-second timeout use AWS Step Functi
 | Selection | Gemini AI media selection | Heavy (ffmpeg) | 4 GB | 15 min | Vertex AI / Gemini |
 | Enhancement | Per-photo Gemini image editing + feedback (DDR-053) | Light | 2 GB | 5 min | Vertex AI / Gemini |
 | Video | Per-video ffmpeg enhancement | Heavy (ffmpeg) | 4 GB | 15 min | Vertex AI / Gemini |
-| FB Prep | Facebook caption + location (Google Maps grounding) + date/time from EXIF (DDR-082: via FBPrepPipeline SFN) | Light | 2 GB | 5 min | Vertex AI / Gemini (Maps) |
+| FB Prep | Run (prepare batches), feedback (per-item regenerate), mark-error (DDR-082: via FBPrepPipeline SFN) | Light | 2 GB | 5 min | Vertex AI / Gemini (Maps) |
+| FB Prep GCS Upload | Upload one video from S3 to GCS for Vertex AI batch (Map state, one per video) | Light | 512 MB | 2 min | S3, GCS |
+| FB Prep Submit Batch | Build batch requests, submit to Vertex AI | Light | 2 GB | 5 min | Vertex AI / Gemini |
+| FB Prep Collect Batch | Collect and merge Vertex AI batch results, write to DynamoDB | Light | 512 MB | 5 min | Vertex AI / Gemini |
 | Gemini Batch Poll | Lightweight Vertex AI / Gemini Batch API status poller (Gemini Batch Poll SFN worker) | Light | 128 MB | 10s | Vertex AI / Gemini |
 | Webhook | Meta webhook verification + event handling | Light | 128 MB | 10s | None |
 | OAuth | Instagram OAuth token exchange | Light | 128 MB | 10s | Instagram |
@@ -231,7 +242,7 @@ The API Lambda dispatches all long-running work asynchronously — **no backgrou
 | Enhancement | Step Functions `StartExecution` | Enhancement + Video pipeline |
 | Triage | Step Functions `StartExecution` (DDR-052) | Triage Lambda (prepare → run; DDR-060 bypasses Gemini polling) |
 | Publish | Step Functions `StartExecution` (DDR-052) | Publish Lambda (containers → poll Instagram → finalize) |
-| Facebook Prep | Step Functions `StartExecution` (DDR-082) | FBPrepPipeline SFN → FB Prep Lambda (real-time or Gemini Batch) |
+| Facebook Prep | Step Functions `StartExecution` (DDR-082) | FBPrepPipeline SFN → FB Prep (Run) + GCS Upload (Map) + Submit Batch + Collect Batch |
 | Description | `lambda:Invoke` (async) | Description Lambda (DDR-053) |
 | Download | `lambda:Invoke` (async) | Download Lambda (DDR-053) |
 | Enhancement feedback | `lambda:Invoke` (async) | Enhancement Lambda (DDR-053, real-time, not batchable) |
@@ -254,7 +265,10 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 | Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, model, mediaKeys[], thumbnailKeys[]}` | `{jobId, selectedCount, excludedCount, sceneGroupCount}` |
 | Enhancement | `cmd/enhance-lambda` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
 | Video | `cmd/video-lambda` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
-| FB Prep | `cmd/fb-prep-lambda` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, mediaKeys[], economyMode}` or `{type: fb-prep-collect-batch, sessionId, jobId, batchJobId}` | writes DynamoDB (pending → complete + token counts) |
+| FB Prep | `cmd/fb-prep-lambda` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, mediaKeys[], economyMode}` or `{type: fb-prep-feedback, ...}` or `{type: fb-prep-mark-error, ...}` | writes DynamoDB |
+| FB Prep GCS Upload | `cmd/fb-prep-gcs-upload` | Step Functions (Map) | `{s3_key, use_key, job_id, batch_index, item_index_in_batch}` | `{gs_uri, batch_index, item_index_in_batch, s3_key}` |
+| FB Prep Submit Batch | `cmd/fb-prep-submit-batch` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, batchesMeta, locationTags, gcsUploadResults}` | `{session_id, status, batch_job_id, batch_job_ids}` |
+| FB Prep Collect Batch | `cmd/fb-prep-collect-batch` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, batchJobId, batchJobIds}` | writes DynamoDB (complete + token counts) |
 | Gemini Batch Poll | `cmd/gemini-batch-poll` | Step Functions | `{batch_job_id}` | `{state, results, error}` |
 
 Thumbnail and Enhancement Lambdas process exactly one file per invocation (Step Functions Map state fans out). Selection Lambda processes all files in one batch. Enhancement Lambda also handles feedback via async invocation (DDR-053). See [DDR-043](./design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
@@ -263,13 +277,14 @@ Each processing Lambda is split into multiple files (e.g. `main.go`, `types.go`,
 
 ### Shared Internal Packages
 
-The `internal/` directory contains 18 shared packages used across Lambda binaries and CLI tools:
+The `internal/` directory contains shared packages used across Lambda binaries and CLI tools:
 
 | Package | Purpose | Key Patterns |
 |---------|---------|-------------|
 | `ai` | Dual-backend AI client (Vertex AI + Gemini API), Batch API | `NewAIClient`, `LoadGCPServiceAccount`, `SubmitGeminiBatch`, `CheckGeminiBatch` |
 | `assets` | Embedded prompts and reference photos | `go:embed` directives |
 | `auth` | API key validation, Cognito JWT | Typed error classification |
+| `fbprep` | FB Prep shared logic (parse, submit) | `ParseResponse`, `BuildPrompt`, `BuildMediaPartsWithGCSURIs`, `FilterLocationTagsForBatch` |
 | `chat` | Gemini content generation (selection, triage, enhancement, description, FB Prep) | `UploadFileAndWait`, `BuildMediaParts`, `GenerateWithOptionalCache`, `ParseResponse[T]` |
 | `cli` | CLI utilities for `media-select` and `media-triage` | Cobra command builders |
 | `filehandler` | EXIF extraction, thumbnails, video compression | `runFFmpeg`/`runFFprobe` helpers, unified `ScanDirectoryWithOptions` |
@@ -504,6 +519,9 @@ sequenceDiagram
     participant DB as DynamoDB
     participant SFN as FBPrepPipeline SFN
     participant FBP as FB Prep Lambda
+    participant GcsUpload as FB Prep GCS Upload Lambda
+    participant Submit as FB Prep Submit Batch Lambda
+    participant Collect as FB Prep Collect Batch Lambda
     participant BatchPoll as GeminiBatchPollPipeline
     participant Gemini as Vertex AI / Gemini
     participant Maps as Google Maps Grounding
@@ -515,7 +533,7 @@ sequenceDiagram
 
     Note over SFN,FBP: FBPrepPipeline — RunFBPrep step
 
-    SFN->>FBP: Invoke {type: fb-prep, sessionId, jobId, mediaKeys, economyMode}
+    SFN->>FBP: Invoke {sessionId, jobId, mediaKeys, economyMode}
     FBP->>FBP: Build Gemini parts (download thumbnails, handle videos)
     FBP->>FBP: Append EXIF metadata context (GPS, date/time)
 
@@ -530,15 +548,24 @@ sequenceDiagram
         Note over SFN: FBPrepIsBatch Choice — no batch_job_id → Succeed
 
     else economyMode = true (economy)
-        FBP->>Gemini: SubmitGeminiBatch (50% cost savings, ~10 min latency)
-        Gemini-->>FBP: batch_job_id
-        FBP->>DB: Write FBPrepJob {status: pending, batchJobId, mediaKeys}
-        FBP-->>SFN: {status: pending, batch_job_id}
+        FBP-->>SFN: {videos_to_upload, batches_meta, location_tags}
 
-        Note over SFN: FBPrepIsBatch Choice — batch_job_id present → start polling
+        Note over SFN: MapUploadVideos — one GCS Upload Lambda per video
+        loop For each video
+            SFN->>GcsUpload: Invoke {s3_key, use_key, job_id, batch_index, item_index_in_batch}
+            GcsUpload->>GcsUpload: Download from S3, upload to GCS
+            GcsUpload-->>SFN: {gs_uri, batch_index, item_index_in_batch}
+        end
 
-        SFN->>BatchPoll: StartExecution.sync {batch_job_id}
+        Note over SFN: RunFBPrepSubmit step
+        SFN->>Submit: Invoke {sessionId, jobId, batchesMeta, locationTags, gcsUploadResults}
+        Submit->>Gemini: SubmitGeminiBatch (GCS URIs for videos)
+        Gemini-->>Submit: batch_job_id(s)
+        Submit->>DB: Write FBPrepJob {status: pending, batchJobId(s), gcsPathsForCleanup}
+        Submit-->>SFN: {batch_job_id, batch_job_ids}
 
+        Note over SFN: Poll until SUCCEEDED
+        SFN->>BatchPoll: StartExecution.sync {batch_job_id(s)}
         loop Every 15 seconds until SUCCEEDED or FAILED
             BatchPoll->>Gemini: GetBatchJob(batch_job_id)
             Gemini-->>BatchPoll: {state, results}
@@ -546,12 +573,11 @@ sequenceDiagram
         BatchPoll-->>SFN: SUCCEEDED
 
         Note over SFN: CollectBatchResults step
-
-        SFN->>FBP: Invoke {type: fb-prep-collect-batch, sessionId, jobId, batchJobId}
-        FBP->>Gemini: CheckGeminiBatch(batchJobId) — retrieve results
-        Gemini-->>FBP: [{response, usageMetadata}]
-        FBP->>DB: Write complete FBPrepJob {items, inputTokens, outputTokens}
-        FBP-->>SFN: {status: complete}
+        SFN->>Collect: Invoke {sessionId, jobId, batchJobId(s)}
+        Collect->>Gemini: CheckGeminiBatch — retrieve results
+        Gemini-->>Collect: [{response, usageMetadata}]
+        Collect->>DB: Write complete FBPrepJob {items, inputTokens, outputTokens}
+        Collect-->>SFN: {status: complete}
     end
 
     loop Frontend polls until status = complete
@@ -562,6 +588,7 @@ sequenceDiagram
     end
 
     FE->>API: POST /api/fb-prep/{id}/feedback (per-item regeneration, always real-time)
+    API->>FBP: Invoke {type: fb-prep-feedback, ...}
 ```
 
 **Key design choices:**
