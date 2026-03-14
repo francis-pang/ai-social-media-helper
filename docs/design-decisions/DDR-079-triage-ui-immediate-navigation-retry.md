@@ -69,7 +69,7 @@ actual CloudWatch log entries polled every 4 seconds.
 | `cmd/api/triage.go` | Re-finalize support, batch progress in results, `handleTriageLogs` endpoint |
 | `cmd/api/globals.go` | Add `cwlClient` for CloudWatch Logs |
 | `cmd/api/main.go` | Initialize CloudWatch Logs client |
-| `cmd/triage-worker/handler.go` | Pass batch progress callback to `AskMediaTriage` |
+| `cmd/media-triage/handler.go` | Pass batch progress callback to `AskMediaTriage` |
 | `internal/ai/triage.go` | Add `BatchProgressFunc` parameter to `AskMediaTriage` |
 | `internal/store/store.go` | Add `RetryCount`, `TriageBatch`, `TriageBatchTotal` to `TriageJob` |
 

@@ -240,7 +240,7 @@ Log messages emitted during client creation:
 
 #### HTTP handlers (API Lambda)
 
-HTTP handlers use shared helper functions from `cmd/media-lambda/handler_helpers.go` to eliminate repeated validation boilerplate. Each helper returns `false` and writes the HTTP error response if validation fails, enabling early-return guard clauses:
+HTTP handlers use shared helper functions from `cmd/api/handler_helpers.go` to eliminate repeated validation boilerplate. Each helper returns `false` and writes the HTTP error response if validation fails, enabling early-return guard clauses:
 
 ```go
 func handleTriageStart(w http.ResponseWriter, r *http.Request) {
@@ -273,7 +273,7 @@ func handleTriageStart(w http.ResponseWriter, r *http.Request) {
 | `requireQueryParam` | `r.URL.Query().Get()` + empty check | 6+ |
 | `validateKeysForSession` | S3 key validation loop + session prefix check | 3+ |
 
-Both `cmd/media-lambda/` and `cmd/media-web/` use `internal/httputil` for shared response helpers (`RespondJSON`, `Error`).
+Both `cmd/api/` and `cmd/web-server/` use `internal/httputil` for shared response helpers (`RespondJSON`, `Error`).
 
 #### Worker Lambda job handlers
 

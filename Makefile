@@ -9,53 +9,53 @@ all: build-select build-triage build-web
 # Build the Preact frontend for cloud deployment (uses .env.production → cloud mode)
 build-frontend:
 	cd web && npm install && npm run build
-	rm -rf cmd/web-server/frontend_dist
-	cp -r web/dist cmd/web-server/frontend_dist
+	rm -rf cmd/cli/web-server/frontend_dist
+	cp -r web/dist cmd/cli/web-server/frontend_dist
 
 # Build the Preact frontend for local mode (overrides VITE_CLOUD_MODE from .env.production)
 build-frontend-local:
 	cd web && npm install && VITE_CLOUD_MODE= npm run build
-	rm -rf cmd/web-server/frontend_dist
-	cp -r web/dist cmd/web-server/frontend_dist
+	rm -rf cmd/cli/web-server/frontend_dist
+	cp -r web/dist cmd/cli/web-server/frontend_dist
 
 # Build the web server with local-mode frontend
 build-web: build-frontend-local
-	go build -o bin/web-server ./cmd/web-server
+	go build -o bin/web-server ./cmd/cli/web-server
 
 # Build CLI tools
 build-select:
-	go build -o bin/media-select ./cmd/media-select
+	go build -o bin/media-select ./cmd/cli/media-select
 
 build-triage:
-	go build -o bin/media-triage ./cmd/media-triage
+	go build -o bin/media-triage ./cmd/cli/media-triage
 
 # Build Lambda binaries (for local testing — Docker builds use Dockerfiles)
 build-lambda-api:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-api ./cmd/api
 
 build-lambda-thumbnail:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-thumbnail ./cmd/thumbnail-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-thumbnail ./cmd/lambda/pipeline/thumbnail-worker
 
 build-lambda-selection:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-selection ./cmd/selection-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-selection ./cmd/lambda/media-selection/selection-worker
 
 build-lambda-enhance:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-enhance ./cmd/enhance-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-enhance ./cmd/lambda/media-selection/enhance-worker
 
 build-lambda-video:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-video ./cmd/video-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-video ./cmd/lambda/pipeline/video-worker
 
 build-lambda-triage:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-triage ./cmd/triage-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-triage ./cmd/lambda/media-triage
 
 build-lambda-description:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-description ./cmd/description-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-description ./cmd/lambda/media-selection/description-worker
 
 build-lambda-download:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-download ./cmd/download-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-download ./cmd/lambda/media-selection/download-worker
 
 build-lambda-publish:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-publish ./cmd/publish-worker
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/bootstrap-publish ./cmd/lambda/media-selection/publish-worker
 
 build-lambdas: build-lambda-api build-lambda-thumbnail build-lambda-selection build-lambda-enhance build-lambda-video build-lambda-triage build-lambda-description build-lambda-download build-lambda-publish
 
@@ -70,7 +70,7 @@ deploy-frontend: build-frontend
 
 # Development: run Go server with API only (frontend uses Vite dev server)
 dev-api:
-	go run ./cmd/web-server
+	go run ./cmd/cli/web-server
 
 # Development: run Vite dev server (in separate terminal)
 dev-frontend:
@@ -121,7 +121,7 @@ push-api: ecr-login
 	aws lambda wait function-updated --function-name $(FN_API) --region $(REGION)
 
 push-triage: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=triage-worker \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/media-triage \
 	  -f build/Dockerfile.light -t $(PRIVATE_LIGHT):triage-dev .
 	docker push $(PRIVATE_LIGHT):triage-dev
 	aws lambda update-function-code --function-name $(FN_TRIAGE) \
@@ -129,7 +129,7 @@ push-triage: ecr-login
 	aws lambda wait function-updated --function-name $(FN_TRIAGE) --region $(REGION)
 
 push-description: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=description-worker \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/media-selection/description-worker \
 	  -f build/Dockerfile.light -t $(PRIVATE_LIGHT):desc-dev .
 	docker push $(PRIVATE_LIGHT):desc-dev
 	aws lambda update-function-code --function-name $(FN_DESC) \
@@ -137,7 +137,7 @@ push-description: ecr-login
 	aws lambda wait function-updated --function-name $(FN_DESC) --region $(REGION)
 
 push-download: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=download-worker \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/media-selection/download-worker \
 	  -f build/Dockerfile.light -t $(PRIVATE_LIGHT):download-dev .
 	docker push $(PRIVATE_LIGHT):download-dev
 	aws lambda update-function-code --function-name $(FN_DOWNLOAD) \
@@ -145,7 +145,7 @@ push-download: ecr-login
 	aws lambda wait function-updated --function-name $(FN_DOWNLOAD) --region $(REGION)
 
 push-publish: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=publish-worker \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/media-selection/publish-worker \
 	  -f build/Dockerfile.light -t $(PRIVATE_LIGHT):publish-dev .
 	docker push $(PRIVATE_LIGHT):publish-dev
 	aws lambda update-function-code --function-name $(FN_PUBLISH) \
@@ -153,7 +153,7 @@ push-publish: ecr-login
 	aws lambda wait function-updated --function-name $(FN_PUBLISH) --region $(REGION)
 
 push-thumbnail: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=thumbnail-worker --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/pipeline/thumbnail-worker --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
 	  -f build/Dockerfile.heavy -t $(PRIVATE_HEAVY):thumb-dev .
 	docker push $(PRIVATE_HEAVY):thumb-dev
 	aws lambda update-function-code --function-name $(FN_THUMBNAIL) \
@@ -161,7 +161,7 @@ push-thumbnail: ecr-login
 	aws lambda wait function-updated --function-name $(FN_THUMBNAIL) --region $(REGION)
 
 push-selection: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=selection-worker --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/media-selection/selection-worker --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
 	  -f build/Dockerfile.heavy -t $(PRIVATE_HEAVY):select-dev .
 	docker push $(PRIVATE_HEAVY):select-dev
 	aws lambda update-function-code --function-name $(FN_SELECTION) \
@@ -169,7 +169,7 @@ push-selection: ecr-login
 	aws lambda wait function-updated --function-name $(FN_SELECTION) --region $(REGION)
 
 push-enhance: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=enhance-worker \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/media-selection/enhance-worker \
 	  -f build/Dockerfile.light -t $(PRIVATE_LIGHT):enhance-dev .
 	docker push $(PRIVATE_LIGHT):enhance-dev
 	aws lambda update-function-code --function-name $(FN_ENHANCE) \
@@ -177,7 +177,7 @@ push-enhance: ecr-login
 	aws lambda wait function-updated --function-name $(FN_ENHANCE) --region $(REGION)
 
 push-video: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=video-worker --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/pipeline/video-worker --build-arg ECR_ACCOUNT_ID=$(ACCOUNT) \
 	  -f build/Dockerfile.heavy -t $(PRIVATE_HEAVY):video-dev .
 	docker push $(PRIVATE_HEAVY):video-dev
 	aws lambda update-function-code --function-name $(FN_VIDEO) \
@@ -185,7 +185,7 @@ push-video: ecr-login
 	aws lambda wait function-updated --function-name $(FN_VIDEO) --region $(REGION)
 
 push-webhook: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=webhook \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/auth/webhook \
 	  -f build/Dockerfile.light -t $(PRIVATE_WEBHOOK):webhook-dev .
 	docker push $(PRIVATE_WEBHOOK):webhook-dev
 	aws lambda update-function-code --function-name $(FN_WEBHOOK) \
@@ -193,7 +193,7 @@ push-webhook: ecr-login
 	aws lambda wait function-updated --function-name $(FN_WEBHOOK) --region $(REGION)
 
 push-oauth: ecr-login
-	$(DOCKER_BUILD) --build-arg CMD_TARGET=oauth \
+	$(DOCKER_BUILD) --build-arg CMD_TARGET=lambda/auth/oauth \
 	  -f build/Dockerfile.light -t $(PRIVATE_OAUTH):oauth-dev .
 	docker push $(PRIVATE_OAUTH):oauth-dev
 	aws lambda update-function-code --function-name $(FN_OAUTH) \

@@ -257,14 +257,14 @@ The API Lambda uses HTTP request/response via API Gateway. Domain-specific Lambd
 
 | Lambda | Entrypoint | Invocation | Input | Output |
 |--------|-----------|------------|-------|--------|
-| Triage | `cmd/triage-lambda` | Step Functions | `{type, sessionId, jobId, model}` | returns JSON + writes DynamoDB |
-| Description | `cmd/description-lambda` | Async invoke | `{type, sessionId, jobId, keys[], ...}` | writes to DynamoDB |
-| Download | `cmd/download-lambda` | Async invoke | `{type, sessionId, jobId, keys[]}` | writes to DynamoDB |
-| Publish | `cmd/publish-lambda` | Step Functions | `{type, sessionId, jobId, groupId, ...}` | returns JSON + writes DynamoDB |
-| Thumbnail | `cmd/thumbnail-lambda` | Step Functions | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
-| Selection | `cmd/selection-lambda` | Step Functions | `{sessionId, jobId, tripContext, model, mediaKeys[], thumbnailKeys[]}` | `{jobId, selectedCount, excludedCount, sceneGroupCount}` |
-| Enhancement | `cmd/enhance-lambda` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
-| Video | `cmd/video-lambda` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
+| Triage | `cmd/media-triage` | Step Functions | `{type, sessionId, jobId, model}` | returns JSON + writes DynamoDB |
+| Description | `cmd/description-worker` | Async invoke | `{type, sessionId, jobId, keys[], ...}` | writes to DynamoDB |
+| Download | `cmd/download-worker` | Async invoke | `{type, sessionId, jobId, keys[]}` | writes to DynamoDB |
+| Publish | `cmd/publish-worker` | Step Functions | `{type, sessionId, jobId, groupId, ...}` | returns JSON + writes DynamoDB |
+| Thumbnail | `cmd/thumbnail-worker` | Step Functions | `{sessionId, key}` | `{thumbnailKey, originalKey}` |
+| Selection | `cmd/selection-worker` | Step Functions | `{sessionId, jobId, tripContext, model, mediaKeys[], thumbnailKeys[]}` | `{jobId, selectedCount, excludedCount, sceneGroupCount}` |
+| Enhancement | `cmd/enhance-worker` | Step Functions + async | `{sessionId, jobId, key, itemIndex}` or `{type: "enhancement-feedback", ...}` | `{enhancedKey, phase}` |
+| Video | `cmd/video-worker` | Step Functions | `{sessionId, jobId, key, itemIndex}` | `{enhancedKey, phase}` |
 | FB Prep | `cmd/fb-prep-lambda` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, mediaKeys[], economyMode}` or `{type: fb-prep-feedback, ...}` or `{type: fb-prep-mark-error, ...}` | writes DynamoDB |
 | FB Prep GCS Upload | `cmd/fb-prep-gcs-upload` | Step Functions (Map) | `{s3_key, use_key, job_id, batch_index, item_index_in_batch}` | `{gs_uri, batch_index, item_index_in_batch, s3_key}` |
 | FB Prep Submit Batch | `cmd/fb-prep-submit-batch` | Step Functions (FBPrepPipeline) | `{sessionId, jobId, batchesMeta, locationTags, gcsUploadResults}` | `{session_id, status, batch_job_id, batch_job_ids}` |

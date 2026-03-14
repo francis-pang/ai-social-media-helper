@@ -28,8 +28,8 @@ For Lambda functions that only need the Go binary (API handler, Enhancement proc
 Usage:
 
 ```bash
-docker build --build-arg CMD_TARGET=media-lambda -f build/Dockerfile.light .
-docker build --build-arg CMD_TARGET=enhance-lambda -f build/Dockerfile.light .
+docker build --build-arg CMD_TARGET=api -f build/Dockerfile.light .
+docker build --build-arg CMD_TARGET=enhance-worker -f build/Dockerfile.light .
 ```
 
 ### `Dockerfile.heavy` — With ffmpeg
@@ -51,9 +51,9 @@ For Lambda functions that need ffmpeg/ffprobe for media processing (Thumbnail, S
 Usage:
 
 ```bash
-docker build --build-arg CMD_TARGET=thumbnail-lambda -f build/Dockerfile.heavy .
-docker build --build-arg CMD_TARGET=selection-lambda -f build/Dockerfile.heavy .
-docker build --build-arg CMD_TARGET=video-lambda -f build/Dockerfile.heavy .
+docker build --build-arg CMD_TARGET=thumbnail-worker -f build/Dockerfile.heavy .
+docker build --build-arg CMD_TARGET=selection-worker -f build/Dockerfile.heavy .
+docker build --build-arg CMD_TARGET=video-worker -f build/Dockerfile.heavy .
 ```
 
 ## Layer Structure and Sharing
@@ -234,11 +234,11 @@ Each Lambda function has a dedicated `cmd/` entrypoint directory:
 
 | `cmd/` Directory | Lambda Function | Dockerfile | Invocation Model |
 |---|---|---|---|
-| `cmd/media-lambda` | API Handler | Light | HTTP via API Gateway |
-| `cmd/thumbnail-lambda` | Thumbnail Processor | Heavy | Direct invocation via Step Functions |
-| `cmd/selection-lambda` | Selection Processor | Heavy | Direct invocation via Step Functions |
-| `cmd/enhance-lambda` | Enhancement Processor | Light | Direct invocation via Step Functions |
-| `cmd/video-lambda` | Video Processor | Heavy | Direct invocation via Step Functions |
+| `cmd/api` | API Handler | Light | HTTP via API Gateway |
+| `cmd/thumbnail-worker` | Thumbnail Processor | Heavy | Direct invocation via Step Functions |
+| `cmd/selection-worker` | Selection Processor | Heavy | Direct invocation via Step Functions |
+| `cmd/enhance-worker` | Enhancement Processor | Light | Direct invocation via Step Functions |
+| `cmd/video-worker` | Video Processor | Heavy | Direct invocation via Step Functions |
 
 The API Lambda uses `aws-lambda-go-api-proxy` to translate API Gateway events into `http.Request` objects. The four processing Lambdas use direct `lambda.Start(handler)` with typed JSON event structs — no HTTP overhead. See [DDR-043](design-decisions/DDR-043-step-functions-lambda-entrypoints.md).
 

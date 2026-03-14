@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/fpang/ai-social-media-helper/internal/assets"
 	"github.com/fpang/ai-social-media-helper/internal/ai"
+	"github.com/fpang/ai-social-media-helper/internal/fbprep"
 	"github.com/fpang/ai-social-media-helper/internal/httputil"
 	"github.com/fpang/ai-social-media-helper/internal/media"
 	"github.com/fpang/ai-social-media-helper/internal/metrics"
@@ -27,23 +27,11 @@ import (
 
 const maxPresignedURLBytes int64 = 10 * 1024 * 1024 // 10 MiB (DDR-060)
 
-// fbPrepResponseItem matches the JSON output format from the AI.
-type fbPrepResponseItem struct {
-	ItemIndex          int    `json:"item_index"`
-	Caption            string `json:"caption"`
-	LocationTag        string `json:"location_tag"`
-	DateTimestamp      string `json:"date_timestamp"`
-	LocationConfidence string `json:"location_confidence"`
-}
-
 func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr error) {
 	// Check for special event types before attempting batch normalization.
 	if m, ok := event.(map[string]interface{}); ok {
 		if t, _ := m["type"].(string); t == "fb-prep-feedback" {
 			return handleFeedback(ctx, m)
-		}
-		if t, _ := m["type"].(string); t == "fb-prep-collect-batch" {
-			return handleCollectBatch(ctx, m)
 		}
 		if t, _ := m["type"].(string); t == "fb-prep-mark-error" {
 			return handleMarkError(ctx, m)
@@ -80,45 +68,28 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 		}
 	}()
 
-	// Economy mode: submit to Gemini Batch API (FBPrepPipeline SFN polls to completion, DDR-082).
+	// Economy mode: prepare batches and return videos_to_upload for Map (one Lambda per video).
+	// Step Functions Map uploads each video to GCS, then fb-prep-submit-batch submits to Vertex AI.
 	if input.EconomyMode {
-		// Pre-enrich location tags via a fast real-time Maps call before building the batch
-		// JSONL. The GoogleMaps tool is not supported in Vertex AI batch (DDR-085).
 		locationTags, locErr := resolveLocationTags(ctx, input.MediaItems, genaiClient)
 		if locErr != nil {
 			log.Warn().Err(locErr).Msg("Location pre-enrichment failed; proceeding with GPS-only metadata")
 			locationTags = nil
 		}
 
-		parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.SessionID, input.MediaItems, genaiClient)
-		if err != nil {
-			return nil, fmt.Errorf("failed to prepare media: %w", err)
-		}
-		prompt := buildFBPrepPrompt(metadataCtx, locationTags)
-		parts = append(parts, &genai.Part{Text: prompt})
-		// GoogleMaps tool is not supported in Vertex AI batch prediction — omit it.
-		// The JSONL format rejects empty struct fields (googleMaps: {}) at import time.
-		config := &genai.GenerateContentConfig{
-			SystemInstruction: &genai.Content{
-				Parts: []*genai.Part{{Text: assets.FBPrepSystemPrompt}},
-			},
-		}
-		modelName := ai.GetBatchModelName()
-		now := time.Now().UTC().Format(time.RFC3339)
 		jobID := input.JobID
 		if jobID == "" {
 			jobID = "fbprep-" + uuid.New().String()[:8]
 		}
-		req := &genai.InlinedRequest{
-			Model:    modelName,
-			Contents: []*genai.Content{{Role: "user", Parts: parts}},
-			Config:   config,
-		}
-		batchJobID, err := ai.SubmitGeminiBatch(ctx, genaiClient, modelName, []*genai.InlinedRequest{req})
+
+		batches := buildFBPrepBatches(input.MediaItems)
+		videosToUpload, batchesMeta, allS3Keys, _, err := buildFBPrepPrepareOutput(ctx, input.SessionID, batches, jobID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to submit batch job: %w", err)
+			return nil, fmt.Errorf("failed to prepare batches: %w", err)
 		}
+
 		if sessionStore != nil {
+			now := time.Now().UTC().Format(time.RFC3339)
 			preEnrichStore := make(map[string]string, len(locationTags))
 			for idx, tag := range locationTags {
 				preEnrichStore[strconv.Itoa(idx)] = tag
@@ -126,36 +97,40 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 			_ = sessionStore.PutFBPrepJob(ctx, input.SessionID, &store.FBPrepJob{
 				ID:                 jobID,
 				Status:             "pending",
-				BatchJobID:         batchJobID,
-				MediaKeys:          s3Keys,
+				MediaKeys:          allS3Keys,
 				EconomyMode:        true,
 				PreEnrichLocations: preEnrichStore,
 				CreatedAt:          now,
 				UpdatedAt:          now,
 			})
 		}
+
 		log.Info().
 			Str("sessionId", input.SessionID).
-			Str("batchJobId", batchJobID).
-			Int("mediaCount", len(input.MediaItems)).
-			Int("preEnrichedLocations", len(locationTags)).
-			Msg("FB prep batch job submitted (economy mode)")
+			Str("jobId", jobID).
+			Int("videoCount", len(videosToUpload)).
+			Int("batchCount", len(batches)).
+			Msg("FB prep prepare complete; videos_to_upload for Map")
+
 		return &FBPrepOutput{
-			SessionID:  input.SessionID,
-			Status:     "pending",
-			BatchJobID: batchJobID,
+			SessionID:      input.SessionID,
+			Status:         "pending",
+			JobID:          jobID,
+			VideosToUpload: videosToUpload,
+			BatchesMeta:    batchesMeta,
+			LocationTags:   locationTagsToMap(locationTags),
 		}, nil
 	}
 
 	// Build media parts and metadata context
-	parts, metadataCtx, s3Keys, err := buildFBPrepMediaParts(ctx, input.SessionID, input.MediaItems, genaiClient)
+	parts, metadataCtx, s3Keys, _, err := buildFBPrepMediaParts(ctx, input.SessionID, input.MediaItems, genaiClient, false, "", 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare media: %w", err)
 	}
 
 	// Append metadata context as text. Real-time mode uses the GoogleMaps tool directly;
 	// no pre-enrichment needed (locationTags=nil).
-	prompt := buildFBPrepPrompt(metadataCtx, nil)
+	prompt := fbprep.BuildPrompt(metadataCtx, nil)
 	parts = append(parts, &genai.Part{Text: prompt})
 
 	// Config with system instruction and Google Maps grounding
@@ -191,7 +166,7 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 		outputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
 	}
 
-	items, err := parseFBPrepResponse(responseText, s3Keys)
+	items, err := fbprep.ParseResponse(responseText, s3Keys)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -221,10 +196,17 @@ func handler(ctx context.Context, event interface{}) (out *FBPrepOutput, retErr 
 	}, nil
 }
 
-func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []FBPrepMediaItem, genaiClient *genai.Client) ([]*genai.Part, string, []string, error) {
+// buildFBPrepMediaParts builds genai.Part slices for each media item.
+// When forBatch is true, videos are uploaded to GCS (gs://) instead of presigned URLs,
+// since Vertex AI limits HTTP URLs to 1 video per request but allows up to 10 via GCS.
+// jobID is used for GCS path prefix when forBatch is true (e.g. fb-prep-videos/{jobID}/{uuid}.webm).
+// baseIndex is the global item index offset for metadata (e.g. batch 1 uses baseIndex=8 so "Item 8", "Item 9"...).
+// Returns: parts, metadataCtx, s3Keys, gcsPathsForCleanup, error.
+func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []FBPrepMediaItem, genaiClient *genai.Client, forBatch bool, jobID string, baseIndex int) ([]*genai.Part, string, []string, []string, error) {
 	var parts []*genai.Part
 	var metaLines []string
 	var s3Keys []string
+	var gcsPaths []string
 
 	// Build filename -> FileResult map from session-scoped file processing (DDR-083).
 	fileResultMap := make(map[string]store.FileResult)
@@ -287,7 +269,8 @@ func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []F
 				InlineData: &genai.Blob{MIMEType: mimeType, Data: imgData},
 			})
 		} else if item.MediaType == "video" || media.IsVideo(ext) {
-			// Prefer processedKey (pre-compressed WebM) > originalKey.
+			// Use downscaled video from processing screen (processedKey). Thumbnail and downscaling
+			// are done in the upload/processing pipeline before FB Prep.
 			useKey := item.S3Key
 			mimeType := "video/webm"
 			fileSize := fr.FileSize
@@ -310,68 +293,88 @@ func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []F
 				}
 			}
 
-			url, err := s3util.GeneratePresignedURL(ctx, presignClient, mediaBucket, useKey, 15*time.Minute)
-			if err != nil {
-				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to generate presigned URL for video")
-				continue
-			}
-
-		vertexAI := os.Getenv("VERTEX_AI_PROJECT") != ""
-		if fileSize <= maxPresignedURLBytes || vertexAI {
-			// Within size limit, or running on Vertex AI where Files.Upload is unsupported —
-			// let Gemini fetch the video directly from the S3 presigned URL (DDR-060).
-			parts = append(parts, &genai.Part{
-				FileData: &genai.FileData{MIMEType: mimeType, FileURI: url},
-			})
-		} else if genaiClient != nil {
-			// Gemini Developer API only: upload large videos via Files API.
-			tmpPath, tmpCleanup, err := httputil.FetchURLToFile(ctx, url)
-			if err != nil {
-				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video for Files API upload")
-				continue
-			}
-			uploaded, err := ai.UploadVideoToGeminiFiles(ctx, genaiClient, tmpPath, mimeType)
-			tmpCleanup()
-			if err != nil {
-				log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to upload video to Gemini Files API")
-				continue
-			}
-			parts = append(parts, &genai.Part{
-				FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
-			})
-		} else {
-				// Fallback: download original and compress with CompressVideoForCaptions.
-				tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, useKey)
+			if forBatch {
+				// Batch mode: upload downscaled video (from S3) to GCS so Vertex AI can accept up to 10 per request.
+				data, err := getVideoBytesFromS3(ctx, presignClient, mediaBucket, useKey)
 				if err != nil {
-					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video")
+					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video for GCS batch")
 					continue
 				}
-				var videoMeta *media.VideoMetadata
-				if item.GPS != nil {
-					videoMeta = &media.VideoMetadata{
-						Latitude: item.GPS.Latitude, Longitude: item.GPS.Longitude, HasGPS: true,
-					}
-				}
-				compressedPath, _, compCleanup, compErr := media.CompressVideoForCaptions(ctx, tmpPath, videoMeta)
-				cleanup()
-				if compErr != nil {
-					log.Warn().Str("key", useKey).Err(compErr).Msg("Skipping: video compression failed")
+				gcsBucket := os.Getenv("GCS_BATCH_BUCKET")
+				if gcsBucket == "" {
+					log.Warn().Str("key", useKey).Msg("Skipping: GCS_BATCH_BUCKET not set for batch video")
 					continue
 				}
-				data, readErr := os.ReadFile(compressedPath)
-				compCleanup()
-				if readErr != nil {
-					log.Warn().Str("key", useKey).Err(readErr).Msg("Skipping: failed to read compressed video")
+				objectPath := fmt.Sprintf("fb-prep-videos/%s/%s.webm", jobID, uuid.New().String())
+				gsURI, err := ai.UploadVideoToGCS(ctx, gcsBucket, objectPath, data, "video/webm")
+				if err != nil {
+					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to upload video to GCS")
 					continue
 				}
+				gcsPaths = append(gcsPaths, gsURI)
 				parts = append(parts, &genai.Part{
-					InlineData: &genai.Blob{MIMEType: "video/webm", Data: data},
+					FileData: &genai.FileData{MIMEType: "video/webm", FileURI: gsURI},
 				})
+			} else {
+				// Non-batch: use presigned URL, Files API, or inline to the downscaled video from S3.
+				url, err := s3util.GeneratePresignedURL(ctx, presignClient, mediaBucket, useKey, 15*time.Minute)
+				if err != nil {
+					log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to generate presigned URL for video")
+					continue
+				}
+				vertexAI := os.Getenv("VERTEX_AI_PROJECT") != ""
+				if fileSize <= maxPresignedURLBytes || vertexAI {
+					parts = append(parts, &genai.Part{
+						FileData: &genai.FileData{MIMEType: mimeType, FileURI: url},
+					})
+				} else if genaiClient != nil {
+					tmpPath, tmpCleanup, err := httputil.FetchURLToFile(ctx, url)
+					if err != nil {
+						log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video for Files API upload")
+						continue
+					}
+					uploaded, err := ai.UploadVideoToGeminiFiles(ctx, genaiClient, tmpPath, mimeType)
+					tmpCleanup()
+					if err != nil {
+						log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to upload video to Gemini Files API")
+						continue
+					}
+					parts = append(parts, &genai.Part{
+						FileData: &genai.FileData{MIMEType: uploaded.MIMEType, FileURI: uploaded.URI},
+					})
+				} else {
+					tmpPath, cleanup, err := s3util.DownloadToTempFile(ctx, s3Client, mediaBucket, useKey)
+					if err != nil {
+						log.Warn().Err(err).Str("key", useKey).Msg("Skipping: failed to download video")
+						continue
+					}
+					var videoMeta *media.VideoMetadata
+					if item.GPS != nil {
+						videoMeta = &media.VideoMetadata{
+							Latitude: item.GPS.Latitude, Longitude: item.GPS.Longitude, HasGPS: true,
+						}
+					}
+					compressedPath, _, compCleanup, compErr := media.CompressVideoForCaptions(ctx, tmpPath, videoMeta)
+					cleanup()
+					if compErr != nil {
+						log.Warn().Str("key", useKey).Err(compErr).Msg("Skipping: video compression failed")
+						continue
+					}
+					data, readErr := os.ReadFile(compressedPath)
+					compCleanup()
+					if readErr != nil {
+						log.Warn().Str("key", useKey).Err(readErr).Msg("Skipping: failed to read compressed video")
+						continue
+					}
+					parts = append(parts, &genai.Part{
+						InlineData: &genai.Blob{MIMEType: "video/webm", Data: data},
+					})
+				}
 			}
 		}
 
-		// Metadata line for this item
-		metaLines = append(metaLines, fmt.Sprintf("Item %d (%s):", i, item.Filename))
+		// Metadata line for this item (use baseIndex+i for correct global item_index in batch mode)
+		metaLines = append(metaLines, fmt.Sprintf("Item %d (%s):", baseIndex+i, item.Filename))
 		if item.GPS != nil {
 			metaLines = append(metaLines, fmt.Sprintf("  GPS: %.6f, %.6f", item.GPS.Latitude, item.GPS.Longitude))
 		}
@@ -381,28 +384,129 @@ func buildFBPrepMediaParts(ctx context.Context, sessionID string, mediaItems []F
 	}
 
 	metadataCtx := strings.Join(metaLines, "\n")
-	return parts, metadataCtx, s3Keys, nil
+	return parts, metadataCtx, s3Keys, gcsPaths, nil
 }
 
-// buildFBPrepPrompt builds the user-turn prompt from the metadata context.
-// locationTags (DDR-085) is an optional map of item index → Maps-verified place name
-// to inject into the prompt as a supplementary section, bypassing the unavailable
-// GoogleMaps tool in Vertex AI batch prediction. Pass nil for the real-time path.
-func buildFBPrepPrompt(metadataCtx string, locationTags map[int]string) string {
-	base := "## Metadata context\n\n" + metadataCtx
-	if len(locationTags) > 0 {
-		indices := make([]int, 0, len(locationTags))
-		for i := range locationTags {
-			indices = append(indices, i)
+// buildFBPrepPrepareOutput builds videos_to_upload (one per video for Map) and batches_meta.
+// Does NOT upload to GCS; each video is uploaded by a separate Lambda invocation.
+func buildFBPrepPrepareOutput(ctx context.Context, sessionID string, batches [][]FBPrepMediaItem, jobID string) ([]VideoToUpload, []FBPrepBatchMeta, []string, []string, error) {
+	var videosToUpload []VideoToUpload
+	var batchesMeta []FBPrepBatchMeta
+	var allS3Keys []string
+	var allGCSPaths []string // Will be filled from Map results in submit; placeholder for now
+
+	fileResultMap := make(map[string]store.FileResult)
+	if fileProcessStore != nil {
+		results, err := fileProcessStore.GetSessionFileResults(ctx, sessionID)
+		if err == nil {
+			for _, fr := range results {
+				fileResultMap[fr.Filename] = fr
+			}
 		}
-		sort.Ints(indices)
-		lines := make([]string, 0, len(indices))
-		for _, i := range indices {
-			lines = append(lines, fmt.Sprintf("Item %d location (Maps-verified): %s", i, locationTags[i]))
-		}
-		base += "\n\n## Maps-verified locations\n" + strings.Join(lines, "\n")
 	}
-	return base + "\n\nGenerate the JSON array for each item in the same order as above."
+
+	baseIdx := 0
+	for batchIdx, batch := range batches {
+		var metaLines []string
+		var s3Keys []string
+		for i, item := range batch {
+			s3Keys = append(s3Keys, item.S3Key)
+			ext := strings.ToLower(filepath.Ext(item.S3Key))
+			filename := filepath.Base(item.S3Key)
+			fr, hasFileResult := fileResultMap[filename]
+
+			if item.MediaType == "video" || media.IsVideo(ext) {
+				useKey := item.S3Key
+				if hasFileResult && fr.ProcessedKey != "" {
+					useKey = fr.ProcessedKey
+				} else if !hasFileResult {
+					keyParts := strings.SplitN(item.S3Key, "/", 2)
+					processedKey := fmt.Sprintf("%s/processed/%s.webm", keyParts[0], strings.TrimSuffix(filename, ext))
+					if head, _ := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &mediaBucket, Key: &processedKey}); head != nil {
+						useKey = processedKey
+					}
+				}
+				videosToUpload = append(videosToUpload, VideoToUpload{
+					S3Key:            item.S3Key,
+					UseKey:           useKey,
+					JobID:            jobID,
+					BatchIndex:       batchIdx,
+					ItemIndexInBatch: i,
+				})
+			}
+
+			metaLines = append(metaLines, fmt.Sprintf("Item %d (%s):", baseIdx+i, item.Filename))
+			if item.GPS != nil {
+				metaLines = append(metaLines, fmt.Sprintf("  GPS: %.6f, %.6f", item.GPS.Latitude, item.GPS.Longitude))
+			}
+			if item.DateTaken != "" {
+				metaLines = append(metaLines, fmt.Sprintf("  Date: %s", item.DateTaken))
+			}
+		}
+		metadataCtx := strings.Join(metaLines, "\n")
+		batchesMeta = append(batchesMeta, FBPrepBatchMeta{
+			BatchIndex:  batchIdx,
+			MediaItems:  batch,
+			MetadataCtx: metadataCtx,
+			BaseIndex:   baseIdx,
+			S3Keys:      s3Keys,
+		})
+		allS3Keys = append(allS3Keys, s3Keys...)
+		baseIdx += len(batch)
+	}
+	return videosToUpload, batchesMeta, allS3Keys, allGCSPaths, nil
+}
+
+func locationTagsToMap(tags map[int]string) map[string]string {
+	if tags == nil {
+		return nil
+	}
+	out := make(map[string]string)
+	for k, v := range tags {
+		out[strconv.Itoa(k)] = v
+	}
+	return out
+}
+
+// buildFBPrepBatches splits media items into batches of up to 10 videos each.
+// Media stay in alphabetically numeric order (by S3 key). Each batch contains up to 10 videos;
+// images have no limit. Example: 3 videos, 5 images, 4 videos → Batch1: items 0–7, Batch2: items 8–11.
+func buildFBPrepBatches(mediaItems []FBPrepMediaItem) [][]FBPrepMediaItem {
+	var batches [][]FBPrepMediaItem
+	var current []FBPrepMediaItem
+	videoCount := 0
+	for _, item := range mediaItems {
+		ext := strings.ToLower(filepath.Ext(item.S3Key))
+		isVideo := item.MediaType == "video" || media.IsVideo(ext)
+		if isVideo && videoCount >= 10 {
+			batches = append(batches, current)
+			current = nil
+			videoCount = 0
+		}
+		current = append(current, item)
+		if isVideo {
+			videoCount++
+		}
+	}
+	if len(current) > 0 {
+		batches = append(batches, current)
+	}
+	return batches
+}
+
+// getVideoBytesFromS3 downloads the downscaled video from S3 and returns bytes for GCS upload.
+// Thumbnail and downscaling are done in the upload/processing pipeline before FB Prep.
+func getVideoBytesFromS3(ctx context.Context, presignClient *s3.PresignClient, bucket, key string) ([]byte, error) {
+	url, err := s3util.GeneratePresignedURL(ctx, presignClient, bucket, key, 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	tmpPath, cleanup, err := httputil.FetchURLToFile(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	return os.ReadFile(tmpPath)
 }
 
 // resolveLocationTags makes a single fast real-time Gemini call with the GoogleMaps tool
@@ -487,17 +591,32 @@ func resolveLocationTags(ctx context.Context, mediaItems []FBPrepMediaItem, clie
 }
 
 // handleMarkError writes status:"error" to DynamoDB for the given job. Invoked by the
-// FBPrepPipeline SFN catch handler when GeminiBatchPollPipeline fails (DDR-085).
+// FBPrepPipeline SFN catch handler when GeminiBatchPollPipeline or CollectBatchResults fails.
+// Writes the actual error cause (from collectError or batchError) to FBPrepJob.Error instead
+// of the generic "Batch prediction job failed".
 func handleMarkError(ctx context.Context, m map[string]interface{}) (*FBPrepOutput, error) {
 	sessionID, _ := m["sessionId"].(string)
 	jobID, _ := m["jobId"].(string)
-	log.Warn().Str("sessionId", sessionID).Str("jobId", jobID).Msg("Marking FB prep job as error (batch poll failure)")
+	errorMsg := "Batch prediction job failed"
+	if ce, ok := m["collectError"].(map[string]interface{}); ok {
+		if cause, _ := ce["Cause"].(string); cause != "" {
+			errorMsg = cause
+		}
+	}
+	if errorMsg == "Batch prediction job failed" {
+		if be, ok := m["batchError"].(map[string]interface{}); ok {
+			if cause, _ := be["Cause"].(string); cause != "" {
+				errorMsg = cause
+			}
+		}
+	}
+	log.Warn().Str("sessionId", sessionID).Str("jobId", jobID).Str("error", errorMsg).Msg("Marking FB prep job as error")
 	if sessionStore != nil && sessionID != "" && jobID != "" {
 		now := time.Now().UTC().Format(time.RFC3339)
 		_ = sessionStore.PutFBPrepJob(ctx, sessionID, &store.FBPrepJob{
 			ID:        jobID,
 			Status:    "error",
-			Error:     "Batch prediction job failed",
+			Error:     errorMsg,
 			UpdatedAt: now,
 		})
 	}
@@ -551,64 +670,6 @@ func normalizeFBPrepInput(event interface{}) (*FBPrepInput, error) {
 	return &input, nil
 }
 
-func parseFBPrepResponse(responseText string, s3Keys []string) ([]store.FBPrepItem, error) {
-	// Strip markdown code fences if present
-	text := strings.TrimSpace(responseText)
-	if strings.HasPrefix(text, "```") {
-		lines := strings.Split(text, "\n")
-		var filtered []string
-		for _, line := range lines {
-			if line == "```" || line == "```json" {
-				continue
-			}
-			filtered = append(filtered, line)
-		}
-		text = strings.Join(filtered, "\n")
-	}
-
-	var raw []fbPrepResponseItem
-	if err := json.Unmarshal([]byte(text), &raw); err != nil {
-		// Vertex AI batch may return one JSON object per result line (not an array).
-		var single fbPrepResponseItem
-		if singleErr := json.Unmarshal([]byte(text), &single); singleErr == nil {
-			raw = []fbPrepResponseItem{single}
-		} else {
-			// Or JSONL: one JSON object per line within a single response.
-			for _, line := range strings.Split(text, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				var obj fbPrepResponseItem
-				if json.Unmarshal([]byte(line), &obj) == nil {
-					raw = append(raw, obj)
-				}
-			}
-			if len(raw) == 0 {
-				return nil, fmt.Errorf("parse JSON: %w", err)
-			}
-		}
-	}
-
-	items := make([]store.FBPrepItem, 0, len(raw))
-	for _, r := range raw {
-		s3Key := ""
-		if r.ItemIndex >= 0 && r.ItemIndex < len(s3Keys) {
-			s3Key = s3Keys[r.ItemIndex]
-		}
-		items = append(items, store.FBPrepItem{
-			ItemIndex:          r.ItemIndex,
-			S3Key:              s3Key,
-			Key:                s3Key,
-			Caption:            r.Caption,
-			LocationTag:        r.LocationTag,
-			DateTimestamp:      r.DateTimestamp,
-			LocationConfidence: r.LocationConfidence,
-		})
-	}
-	return items, nil
-}
-
 // handleFeedback regenerates the caption for a single item using user feedback (DDR-078 §4).
 // It loads the existing job, re-runs Gemini for just the target item with sibling captions as context,
 // and updates only that item in DynamoDB.
@@ -659,7 +720,7 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 		targetMediaItem.MediaType = "video"
 	}
 
-	parts, _, _, err := buildFBPrepMediaParts(ctx, sessionID, []FBPrepMediaItem{targetMediaItem}, genaiClient)
+	parts, _, _, _, err := buildFBPrepMediaParts(ctx, sessionID, []FBPrepMediaItem{targetMediaItem}, genaiClient, false, "", 0)
 	if err != nil {
 		return nil, fmt.Errorf("feedback: failed to prepare media: %w", err)
 	}
@@ -701,7 +762,7 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 	}
 
 	// Parse the single-item response.
-	newItems, err := parseFBPrepResponse(responseText, []string{s3Key})
+	newItems, err := fbprep.ParseResponse(responseText, []string{s3Key})
 	if err != nil || len(newItems) == 0 {
 		return nil, fmt.Errorf("feedback: failed to parse response: %w", err)
 	}
@@ -735,149 +796,4 @@ func handleFeedback(ctx context.Context, m map[string]interface{}) (*FBPrepOutpu
 		SessionID: sessionID,
 		Status:    "complete",
 	}, nil
-}
-
-// handleCollectBatch reads the completed Gemini Batch job, parses results, and writes
-// the final completed FBPrepJob to DynamoDB (DDR-082: economy mode via FBPrepPipeline SFN).
-func handleCollectBatch(ctx context.Context, m map[string]interface{}) (*FBPrepOutput, error) {
-	sessionID, _ := m["sessionId"].(string)
-	jobID, _ := m["jobId"].(string)
-	batchJobID, _ := m["batchJobId"].(string)
-
-	if sessionID == "" || jobID == "" || batchJobID == "" {
-		return nil, fmt.Errorf("collect-batch: sessionId, jobId, and batchJobId are required")
-	}
-	if sessionStore == nil {
-		return nil, fmt.Errorf("collect-batch: session store not configured")
-	}
-
-	// Load existing job to get MediaKeys and CreatedAt.
-	job, err := sessionStore.GetFBPrepJob(ctx, sessionID, jobID)
-	if err != nil || job == nil {
-		return nil, fmt.Errorf("collect-batch: job not found: %w", err)
-	}
-
-	collectClient, err := ai.NewAIClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("collect-batch: failed to initialize AI client: %w", err)
-	}
-
-	batchStatus, err := ai.CheckGeminiBatch(ctx, collectClient, batchJobID)
-	if err != nil {
-		return nil, fmt.Errorf("collect-batch: failed to check batch: %w", err)
-	}
-	if batchStatus.State != "JOB_STATE_SUCCEEDED" {
-		return nil, fmt.Errorf("collect-batch: unexpected batch state %s", batchStatus.State)
-	}
-	if len(batchStatus.Results) == 0 {
-		return nil, fmt.Errorf("collect-batch: no results in batch response")
-	}
-
-	// Merge all batch results — Vertex AI may return one output line per input item
-	// (e.g. 6 items → 6 results). Previously we only used Results[0], losing items 1–5.
-	var allItems []store.FBPrepItem
-	var inputTokens, outputTokens int
-	for i, result := range batchStatus.Results {
-		if result.Error != "" {
-			return nil, fmt.Errorf("collect-batch: batch result %d failed: %s", i, result.Error)
-		}
-		if result.Response == nil {
-			return nil, fmt.Errorf("collect-batch: nil response in batch result %d", i)
-		}
-		responseText := result.Response.Text()
-		if responseText == "" {
-			continue // skip empty responses (e.g. from malformed output)
-		}
-		if result.Response.UsageMetadata != nil {
-			inputTokens += int(result.Response.UsageMetadata.PromptTokenCount)
-			outputTokens += int(result.Response.UsageMetadata.CandidatesTokenCount)
-		}
-		parsed, err := parseFBPrepResponse(responseText, job.MediaKeys)
-		if err != nil {
-			return nil, fmt.Errorf("collect-batch: failed to parse result %d: %w", i, err)
-		}
-		allItems = append(allItems, parsed...)
-	}
-
-	// Deduplicate by item_index (keep first occurrence) and sort for stable ordering.
-	seen := make(map[int]bool)
-	var items []store.FBPrepItem
-	for _, it := range allItems {
-		if seen[it.ItemIndex] {
-			continue
-		}
-		seen[it.ItemIndex] = true
-		items = append(items, it)
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ItemIndex < items[j].ItemIndex })
-	if len(items) == 0 {
-		return nil, fmt.Errorf("collect-batch: no items parsed from %d batch result(s)", len(batchStatus.Results))
-	}
-
-	// DDR-088: Emit token metrics for cost analysis.
-	if inputTokens > 0 || outputTokens > 0 {
-		metrics.New("AiSocialMedia").
-			Dimension("Operation", "fbPrepBatch").
-			Metric("GeminiInputTokens", float64(inputTokens), metrics.UnitCount).
-			Metric("GeminiOutputTokens", float64(outputTokens), metrics.UnitCount).
-			Flush()
-	}
-
-	// Compare batch model location tags against pre-enrichment values (DDR-085).
-	// Emits CloudWatch metrics so we can evaluate whether to keep the pre-enrichment call.
-	if len(job.PreEnrichLocations) > 0 {
-		matchCount, mismatchCount := 0, 0
-		for _, item := range items {
-			preEnrich := job.PreEnrichLocations[strconv.Itoa(item.ItemIndex)]
-			if preEnrich == "" {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(preEnrich), strings.TrimSpace(item.LocationTag)) {
-				matchCount++
-			} else {
-				mismatchCount++
-				log.Info().
-					Int("itemIndex", item.ItemIndex).
-					Str("preEnrichLocation", preEnrich).
-					Str("batchLocation", item.LocationTag).
-					Msg("Location tag differs between pre-enrichment and batch model")
-			}
-		}
-		total := matchCount + mismatchCount
-		if total > 0 {
-			agreementRate := float64(matchCount) / float64(total) * 100
-			metrics.New("AiSocialMedia").
-				Dimension("Operation", "fbPrepLocationComparison").
-				Metric("LocationTagMatchCount", float64(matchCount), metrics.UnitCount).
-				Metric("LocationTagMismatchCount", float64(mismatchCount), metrics.UnitCount).
-				Metric("LocationTagAgreementRate", agreementRate, metrics.UnitNone).
-				Property("sessionId", sessionID).
-				Property("jobId", jobID).
-				Flush()
-		}
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	_ = sessionStore.PutFBPrepJob(ctx, sessionID, &store.FBPrepJob{
-		ID:           jobID,
-		Status:       "complete",
-		Items:        items,
-		MediaKeys:    job.MediaKeys,
-		BatchJobID:   batchJobID,
-		EconomyMode:  true,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CreatedAt:    job.CreatedAt,
-		UpdatedAt:    now,
-	})
-
-	log.Info().
-		Str("sessionId", sessionID).
-		Str("jobId", jobID).
-		Int("itemCount", len(items)).
-		Int("inputTokens", inputTokens).
-		Int("outputTokens", outputTokens).
-		Msg("FB prep batch collection complete")
-
-	return &FBPrepOutput{SessionID: sessionID, Status: "complete"}, nil
 }

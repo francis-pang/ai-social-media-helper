@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for RAG profile Lambda (no ffmpeg).
+# Multi-stage Dockerfile for RAG ingest Lambda (no ffmpeg).
 # Stage 1: Build the Go binary.
 # Stage 2: Bundle the Go binary with the AWS Lambda base image.
 
@@ -8,7 +8,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-    go build -ldflags="-s -w" -o /handler ./cmd/rag-profile-lambda
+    go build -ldflags="-s -w" -o /handler ./cmd/lambda/rag/ingest
 
 FROM public.ecr.aws/lambda/provided:al2023
 COPY --from=builder /handler /var/runtime/bootstrap

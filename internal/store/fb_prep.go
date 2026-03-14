@@ -10,6 +10,9 @@ type FBPrepJob struct {
 	MediaKeys   []string     `json:"mediaKeys,omitempty" dynamodbav:"mediaKeys,omitempty"`
 	Items       []FBPrepItem `json:"items,omitempty" dynamodbav:"items,omitempty"`
 	BatchJobID  string       `json:"batchJobId,omitempty"  dynamodbav:"batchJobId,omitempty"`
+	BatchJobIDs []string     `json:"batchJobIds,omitempty" dynamodbav:"batchJobIds,omitempty"` // When multiple batches (>10 videos)
+	// GCSPathsForCleanup holds gs:// URIs of videos uploaded for batch mode; deleted after collect.
+	GCSPathsForCleanup []string `json:"gcsPathsForCleanup,omitempty" dynamodbav:"gcsPathsForCleanup,omitempty"`
 	InputTokens  int         `json:"inputTokens,omitempty"  dynamodbav:"inputTokens,omitempty"`
 	OutputTokens int         `json:"outputTokens,omitempty" dynamodbav:"outputTokens,omitempty"`
 	// PreEnrichLocations stores Maps-verified location tags resolved before batch submission
@@ -30,4 +33,6 @@ type FBPrepItem struct {
 	LocationTag        string `json:"location_tag" dynamodbav:"location_tag"`
 	DateTimestamp      string `json:"date_timestamp" dynamodbav:"date_timestamp"`
 	LocationConfidence string `json:"location_confidence" dynamodbav:"location_confidence"`
+	// Error holds the model error for failed items (useful for debugging partial results).
+	Error string `json:"error,omitempty" dynamodbav:"error,omitempty"`
 }

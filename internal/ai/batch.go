@@ -289,6 +289,39 @@ func deleteGCSObject(ctx context.Context, gcsURI string) {
 	}
 }
 
+// UploadVideoToGCS uploads video bytes to GCS and returns the gs:// URI.
+// Used for FB Prep batch mode so videos use GCS URIs (up to 10 per request) instead of
+// HTTP URLs (1 per request). Object path should be like "fb-prep-videos/{jobId}/{uuid}.webm".
+func UploadVideoToGCS(ctx context.Context, bucketName, objectPath string, data []byte, contentType string) (string, error) {
+	gcsClient, err := newGCSClient(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCS client: %w", err)
+	}
+	defer gcsClient.Close()
+
+	obj := gcsClient.Bucket(bucketName).Object(objectPath)
+	w := obj.NewWriter(ctx)
+	w.ContentType = contentType
+	if _, err := w.Write(data); err != nil {
+		_ = w.Close()
+		return "", fmt.Errorf("failed to write video to GCS: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return "", fmt.Errorf("failed to finalize GCS upload: %w", err)
+	}
+
+	gcsURI := fmt.Sprintf("gs://%s/%s", bucketName, objectPath)
+	log.Debug().Str("gcs_uri", gcsURI).Int("bytes", len(data)).Msg("Uploaded video to GCS for batch")
+	return gcsURI, nil
+}
+
+// DeleteGCSObjects deletes multiple GCS objects by URI (non-fatal; logs on failure).
+func DeleteGCSObjects(ctx context.Context, gcsURIs []string) {
+	for _, uri := range gcsURIs {
+		deleteGCSObject(ctx, uri)
+	}
+}
+
 // SubmitGeminiBatch submits a batch of GenerateContent requests.
 //
 // When GCS_BATCH_BUCKET is set (Vertex AI path): serializes requests to JSONL,

@@ -170,7 +170,7 @@ See DDR-077 for full backend selection details.
 - `getJob` returns `nil` for non-existent items
 - `JobIdentifiable` interface compliance for all job types
 
-#### HTTP Handler Helpers (`cmd/media-lambda/handler_helpers.go`)
+#### HTTP Handler Helpers (`cmd/api/handler_helpers.go`)
 - `requireMethod` returns 405 for wrong method
 - `decodeBody` returns 400 for malformed JSON
 - `requireSessionID` rejects empty and invalid formats
