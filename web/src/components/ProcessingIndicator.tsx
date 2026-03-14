@@ -113,11 +113,6 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
   const logConsoleRef = useRef<HTMLDivElement>(null);
-  const jobIdRef = useRef(
-    props.jobId ||
-      props.sessionId ||
-      Math.random().toString(36).slice(2, 10),
-  );
   const startTimeRef = useRef(new Date());
   const prevStatusRef = useRef(props.status);
   const prevDescRef = useRef(props.description);
@@ -563,9 +558,15 @@ export function ProcessingIndicator(props: ProcessingIndicatorProps) {
             }}
           >
             <div>
+              <span style={{ fontWeight: 500 }}>Session ID: </span>
+              <span style={{ fontFamily: "var(--font-mono)" }}>
+                {props.sessionId ?? "—"}
+              </span>
+            </div>
+            <div>
               <span style={{ fontWeight: 500 }}>Job ID: </span>
               <span style={{ fontFamily: "var(--font-mono)" }}>
-                {jobIdRef.current}
+                {props.jobId ?? "—"}
               </span>
             </div>
             {props.fileCount != null && (

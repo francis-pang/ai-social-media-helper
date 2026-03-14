@@ -589,9 +589,9 @@ aws logs filter-log-events \
 | FBPrepPipeline | `arn:aws:states:us-east-1:681565534940:stateMachine:AiSocialMediaFBPrepPipeline` |
 | GeminiBatchPollPipeline | `arn:aws:states:us-east-1:681565534940:stateMachine:AiSocialMediaGeminiBatchPollPipeline` |
 
-### Known Pitfall: UI May Show Session ID as Job ID
+### UI Shows Both Session ID and Job ID
 
-The ProcessingIndicator may display the session ID where users expect a job ID (when `jobId` is undefined and it falls back to `sessionId`). If a user reports "Job ID" with a UUID format, treat it as **session ID** and search logs to find the actual `fb-`-prefixed job ID.
+The ProcessingIndicator displays both identifiers as separate labeled rows in the Job Telemetry sidebar: Session ID (UUID) and Job ID (`fb-`-prefixed). If a user reports a UUID-format value, treat it as **session ID** and search logs to find the corresponding `fb-`-prefixed job ID for Step Functions.
 
 ---
 
