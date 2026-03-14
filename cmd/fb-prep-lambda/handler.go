@@ -450,6 +450,10 @@ func resolveLocationTags(ctx context.Context, mediaItems []FBPrepMediaItem, clie
 		m.Count("LocationEnrichmentFailure").Flush()
 		return nil, fmt.Errorf("pre-enrichment call: %w", err)
 	}
+	if resp != nil && resp.UsageMetadata != nil {
+		m.Metric("GeminiInputTokens", float64(resp.UsageMetadata.PromptTokenCount), metrics.UnitCount)
+		m.Metric("GeminiOutputTokens", float64(resp.UsageMetadata.CandidatesTokenCount), metrics.UnitCount)
+	}
 	m.Count("LocationEnrichmentSuccess").Flush()
 
 	raw := strings.TrimSpace(resp.Text())
@@ -808,6 +812,15 @@ func handleCollectBatch(ctx context.Context, m map[string]interface{}) (*FBPrepO
 	sort.Slice(items, func(i, j int) bool { return items[i].ItemIndex < items[j].ItemIndex })
 	if len(items) == 0 {
 		return nil, fmt.Errorf("collect-batch: no items parsed from %d batch result(s)", len(batchStatus.Results))
+	}
+
+	// DDR-088: Emit token metrics for cost analysis.
+	if inputTokens > 0 || outputTokens > 0 {
+		metrics.New("AiSocialMedia").
+			Dimension("Operation", "fbPrepBatch").
+			Metric("GeminiInputTokens", float64(inputTokens), metrics.UnitCount).
+			Metric("GeminiOutputTokens", float64(outputTokens), metrics.UnitCount).
+			Flush()
 	}
 
 	// Compare batch model location tags against pre-enrichment values (DDR-085).

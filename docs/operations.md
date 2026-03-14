@@ -466,7 +466,7 @@ rec.Dimension("Operation", "triage").
 | `LocationTagMismatchCount` | `fbPrepLocationComparison` | Count | Items where pre-enrichment and batch location tags differ |
 | `LocationTagAgreementRate` | `fbPrepLocationComparison` | None (0-100) | Percentage agreement between pre-enrichment and batch location tags |
 
-**Operation values**: `triage`, `mediaSelection`, `jsonSelection`, `filesApiUpload`, `mediaProcess`  
+**Operation values**: `triage`, `mediaSelection`, `photoSelection`, `jsonSelection`, `description`, `filesApiUpload`, `fbPrepLocationPreEnrich`, `fbPrepBatch`, `mediaProcess`  
 **FileType values**: `image`, `video`  
 **JobType values**: `triage`, `selection`  
 **Endpoint values**: `/api/triage/start`, `/api/selection/start`, `/api/enhance/start`, `/api/upload-url`

@@ -20,6 +20,7 @@ import (
 
 	"github.com/fpang/ai-social-media-helper/internal/assets"
 	"github.com/fpang/ai-social-media-helper/internal/jsonutil"
+	"github.com/fpang/ai-social-media-helper/internal/metrics"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
 )
@@ -236,6 +237,15 @@ func GenerateDescription(
 		Str("location", result.LocationTag).
 		Msg("Caption generation complete")
 
+	// DDR-088: Emit token metrics for cost analysis.
+	if resp != nil && resp.UsageMetadata != nil {
+		metrics.New("AiSocialMedia").
+			Dimension("Operation", "description").
+			Metric("GeminiInputTokens", float64(resp.UsageMetadata.PromptTokenCount), metrics.UnitCount).
+			Metric("GeminiOutputTokens", float64(resp.UsageMetadata.CandidatesTokenCount), metrics.UnitCount).
+			Flush()
+	}
+
 	return &DescriptionOutput{Result: result, RawResponse: responseText}, nil
 }
 
@@ -382,6 +392,15 @@ func RegenerateDescription(
 		Int("caption_length", len(result.Caption)).
 		Int("hashtag_count", len(result.Hashtags)).
 		Msg("Caption regeneration complete")
+
+	// DDR-088: Emit token metrics for cost analysis.
+	if resp.UsageMetadata != nil {
+		metrics.New("AiSocialMedia").
+			Dimension("Operation", "description").
+			Metric("GeminiInputTokens", float64(resp.UsageMetadata.PromptTokenCount), metrics.UnitCount).
+			Metric("GeminiOutputTokens", float64(resp.UsageMetadata.CandidatesTokenCount), metrics.UnitCount).
+			Flush()
+	}
 
 	return result, responseText, nil
 }
