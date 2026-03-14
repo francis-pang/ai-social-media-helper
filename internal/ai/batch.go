@@ -78,9 +78,59 @@ type batchJSONLRow struct {
 }
 
 type batchJSONLRequest struct {
-	Contents           []*genai.Content            `json:"contents"`
-	GenerationConfig   *genai.GenerateContentConfig `json:"generationConfig,omitempty"`
-	SystemInstruction  *genai.Content              `json:"systemInstruction,omitempty"`
+	Contents          []*genai.Content   `json:"contents"`
+	GenerationConfig  *vertexGenConfig `json:"generationConfig,omitempty"`
+	SystemInstruction *genai.Content    `json:"systemInstruction,omitempty"`
+}
+
+// vertexGenConfig is a Vertex AI–compatible subset of generation config.
+// Vertex AI's GenerationConfig proto does NOT have systemInstruction; it must be
+// a sibling of generationConfig in the request. Using genai.GenerateContentConfig
+// directly can serialize systemInstruction into generationConfig (e.g. as null),
+// which Vertex AI rejects with "no such field: 'systemInstruction'".
+type vertexGenConfig struct {
+	Temperature        *float32 `json:"temperature,omitempty"`
+	TopP               *float32 `json:"topP,omitempty"`
+	TopK               *float32 `json:"topK,omitempty"`
+	MaxOutputTokens    int32    `json:"maxOutputTokens,omitempty"`
+	StopSequences      []string `json:"stopSequences,omitempty"`
+	PresencePenalty    *float32 `json:"presencePenalty,omitempty"`
+	FrequencyPenalty   *float32 `json:"frequencyPenalty,omitempty"`
+	ResponseMIMEType  string   `json:"responseMimeType,omitempty"`
+	ResponseSchema     any     `json:"responseSchema,omitempty"`
+	ResponseJsonSchema any     `json:"responseJsonSchema,omitempty"`
+	Seed               *int32   `json:"seed,omitempty"`
+	CandidateCount     int32   `json:"candidateCount,omitempty"`
+}
+
+// toVertexGenConfig copies only Vertex AI–allowed fields from genai.GenerateContentConfig.
+// Explicitly excludes SystemInstruction and other fields not in Vertex AI's GenerationConfig proto.
+func toVertexGenConfig(cfg *genai.GenerateContentConfig) *vertexGenConfig {
+	if cfg == nil {
+		return nil
+	}
+	v := &vertexGenConfig{
+		Temperature:        cfg.Temperature,
+		TopP:               cfg.TopP,
+		TopK:               cfg.TopK,
+		MaxOutputTokens:    cfg.MaxOutputTokens,
+		StopSequences:      cfg.StopSequences,
+		PresencePenalty:    cfg.PresencePenalty,
+		FrequencyPenalty:   cfg.FrequencyPenalty,
+		ResponseMIMEType:   cfg.ResponseMIMEType,
+		ResponseSchema:     cfg.ResponseSchema,
+		ResponseJsonSchema: cfg.ResponseJsonSchema,
+		Seed:               cfg.Seed,
+		CandidateCount:     cfg.CandidateCount,
+	}
+	// Only include if non-zero to avoid empty object
+	if v.Temperature == nil && v.TopP == nil && v.TopK == nil && v.MaxOutputTokens == 0 &&
+		len(v.StopSequences) == 0 && v.PresencePenalty == nil && v.FrequencyPenalty == nil &&
+		v.ResponseMIMEType == "" && v.ResponseSchema == nil && v.ResponseJsonSchema == nil &&
+		v.Seed == nil && v.CandidateCount == 0 {
+		return nil
+	}
+	return v
 }
 
 // batchOutputRow is the Vertex AI batch output format per line.
@@ -106,14 +156,9 @@ func uploadBatchInputToGCS(ctx context.Context, bucketName string, requests []*g
 			},
 		}
 		if req.Config != nil {
-			// Copy config and nil out SystemInstruction so it doesn't appear
-			// inside generationConfig in the JSONL output. Vertex AI requires
-			// systemInstruction as a sibling of generationConfig, not nested
-			// within it.
-			cfgCopy := *req.Config
-			row.Request.SystemInstruction = cfgCopy.SystemInstruction
-			cfgCopy.SystemInstruction = nil
-			row.Request.GenerationConfig = &cfgCopy
+			cfg := req.Config
+			row.Request.SystemInstruction = cfg.SystemInstruction
+			row.Request.GenerationConfig = toVertexGenConfig(cfg)
 		}
 		line, err := json.Marshal(row)
 		if err != nil {
